@@ -15,7 +15,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from environment import Environment
+from environments.environment import Environment
 
 ###### Code to generate a dataset of double-pendulum trajectories ######
 
@@ -321,6 +321,7 @@ def main():
     def control_policy(state, t, jax_key):
         # return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
         return jnp.array([jnp.sin(t)])
+    
     env.set_control_policy(control_policy)
 
     curdir = os.path.abspath(os.path.curdir)

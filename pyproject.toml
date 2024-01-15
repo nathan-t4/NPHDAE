@@ -4,18 +4,7 @@ version = "0.0.1"
 description = "Invariant_GNODE"
 readme = "README.md"
 # license = {file = "LICENSE.txt"}
-requires-python=">=3.9,<3.12"
-
-dependencies = [
-    "numpy",
-    "scipy",
-    "tqdm",
-    "pyyaml",
-    "matplotlib",
-    "jraph",
-    "networkx[default]",
-    "flax",
-]
+requires-python=">=3.11"
 
 [tool.setuptools.packages.find]
-# exclude = ["experiments*", "results*", "shell_scripts*", "scripts*"]
+exclude = ["results*"]
