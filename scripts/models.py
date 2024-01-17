@@ -25,9 +25,13 @@ class MLP(nn.Module):
 class GraphNet(nn.Module):
 
     # latent_size: int
+    hidden_layers: int = 2
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
+        nodes, edges, receivers, senders, globals_, n_node, n_edge = graph
+
+        # TODO: use encoder?
         embedder = jraph.GraphMapFeatures(
             embed_edge_fn=nn.Dense(features=5),
             embed_node_fn=nn.Dense(features=5),
@@ -36,23 +40,13 @@ class GraphNet(nn.Module):
 
         # processed_graphs = embedder(graph)
 
-        def update_edge_fn(edges, senders, receivers, globals_):
-            print("Edge shape:", jnp.shape(edges))
-            net = MLP(feature_sizes=[jnp.shape(edges),jnp.shape(edges)])
-            return net
+        edge_feature_sizes = [len(edges)] * self.hidden_layers
+        node_features_sizes = [np.shape(nodes)[1]] * self.hidden_layers
 
-        def update_node_fn(nodes, senders, receivers, globals_):
-            print("Nodes shape:", jnp.shape(nodes))
-            # key = jax.random.PRNGKey(seed=0)
-            net = MLP(feature_sizes=[jnp.shape(nodes),jnp.shape(nodes)])
-            # params = net.init(key)
-            # return net.apply(params, nodes)
-            return net
+        update_edge_fn = jraph.concatenated_args(MLP(feature_sizes=edge_feature_sizes))
+        update_node_fn = jraph.concatenated_args(MLP(feature_sizes=node_features_sizes))
+        update_global_fn = None
 
-        def update_global_fn(nodes, edges, globals_):
-            # return globals_
-            return None
-        
         net = jraph.GraphNetwork(
             update_edge_fn=update_edge_fn,
             update_node_fn=update_node_fn,
@@ -60,5 +54,13 @@ class GraphNet(nn.Module):
         )
 
         processed_graphs = net(graph)
+
+        # TODO: add decoder?
+        decoder = jraph.GraphMapFeatures(
+            embed_node_fn=nn.Dense(np.shape(nodes[1]))
+        )
+
+        # processed_graphs = decoder(processed_graphs)
+
 
         return processed_graphs

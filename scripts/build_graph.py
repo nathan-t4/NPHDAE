@@ -2,39 +2,62 @@ import jraph
 import jax.numpy as jnp
 import networkx as nx
 from environments.double_spring_mass import DoubleMassSpring
+from utils.custom_types import GraphLabels
 
-def build_double_spring_mass_graph(data) -> jraph.GraphsTuple:
-    # TODO: add self edges?
-    print(data['config'])
+def load_data(data) -> GraphLabels:
+    """
+        TODO: Load data to custom GraphLabels dictionary
+    """
+    raise NotImplementedError
+
+def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
+    """
+        Convert double spring mass environment to a jraph.GraphsTuple
+        where V are the masses and there is an edge e between any two connected masses
+
+        Node features:
+        Edge features:
+
+        :param data: double mass spring data generated from environments/double_spring_mass.py
+        :param t: time (used to index ground-truth position and momentums from trajectory)
+        :param traj_idx: specify which trajectory to use
+    """
     config = data['config']
     state = data['state_trajectories']
 
-    mass = [100, config['m1'], config['m2']]
+    mass = jnp.array([100, config['m1'], config['m2']]).T
     spring_constant = [config['k1'], config['k2']]
     damping_constant = [config['b1'], config['b2']]
-    position = [state[0,:,0], state[0,:,2]]
-    momentum = [state[0,:,1], state[0,:,3]]
+
+    # position: qs[t] gives position at time t
+    qs = jnp.vstack((jnp.zeros(shape=jnp.shape(state[traj_idx,:,0])),
+                     state[traj_idx,:,0], 
+                     state[traj_idx,:,2])).T # q_wall, q1, q2
     
-    nodes = jnp.array(mass).T # this should be shape = (n_nodes, n_node_features)
-    edges = jnp.ones(len(spring_constant)).T
+    # relative positions: dqs[t] gives relative position at time t
+    dqs = jnp.column_stack((qs[:,1] - qs[:,0], qs[:,2] - qs[:,1]))
+    
+    assert(qs[0,1] - qs[0,0] == dqs[0,0])
+
+    # conjugate momentums
+    ps = jnp.vstack((jnp.zeros(shape=jnp.shape(state[traj_idx,:,0])), 
+          state[traj_idx,:,1], 
+          state[traj_idx,:,3])).T # p_wall, p1, p2
+    
+    # velocities
+    vs = ps / mass.reshape(1,-1)
+    
+    nodes = jnp.column_stack((mass, vs[t])) # shape = (n_node, n_node_feats)
+    edges = (dqs[t]).reshape(-1,1)          # shape = (n_edge, n_edge_feats)
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])
 
     n_node = jnp.array([len(mass)])
     n_edge = jnp.array([len(spring_constant)])
 
-    global_context = jnp.array([[]]) #
+    global_context = jnp.array([t]).reshape(-1,1) # shape = (n_global_feats, 1) TODO: add ICs
 
     graph = jraph.GraphsTuple(
-        # nodes={
-        #     "mass": mass,
-        #     "position": position,
-        #     "momentum": momentum,
-        # },
-        # edges={
-        #     "spring_constant": spring_constant,
-        #     "damping_constant": damping_constant,
-        # },
         nodes=nodes,
         edges=edges,
         senders=senders,
@@ -47,10 +70,6 @@ def build_double_spring_mass_graph(data) -> jraph.GraphsTuple:
 
 def convert_jraph_to_networkx_graph(jraph_graph: jraph.GraphsTuple) -> nx.Graph:
     nodes, edges, receivers, senders, _, _, _ = jraph_graph
-    ### for testing double spring mass damper graph
-    # nodes = nodes['mass']
-    # edges = edges['spring_constant']
-    ###
     nx_graph = nx.DiGraph()
     if nodes is None:
         for n in range(jraph_graph.n_node[0]):
