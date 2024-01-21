@@ -45,8 +45,11 @@ class GraphNet(nn.Module):
 
         update_edge_fn = jraph.concatenated_args(MLP(feature_sizes=edge_feature_sizes))
         update_node_fn = jraph.concatenated_args(MLP(feature_sizes=node_features_sizes))
-        update_global_fn = None
 
+        def update_global_fn(nodes, edges, globals_):
+            del nodes, edges
+            return globals_ + 1 # globals_ is time
+        
         net = jraph.GraphNetwork(
             update_edge_fn=update_edge_fn,
             update_node_fn=update_node_fn,
@@ -61,6 +64,5 @@ class GraphNet(nn.Module):
         )
 
         # processed_graphs = decoder(processed_graphs)
-
 
         return processed_graphs

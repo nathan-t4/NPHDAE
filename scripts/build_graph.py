@@ -2,13 +2,6 @@ import jraph
 import jax.numpy as jnp
 import networkx as nx
 from environments.double_spring_mass import DoubleMassSpring
-from utils.custom_types import GraphLabels
-
-def load_data(data) -> GraphLabels:
-    """
-        TODO: Load data to custom GraphLabels dictionary
-    """
-    raise NotImplementedError
 
 def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
     """
@@ -53,7 +46,7 @@ def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
     receivers = jnp.array([1,2])
 
     n_node = jnp.array([len(mass)])
-    n_edge = jnp.array([len(spring_constant)])
+    n_edge = jnp.array([jnp.shape(dqs)[1]])
 
     global_context = jnp.array([t]).reshape(-1,1) # shape = (n_global_feats, 1) TODO: add ICs
 
