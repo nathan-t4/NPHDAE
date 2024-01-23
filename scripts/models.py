@@ -43,12 +43,18 @@ class GraphNet(nn.Module):
         edge_feature_sizes = [len(edges)] * self.hidden_layers
         node_features_sizes = [np.shape(nodes)[1]] * self.hidden_layers
 
-        update_edge_fn = jraph.concatenated_args(MLP(feature_sizes=edge_feature_sizes))
+        # update node fn is an MLP to predict velocity
         update_node_fn = jraph.concatenated_args(MLP(feature_sizes=node_features_sizes))
+        
+        # update_edge_fn should use node features (velocity) to update position
+        update_edge_fn = jraph.concatenated_args(MLP(feature_sizes=edge_feature_sizes))
 
+        # def update_edge_fn(edges, senders, receivers, globals_):
+            
         def update_global_fn(nodes, edges, globals_):
             del nodes, edges
-            return globals_ + 1 # globals_ is time
+            globals_ = globals_.at[0].set(globals_[0] + 1) # increment time (globals_[0] is time)
+            return globals_ 
         
         net = jraph.GraphNetwork(
             update_edge_fn=update_edge_fn,

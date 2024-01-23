@@ -4,20 +4,27 @@ import os
 
 import numpy as np
 import flax.linen as nn
+import matplotlib.pyplot as plt
 
 from time import strftime
-from clu import metric_writers
-from flax.training import train_state
-
-from utils.custom_types import GraphLabels
 from argparse import ArgumentParser
-import matplotlib.pyplot as plt
+from typing import Tuple
+
+from absl import logging
+from clu import metric_writers
+from clu import metrics
+from clu import checkpoint
+from clu import periodic_actions
+from flax.training import train_state
 
 from scripts.build_graph import *
 from scripts.data_utils import load_data
 from scripts.models import *
+from utils.custom_types import GraphLabels
+from utils.logging_utils import *
 
-def build_graph(data: str, render: bool):
+
+def build_graph(data: str, render: bool, batch_size: int = 1):
     """
         Returns graph generated using the dataset config
 
@@ -25,40 +32,53 @@ def build_graph(data: str, render: bool):
         :param render: whether to render graph using networkx
     """
     data = np.load(data, allow_pickle=True)
-    graph = build_double_spring_mass_graph(data)
+    num_trajectories = np.shape(data['state_trajectories'])[1]
+    # TODO: start from zero, do next step prediction only (instead of random times)
+    # TODO: curriculum learning?
+    # rnd_times = np.random.randint(low=0, high=num_trajectories-1, size=batch_size)
+    rnd_times = [0] * batch_size
+    # TODO: efficiently batch
+    graphs = []
+    for i in rnd_times:
+        graphs.append(build_double_spring_mass_graph(data, t=int(i)))
+
     if render:
-        draw_jraph_graph_structure(graph)
+        draw_jraph_graph_structure(graphs[0])
         plt.show()
 
-    return graph
+    return graphs
 
 def train(args):
-    # TODO: batch graphs with different time steps!
-    graph = build_graph(data=args.data, render=True)
+    init_graphs = build_graph(data=args.data, batch_size=1, render=False)
 
     # training params
     lr = 1e-4
     eval_every_steps = 20
-    init_epoch = 0
-    num_epochs = 200
+    log_every_steps = 10
+    checkpoint_every_steps = 100
+    num_train_steps = 2000
+
+    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%Y%m%d-%H%M%S")}')
 
     ds = load_data(data=args.data)
-    # train_ds, test_ds = train_test_split(ds, test_size=0.2, shuffle=False)
     # batch
     ds = ds.batch(batch_size=1, deterministic=False, drop_remainder=True)
 
+    # TODO: split to training and validation sets
     # train_ds = train_ds.batch(batch_size=1, deterministic=False, drop_remainder=True)
     # test_ds = test_ds.batch(batch_size=1, deterministic=False, drop_remainder=True)
     # config = {}
+
+    # Create key and initialize params
     rng = jax.random.PRNGKey(0)
     rng, init_rng = jax.random.split(rng)
-    init_graph = graph
+    init_graph = init_graphs[0]
     init_net = GraphNet()
     params = jax.jit(init_net.init)(init_rng, init_graph)
 
     # Create writer for logs
-    logdir = os.path.join(os.curdir, f'results/gnn/{strftime("%Y%m%d-%H%M%S")}')
-    writer = metric_writers.create_default_writer(logdir=logdir)
+    log_dir = os.path.join(work_dir, 'log')
+    writer = metric_writers.create_default_writer(logdir=log_dir)
 
     # Create the optimizer
     tx = optax.adam(learning_rate=lr)
@@ -69,73 +89,108 @@ def train(args):
         apply_fn=net.apply, params=params, tx=tx,
     )
 
+    # Setup checkpointing for model
+    checkpoint_dir = os.path.join(work_dir, 'checkpoints')
+    ckpt = checkpoint.Checkpoint(checkpoint_dir)
+    state = ckpt.restore_or_initialize(state)
+    init_epoch = int(state.step) + 1
+
     # Create the evaluation net
     eval_net = GraphNet()
     eval_state = state.replace(apply_fn=eval_net.apply)
 
-    # Training loop
-    for epoch in range(init_epoch, num_epochs):
-        # print(f"Training step {epoch}")
+    # Create logger to report training progress
+    report_progress = periodic_actions.ReportProgress(num_train_steps=num_train_steps, writer=writer)
 
-        # TODO: batch wrt to trajectory
+    print("Starting training")
+    train_metrics = None
+    # Training loop
+    for epoch in range(init_epoch, num_train_steps):
         with jax.profiler.StepTraceAnnotation('train', step_num=epoch):
             for data in ds: # batch? (w.r.t. to trajectories)
                 data_np = np.squeeze(data.numpy())
-                print('shape: ', np.shape(data_np))
-                state = train_step(state, graph, data_np)
+                # what is important is to train at different timesteps and trajectories. the actual graph doesn't matter - we are training the message passing functions only (not anything related to the graph!)
+                batch_graphs = build_graph(data=args.data, batch_size=1, render=False)
+                state, metrics_update = train_step(state, batch_graphs[0], data_np)
 
-        if epoch % eval_every_steps == 0:
-            eval_metrics = eval_model(eval_state)
+                # Update metrics
+                if train_metrics is None:
+                    train_metrics = metrics_update
+                else:
+                    train_metrics = train_metrics.merge(metrics_update)
+        
+        print(f"Training step {epoch} - training loss {train_metrics.compute()}")
+
+        report_progress(epoch)
+
+        is_last_step = (epoch == num_train_steps - 1)
+
+        # if epoch % eval_every_steps == 0 or is_last_step:
+        #     eval_state = eval_state.replace(params=state.params)
+        #     with report_progress.timed('eval'):
+        #         eval_metrics = eval_model(eval_state)
+        #         writer.write_scalars(epoch, add_prefix_to_keys(eval_metrics.compute(), 'eval'))
+
+        if epoch % log_every_steps == 0 or is_last_step:
+            writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))
+            train_metrics = None
+
+        if epoch & checkpoint_every_steps == 0 or is_last_step:
+            with report_progress.timed('checkpoint'):
+                ckpt.save(state)
             
     # TODO: validation loop
 
-
+@jax.jit
 def train_step(state: train_state.TrainState, 
                graph: jraph.GraphsTuple, 
-               batch: GraphLabels) -> train_state.TrainState:
+               train_data: np.ndarray) -> Tuple[train_state.TrainState, metrics.Collection]:
 
     def loss_fn(params, graph: jraph.GraphsTuple, data: np.ndarray, rngs=None):
-        # loss function =  predicted position/momentum/acceleration/Lagrangian/Hamiltonian - actual?
-        losses = []
-        for i in range(jnp.shape(data)[0]): # loop for all time
-            curr_state = state.replace(params=params)
-            pred_graph = curr_state.apply_fn(state.params, graph, rngs=rngs)
-            pred_qs = pred_graph.nodes[:,1:]
-            # TODO: t is not being updated...
-            t = pred_graph.globals[0]
+        curr_state = state.replace(params=params)
+        pred_graph = curr_state.apply_fn(state.params, graph, rngs=rngs)
+        pred_vs = pred_graph.nodes
+        
+        t = jnp.array(pred_graph.globals[0], int)
+        masses = pred_graph.globals[1:4]
+        # expected x, dx, and p at time t
+        expected_qs = data[t,0:3] 
+        expected_dqs = data[t,3:5]
+        expected_ps = data[t,5:8]
+        expected_vs = jnp.true_divide(expected_ps, masses) # component wise division
+        
+        # exclude training for wall node?
+        # pred_qs = pred_vs[1,:]
+        # expected_qs = expected_vs[1:]
 
-            # expected x, dx, and p at time t
-            expected_qs = data[t,0:3] 
-            expected_dqs = data[t,3:5]
-            expected_ps = data[t,5:8]
+        loss = jnp.linalg.norm(expected_vs - pred_vs)
 
-            loss = jnp.linalg.norm(expected_qs - pred_qs) # + expected_ps - pred_ps
-            losses.append(loss) 
-            print(f"Time {t}: expected {expected_qs} vs prediction {pred_qs}")
-            print(f"Loss: {loss}")
-
-        loss = jnp.mean(jnp.array(losses))
-        accuracy = jnp.array(0.)
-
-        # graph.globals[0] = t + 1
-
-        # TODO: make sure updating graph of correct traj_idx. batch?
-
-        return loss, accuracy
+        return loss, pred_graph.globals
     
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (_, _), grads = grad_fn(state.params, graph, batch)
+    (loss, pred_graph_globals), grads = grad_fn(state.params, graph, train_data)
     state = state.apply_gradients(grads=grads)
 
-    return state
+    metrics = TrainMetrics.single_from_model_output(loss=loss)
+
+    return state, metrics
 
 @jax.jit
+def eval_step(state: train_state.TrainState,
+              graph: jraph.GraphsTuple,
+              eval_data: np.ndarray) -> metrics.Collection:
+    pred_graph = state.apply_fn(state.params, graph, rngs=None)
+    loss = 0.0
+    return EvalMetrics.single_from_model_output(loss=loss)
+
 def eval_model(state: train_state.TrainState):
-    return 0.
+    return {}
 
 if __name__ == '__main__':
+    default_dataset_path = 'results/double_mass_spring_data/Double_Spring_Mass_2023-12-26-14-29-05.pkl'
+
     parser = ArgumentParser()
-    parser.add_argument('--data', type=str, required=True)
+    parser.add_argument('--data', type=str, default=default_dataset_path)
     args = parser.parse_args()
 
     train(args)

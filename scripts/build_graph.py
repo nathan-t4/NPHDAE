@@ -40,7 +40,8 @@ def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
     # velocities
     vs = ps / mass.reshape(1,-1)
     
-    nodes = jnp.column_stack((mass, vs[t])) # shape = (n_node, n_node_feats)
+    # nodes = jnp.column_stack((mass, vs[t])) # shape = (n_node, n_node_feats)
+    nodes = vs[t].reshape(-1,1)
     edges = (dqs[t]).reshape(-1,1)          # shape = (n_edge, n_edge_feats)
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])
@@ -48,7 +49,8 @@ def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
     n_node = jnp.array([len(mass)])
     n_edge = jnp.array([jnp.shape(dqs)[1]])
 
-    global_context = jnp.array([t]).reshape(-1,1) # shape = (n_global_feats, 1) TODO: add ICs
+    # global context is [t, masses, ICs]. shape = (n_global_feats, 1) 
+    global_context = jnp.concatenate((jnp.array([t]), mass, qs[0], vs[0])).reshape(-1,1)
 
     graph = jraph.GraphsTuple(
         nodes=nodes,
