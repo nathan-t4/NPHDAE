@@ -25,10 +25,11 @@ def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
     # position: qs[t] gives position at time t
     qs = jnp.vstack((jnp.zeros(shape=jnp.shape(state[traj_idx,:,0])),
                      state[traj_idx,:,0], 
-                     state[traj_idx,:,2])).T # q_wall, q1, q2
+                     state[traj_idx,:,2]),
+                     dtype=jnp.float32).T # q_wall, q1, q2
     
     # relative positions: dqs[t] gives relative position at time t
-    dqs = jnp.column_stack((qs[:,1] - qs[:,0], qs[:,2] - qs[:,1]))
+    dqs = jnp.column_stack((qs[:,1] - qs[:,0], qs[:,2] - qs[:,1])).astype(dtype=jnp.float32)
     
     assert(qs[0,1] - qs[0,0] == dqs[0,0])
 
@@ -40,17 +41,16 @@ def build_double_spring_mass_graph(data, t=0, traj_idx=0) -> jraph.GraphsTuple:
     # velocities
     vs = ps / mass.reshape(1,-1)
     
-    # nodes = jnp.column_stack((mass, vs[t])) # shape = (n_node, n_node_feats)
-    nodes = vs[t].reshape(-1,1)
+    nodes = vs[t].reshape(-1,1)             # shape = (n_node, n_node_feats)
     edges = (dqs[t]).reshape(-1,1)          # shape = (n_edge, n_edge_feats)
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])
 
-    n_node = jnp.array([len(mass)])
-    n_edge = jnp.array([jnp.shape(dqs)[1]])
+    n_node = jnp.array([len(mass)])         # num nodes
+    n_edge = jnp.array([jnp.shape(dqs)[1]]) # num edges
 
     # global context is [t, masses, ICs]. shape = (n_global_feats, 1) 
-    global_context = jnp.concatenate((jnp.array([t]), mass, qs[0], vs[0])).reshape(-1,1)
+    global_context = jnp.concatenate((jnp.array([t]), mass), dtype=jnp.int32).reshape(-1,1)
 
     graph = jraph.GraphsTuple(
         nodes=nodes,

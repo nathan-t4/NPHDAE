@@ -1,3 +1,6 @@
+import os
+import jax
+
 import tensorflow as tf
 import numpy as np
 import jax.numpy as jnp
@@ -5,7 +8,7 @@ import jax.numpy as jnp
 from argparse import ArgumentParser
 from utils.custom_types import GraphLabels
 
-def load_data(data: str | dict) -> tf.data.Dataset:
+def load_data_jnp(data: str | dict | os.PathLike) -> jnp.ndarray:
     """
         Load experimental data to tensorflow dataset
     """
@@ -30,7 +33,18 @@ def load_data(data: str | dict) -> tf.data.Dataset:
                     axis=-1) # p_wall, p1, p2
     
     # The dataset has dimensions [num_trajectories, num_timesteps, (qs, dqs, ps)]
-    data = tf.data.Dataset.from_tensor_slices(jnp.concatenate((qs, dqs, ps), axis=-1))
+    data = jnp.concatenate((qs, dqs, ps), axis=-1)
+    # Stop gradient for data
+    data = jax.lax.stop_gradient(data)
+
+    return data
+
+def load_data_tf(data: str | dict) -> tf.data.Dataset:
+    """
+        Load experimental data to tensorflow dataset
+    """    
+    data = load_data_jnp(data=data)
+    data = tf.data.Dataset.from_tensor_slices(data)
 
     return data
 
@@ -42,7 +56,7 @@ if __name__ == '__main__':
 
     data = np.load(args.path, allow_pickle=True)
 
-    data_tf = load_data(data)
+    data_tf = load_data_tf(data)
 
     # print(f'Dataset specs: {data_tf.element_spec}')
     
