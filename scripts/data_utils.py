@@ -6,16 +6,17 @@ import numpy as np
 import jax.numpy as jnp
 
 from argparse import ArgumentParser
-from utils.custom_types import GraphLabels
 
-def load_data_jnp(data: str | dict | os.PathLike) -> jnp.ndarray:
+def load_data_jnp(path: str | os.PathLike) -> jnp.ndarray:
     """
         Load experimental data to tensorflow dataset
     """
-    if type(data) is str:
-        data = np.load(data, allow_pickle=True)
+    data = np.load(path, allow_pickle=True)
     
     state = data['state_trajectories']
+    config = data['config']
+
+    m = jnp.array([100, config['m1'], config['m2']])
    
     qs = jnp.stack((jnp.zeros(shape=jnp.shape(state[:,:,0])),
                         state[:,:,0], 
@@ -31,6 +32,11 @@ def load_data_jnp(data: str | dict | os.PathLike) -> jnp.ndarray:
                     state[:,:,1], 
                     state[:,:,3]),
                     axis=-1) # p_wall, p1, p2
+    
+    vs = ps / (m.reshape(-1))
+    # TODO: Verlet integrator or finite difference v
+    # acs = q[t+dt] + q[t-dt] - 2*q[t] / (dt**2)
+    acs = jnp.diff(vs, axis=0)
     
     # The dataset has dimensions [num_trajectories, num_timesteps, (qs, dqs, ps)]
     data = jnp.concatenate((qs, dqs, ps), axis=-1)

@@ -14,20 +14,20 @@ def add_undirected_edges(graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
                           n_edge=n_edge)
     
 def add_self_loops(graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
-    n_node = graph.n_node.item()
+    n_node = len(graph.nodes)
     edge_feature_dim = jnp.shape(graph.edges)[1]
     new_senders = jnp.concatenate((graph.senders, jnp.arange(n_node)), axis=0)
     new_receivers = jnp.concatenate((graph.receivers, jnp.arange(n_node)), axis=0)
     edges = jnp.concatenate((graph.edges, jnp.zeros((n_node, edge_feature_dim))), axis=0)
     n_edge = jnp.array([len(edges)])
 
-    return graph._replace(senders=new_senders, 
+    return graph._replace(senders=new_senders,
                           receivers=new_receivers, 
                           edges=edges, 
                           n_edge=n_edge)   
 
 def check_dictionary(dictionary, condition):
-    # TODO
+    # Check if condition holds true for all values of the dictionary
     dictionary = flax.core.unfreeze(dict)
     flat_grads = {
         '/'.join(k): v
