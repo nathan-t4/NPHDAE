@@ -36,10 +36,12 @@ def load_data_jnp(path: str | os.PathLike) -> jnp.ndarray:
     vs = ps / (m.reshape(-1))
     # TODO: Verlet integrator or finite difference v
     # acs = q[t+dt] + q[t-dt] - 2*q[t] / (dt**2)
-    acs = jnp.diff(vs, axis=0)
+    accs = jnp.diff(vs, axis=1)
+    initial_acc = jnp.expand_dims(accs[:,0,:], axis=1)
+    accs = jnp.concatenate((initial_acc, accs), axis=1) # add acceleration at first time step
     
     # The dataset has dimensions [num_trajectories, num_timesteps, (qs, dqs, ps)]
-    data = jnp.concatenate((qs, dqs, ps), axis=-1)
+    data = jnp.concatenate((qs, dqs, ps, accs), axis=-1)
     # Stop gradient for data
     data = jax.lax.stop_gradient(data)
 

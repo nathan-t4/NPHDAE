@@ -1,6 +1,7 @@
 import jax
 import optax
 import os
+import json
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,20 +22,24 @@ from scripts.data_utils import *
 from scripts.models import *
 from utils.logging_utils import *
 
-default_dataset_path = 'results/double_mass_spring_data/Double_Spring_Mass_2023-12-26-14-29-05.pkl'
+training_data_path = 'results/double_mass_spring_data/no_control_train.pkl'
+# validation_data_path = 'results/double_mass_spring_data/5uniform.pkl'
+validation_data_path = 'results/double_mass_spring_data/no_control_val.pkl'
 
 def train(args):
     platform = jax.local_devices()[0].platform
     print('Running on platform:', platform.upper())
 
     # work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%Y%m%d-%H%M%S")}')
-    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%m%d")}_features_study/features_0_{strftime("%H%M%S")}')
+    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%m%d")}_generalization_control/passive_to_passive_{strftime("%H%M%S")}')
     log_dir = os.path.join(work_dir, 'log')
     checkpoint_dir = os.path.join(work_dir, 'checkpoints')
 
+    model_type = 'GraphNet'
+
     net_params = {
-        'num_message_passing_steps': 2, # TODO: ablation study
-        'use_edge_model': True, # DONE: ablation study
+        'num_message_passing_steps': 2,
+        'use_edge_model': True,
     }
 
     training_params = {
@@ -46,6 +51,14 @@ def train(args):
         'num_train_steps': int(1e4),
     }
 
+    def create_model(model_type: str, params):
+        if model_type == 'GNODE':
+            return GNODE(**params)
+        elif model_type == 'GraphNet':
+            return GraphNet(**params)
+        else:
+            raise NotImplementedError
+    
     # Create key and initialize params
     rng = jax.random.key(0)
     rng, init_rng = jax.random.split(rng)
@@ -57,9 +70,10 @@ def train(args):
     tx = optax.adam(learning_rate=training_params['lr'])
 
     # Create the training state
-    net = GraphNet(**net_params)
-    init_graph = build_graph(path=args.data, key=init_rng, batch_size=1, render=False)[0]
+    net = create_model(model_type, net_params)
+    init_graph = build_graph(dataset_path=args.training_data, key=init_rng, batch_size=1, render=False)[0]
     params = jax.jit(net.init)(init_rng, init_graph)
+    # params = net.init(init_rng, init_graph)
     state = train_state.TrainState.create(
         apply_fn=net.apply, params=params, tx=tx,
     )
@@ -70,7 +84,7 @@ def train(args):
     init_epoch = int(state.step) + 1
 
     # Create the evaluation net
-    eval_net = GraphNet(**net_params)
+    eval_net = create_model(model_type, net_params)
     eval_state = state.replace(apply_fn=eval_net.apply)
 
     # Create logger to report training progress
@@ -86,9 +100,8 @@ def train(args):
         rng, dropout_rng, graph_rng = jax.random.split(rng, 3)
     
         with jax.profiler.StepTraceAnnotation('train', step_num=epoch):
-            graphs = build_graph(path=args.data,
+            graphs = build_graph(dataset_path=args.training_data,
                                  key=graph_rng,
-                                 dataset_type='training', 
                                  batch_size=training_params['batch_size'])
             state, metrics_update = train_step(state, graphs, rngs={'dropout': dropout_rng})
             # Update metrics
@@ -110,9 +123,8 @@ def train(args):
         if epoch % training_params['eval_every_steps'] == 0 or is_last_step:
             eval_state = eval_state.replace(params=state.params)
             rng, eval_rng = jax.random.split(rng)
-            eval_graphs = build_graph(path=args.data, 
+            eval_graphs = build_graph(dataset_path=args.validation_data, 
                                       key=eval_rng,
-                                      dataset_type='validation',
                                       batch_size=1)
             with report_progress.timed('eval'):
                 eval_metrics = eval_model(eval_state, eval_graphs)
@@ -122,12 +134,12 @@ def train(args):
             with report_progress.timed('checkpoint'):
                 ckpt.save(state)
     
-    # validation loop
+    # Validation loop
+    print("Validating policy")
     val_state = eval_state.replace(params=state.params)
     rng, val_rng = jax.random.split(rng)
-    val_graphs = build_graph(path=args.data,
+    val_graphs = build_graph(dataset_path=args.validation_data,
                              key=val_rng,
-                             dataset_type='validation',
                              batch_size=10)
     with report_progress.timed('val'):
         val_metrics = eval_model(val_state, val_graphs)
@@ -136,14 +148,24 @@ def train(args):
 
     print(f"Validation loss {round(val_metrics.compute()['loss'],4)}")
 
+    # Save run params to json
+    run_params = {
+        'training_params': training_params,
+        'net_params': net_params
+    }
+    run_params_file = os.path.join(work_dir, 'run_params.js')
+    with open(run_params_file, "w") as outfile:
+        json.dump(run_params, outfile)
+
 def get_labelled_data(graphs: Sequence[jraph.GraphsTuple], 
-                      traj_idx: int = 0) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    data = load_data_jnp(path=default_dataset_path)[traj_idx]
+                      traj_idx: int = 0) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    data = load_data_jnp(path=training_data_path)[traj_idx]
 
     qs = []
     dqs = []
     ps = []
     vs = []
+    accs = []
 
     for g in graphs:
         t = g.globals[0]
@@ -153,15 +175,9 @@ def get_labelled_data(graphs: Sequence[jraph.GraphsTuple],
         dqs += [data[t,3:5]]
         ps += [data[t,5:8]]
         vs += [data[t,5:8] / masses] # component wise division
+        accs += [data[t,8:11]]
 
-    # exclude training for wall node?
-    # pred_vs = pred_vs[1,:]
-    # expected_vs = expected_vs[1:]
-        
-    # assert jnp.shape(vs[0]) == jnp.shape(ps[0]), \
-    #     f"Error with component wise division using jax.numpy.true_divide: vs shape is {jnp.shape(vs[0])} while ps shape is {jnp.shape(ps[0])}"
-
-    return jnp.array(qs), jnp.array(dqs), jnp.array(ps), jnp.array(vs)     
+    return jnp.array(qs), jnp.array(dqs), jnp.array(ps), jnp.array(vs), jnp.array(accs)
 
 @jax.jit
 def mse_loss_fn(expected, predicted):
@@ -171,25 +187,20 @@ def mse_loss_fn(expected, predicted):
 def train_step(state: train_state.TrainState, 
                graphs: Sequence[jraph.GraphsTuple],
                rngs: Dict[str, jnp.ndarray]) -> Tuple[train_state.TrainState, metrics.Collection]:
-    # TODO: try predicting acceleration, then replacing node features 
-    # calculate new node features (pos and vel) from acceleration and then graph._replace
     def loss_fn(params, graphs: Sequence[jraph.GraphsTuple]):
         curr_state = state.replace(params=params)
-        pred_vs = []
-        pred_dqs = []
+        pred_as = []
         for g in graphs:
             pred_graph = curr_state.apply_fn(curr_state.params, g, rngs=rngs)
-            pred_vs += [pred_graph.nodes.reshape(-1)]
-            pred_dqs += [pred_graph.edges.reshape(-1)]
+            pred_as += [pred_graph.nodes.reshape(-1)]
         
-        _, expected_dqs, _, expected_vs = get_labelled_data(graphs)
+        _, _, _, _, expected_as = get_labelled_data(graphs)
 
         loss = 0
         for i in range(len(graphs)):
-            predicted_vs = jnp.asarray(pred_vs[i])
-            predicted_dqs = jnp.asarray(pred_dqs[i])
-            loss += mse_loss_fn(expected_vs[i], predicted_vs) \
-                  + mse_loss_fn(expected_dqs[i], predicted_dqs)
+            '''For acceleration predictions'''
+            predicted_as = jnp.asarray(pred_as[i])
+            loss += mse_loss_fn(expected_as[i], predicted_as)
 
         return loss / len(graphs)
 
@@ -206,19 +217,19 @@ def train_step(state: train_state.TrainState,
 def eval_step(state: train_state.TrainState,
               graphs: Sequence[jraph.GraphsTuple]) -> metrics.Collection:
     curr_state = state.replace(params=state.params)
+    pred_as = []
+
     for g in graphs:
         pred_graph = curr_state.apply_fn(state.params, g)
-        pred_vs = jnp.array(pred_graph.nodes).reshape(-1)
-        pred_dqs = jnp.array(pred_graph.edges).reshape(-1)
+        pred_as += [pred_graph.nodes.reshape(-1)]
 
-    _, expected_dqs, _, expected_vs = get_labelled_data(graphs)
+    _, _, _, _, expected_as = get_labelled_data(graphs)
     
     loss = 0
     for i in range(len(graphs)):
-        predicted_vs = jnp.asarray(pred_vs[i])
-        predicted_dqs = jnp.asarray(pred_dqs[i])
-        loss += mse_loss_fn(expected_vs[i], predicted_vs) \
-              + mse_loss_fn(expected_dqs[i], predicted_dqs)
+        '''For acceleration predictions'''
+        predicted_as = jnp.asarray(pred_as[i])
+        loss += mse_loss_fn(expected_as[i], predicted_as)
     
     loss = loss / len(graphs)
     
@@ -236,11 +247,12 @@ def eval_model(state: train_state.TrainState,
     else:
         eval_metrics = eval_metrics.merge(metrics_update)
 
-    return eval_metrics 
+    return eval_metrics
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--data', type=str, default=default_dataset_path)
+    parser.add_argument('--training_data', type=str, default=training_data_path)
+    parser.add_argument('--validation_data', type=str, default=validation_data_path)
     args = parser.parse_args()
 
     train(args)

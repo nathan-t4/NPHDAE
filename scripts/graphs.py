@@ -7,9 +7,8 @@ import matplotlib.pyplot as plt
 
 import utils.graph_utils as graph_utils
 
-def build_graph(path: str, 
+def build_graph(dataset_path: str, 
                 key, # PRNGKey
-                dataset_type: str = 'training',  
                 batch_size: int = 1,
                 add_undirected_edges: bool = False,
                 add_self_loops: bool = False,
@@ -26,30 +25,30 @@ def build_graph(path: str,
         :param render: whether to render graph using networkx
     """
     # Load data from path
-    data = np.load(path, allow_pickle=True)
+    data = np.load(dataset_path, allow_pickle=True)
     # Shuffle data (axis 0 = trajectories)
     data['state_trajectories'] = jax.random.permutation(key, data['state_trajectories'], axis=0)
     # Get number of trajectories and timesteps from dataset
     num_trajs, num_timesteps, _ = np.shape(data['state_trajectories'])
     # Sample random times
     rnd_times = np.random.randint(low=0, high=num_timesteps-1, size=batch_size)
+    rnd_traj_idx = np.random.randint(low=0, high=num_trajs, size=batch_size)
 
     # Training/validation split based on traj_idx
-    DATA_SPLIT_PERCENTAGE = 0.8
-    if dataset_type == 'training':
-        rnd_traj_idx = np.random.randint(low=0, high=DATA_SPLIT_PERCENTAGE * num_trajs, size=batch_size)
-    elif dataset_type == 'validation':
-        rnd_traj_idx = np.random.randint(low=DATA_SPLIT_PERCENTAGE * num_trajs, high=num_trajs, size=batch_size)
-    else:
-        rnd_traj_idx = np.zeros(shape=batch_size, dtype=np.int32)
+    # DATA_SPLIT_PERCENTAGE = 0.8
+    # if dataset_type == 'training':
+    #     rnd_traj_idx = np.random.randint(low=0, high=DATA_SPLIT_PERCENTAGE * num_trajs, size=batch_size)
+    # elif dataset_type == 'validation':
+    #     rnd_traj_idx = np.random.randint(low=DATA_SPLIT_PERCENTAGE * num_trajs, high=num_trajs, size=batch_size)
+    # else:
+    #     rnd_traj_idx = np.zeros(shape=batch_size, dtype=np.int32)
     
     # TODO: efficiently batch - jraph batch, padding, masks, ...
     graphs = []
     for i in range(batch_size):
         graphs.append(build_double_spring_mass_graph(data=data,
                                                      t=rnd_times[i], 
-                                                     traj_idx=rnd_traj_idx[i], 
-                                                     feature_idx=0)) # TODO: change
+                                                     traj_idx=rnd_traj_idx[i]))
 
     # Merge all graphs into one using jraph.batch (TODO)
     # graphs = jraph.batch(graphs)
@@ -71,8 +70,7 @@ def build_graph(path: str,
 
 def build_double_spring_mass_graph(data, 
                                    t: int = 0, 
-                                   traj_idx: int = 0,
-                                   feature_idx: int = 0) -> jraph.GraphsTuple:
+                                   traj_idx: int = 0) -> jraph.GraphsTuple:
     """
         Convert double spring mass environment to a jraph.GraphsTuple
         where V are the masses and there is an edge e between any two connected masses
@@ -114,16 +112,14 @@ def build_double_spring_mass_graph(data,
     n_node = jnp.array([len(mass)])         # num nodes
     n_edge = jnp.array([jnp.shape(dqs)[1]]) # num edges
 
-    if feature_idx == 0:
-        # Test embeddings
-        nodes = vs[t].reshape(n_node.item(), -1)             # shape = (n_node, n_node_feats)
-        edges = (dqs[t]).reshape(n_edge.item(), -1)          # shape = (n_edge, n_edge_feats)
-    elif feature_idx == 1:
-        # Following embeddings from "Learning to Simulate Complex Physics with Graph Networks"
-        nodes = jnp.concatenate((qs[t], vs[t])).reshape(n_node.item(), -1)
-        edges = jnp.concatenate((dqs[t], spring_constant, damping_constant)).reshape(n_edge.item(), -1)
-    else:
-        raise NotImplementedError
+    # Test embeddings
+    # nodes = vs[t].reshape(n_node.item(), -1)             # shape = (n_node, n_node_feats)
+    # edges = (dqs[t]).reshape(n_edge.item(), -1)          # shape = (n_edge, n_edge_feats)
+
+    # Following embeddings from "Learning to Simulate Complex Physics with Graph Networks"
+    nodes = jnp.concatenate((qs[t], vs[t])).reshape(n_node.item(), -1)
+    edges = dqs[t].reshape((n_edge.item(), -1))
+    # edges = jnp.concatenate((dqs[t], spring_constant, damping_constant)).reshape(n_edge.item(), -1)
     
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])

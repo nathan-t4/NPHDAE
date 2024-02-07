@@ -305,41 +305,69 @@ class DoubleMassSpring(Environment):
 
         plt.show()
 
-def main():
-    env = DoubleMassSpring(dt=0.01,
-                            m1=1.0,
-                            m2=1.0,
-                            k1=1.2,
-                            k2=1.5,
-                            b1=1.7,
-                            b2=1.5,
-                            random_seed=501, 
-                            state_measure_spring_elongation=True,
-                            nonlinear_damping=True,
-                            nonlinear_spring=False)
-
+def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501):
+    """
+        TODO: 
+            use params dict to initialize env
+            fix hardcoded parts (dataset_type == ...)
+    """
     def control_policy(state, t, jax_key):
-        # return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
-        return jnp.array([jnp.sin(t)])
+        return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
+        # return 5.0 * jnp.array([jnp.sin(t)])
+        # return jnp.array([t-t]) # zero input
     
-    env.set_control_policy(control_policy)
-
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'results/double_mass_spring_data'))
 
-    print(save_dir)
-
     t = time.time()
-    dataset = env.gen_dataset(trajectory_num_steps=500, 
-                                num_trajectories=200, # 500 training, 100 testing
-                                x0_init_lb=jnp.array([-0.2, -0.5, -0.2, -0.5]),
-                                x0_init_ub=jnp.array([0.2, 0.5, 0.2, 0.5]),
-                                save_str=save_dir)
-    # dataset = env.gen_dataset(trajectory_num_steps=1000, 
-    #                             num_trajectories=20, 
-    #                             x0_init_lb=jnp.array([0.8, -0.5, 1.6, -0.5]),
-    #                             x0_init_ub=jnp.array([1.2, 0.5, 2.4, 0.5]),
-    #                             save_str=save_dir)
+
+    rng = np.random.default_rng(env_seed)
+
+    # Different datasets to test generalization (given fixed control policy)
+    params = {
+        'dt': 0.01,
+        'm1': 1.0,
+        'm2': 1.0,
+        'k1': 1.2,
+        'k2': 1.5,
+        'b1': 1.7,
+        'b2': 1.5,
+        'x0_init_lb': jnp.array([0, -.5, -0.5, -.5]),
+        'x0_init_ub': jnp.array([0.5, .5, 1, .5]),
+        'state_measure_spring_elongation': True,
+        'nonlinear_damping': True,
+        'nonlinear_spring': False,
+    }
+
+    val_params = {}
+    for k,v in params.items():
+        if isinstance(v, float) and k != 'dt':
+            val_params[k] = v * rng.random()
+        if isinstance(v,jnp.ndarray):
+            val_params[k] = 2.0 * rng.random() * k
+        else:
+            val_params[k] = v
+
+    env = None
+    if dataset_type == 'training':
+        env = DoubleMassSpring(**params, random_seed=501)
+        env.set_control_policy(control_policy)    
+        dataset = env.gen_dataset(trajectory_num_steps=1500, 
+                                  num_trajectories=200, # 200 training, 100 testing
+                                  x0_init_lb=params['x0_init_lb'],
+                                  x0_init_ub=params['x0_init_ub'],
+                                  save_str=save_dir)
+    elif dataset_type == 'validation': 
+        env = DoubleMassSpring(**val_params, random_seed=501)
+        env.set_control_policy(control_policy)
+
+        dataset = env.gen_dataset(trajectory_num_steps=1500, 
+                                  num_trajectories=20, # 500 training, 100 testing
+                                  x0_init_lb=val_params['x0_init_lb'],
+                                  x0_init_ub=val_params['x0_init_ub'],
+                                  save_str=save_dir)
+    else:
+        raise NotImplementedError
 
     print(time.time() - t)
     print(dataset.keys())
@@ -349,4 +377,11 @@ def main():
 
 if __name__ == "__main__":
     import time
-    main()
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('--type', type=str, default='training')
+    args = parser.parse_args()
+
+    assert(args.type.lower() == 'training' or args.type.lower() == 'validation')
+
+    generate_dataset(None, dataset_type=args.type.lower())
