@@ -15,11 +15,11 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from environments.environment import Environment
+from environments.switched_environment import SwitchedEnvironment
 
 ###### Code to generate a dataset of double-pendulum trajectories ######
 
-class DoubleMassSpring(Environment):
+class SwitchedDoubleMassSpring(SwitchedEnvironment):
     """
     Object representing a damped mass spring system.
 
@@ -67,7 +67,7 @@ class DoubleMassSpring(Environment):
                 state_measure_spring_elongation : bool =True,
                 nonlinear_damping : bool = False,
                 nonlinear_spring : bool = False,
-                name : str = 'Double_Spring_Mass'
+                name : str = 'Switched_Double_Spring_Mass'
                 ):
         """
         Initialize the double-pendulum environment object.
@@ -104,6 +104,23 @@ class DoubleMassSpring(Environment):
             'nonlinear_spring' : nonlinear_spring,
             'name' : name,
         }
+
+    def _define_switchable_params(self):
+        self.switchable_params = ['m1', 'k1', 'b1', 'm2', 'k2', 'b2']
+    
+    def _modify_params(self):
+        self.dt = self.config['dt']
+        self.m1 = self.config['m1']
+        self.k1 = self.config['k1']
+        self.y1 = self.config['y1']
+        self.b1 = self.config['b1']
+        self.m2 = self.config['m2']
+        self.k2 = self.config['k2']
+        self.y2 = self.config['y2']
+        self.b2 = self.config['b2']
+        self.state_measure_spring_elongation = self.config['state_measure_spring_elongation']
+        self.nonlinear_damping = self.config['nonlinear_damping']
+        self.nonlinear_spring = self.config['nonlinear_spring']
 
     def _define_dynamics(self):
 
@@ -305,19 +322,22 @@ class DoubleMassSpring(Environment):
 
         plt.show()
 
-def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501):
+def generate_dataset(params, 
+                     dataset_type: str = 'training',
+                     num_switches: int = 0,
+                     env_seed: int = 501):
     """
         TODO: 
             use params dict to initialize env
             fix hardcoded parts (dataset_type == ...)
     """
     def control_policy(state, t, jax_key):
-        return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
-        # return 5.0 * jnp.array([jnp.sin(t)])
+        # return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
+        return 5.0 * jnp.array([jnp.sin(t)])
         # return jnp.array([t-t]) # zero input
     
     curdir = os.path.abspath(os.path.curdir)
-    save_dir = os.path.abspath(os.path.join(curdir, 'results/double_mass_spring_data'))
+    save_dir = os.path.abspath(os.path.join(curdir, 'results/switched_double_mass_spring_data'))
 
     t = time.time()
 
@@ -340,7 +360,6 @@ def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501
     x0_init_lb = jnp.array([0, -.5, -0.5, -.5])
     x0_init_ub = jnp.array([0.5, .5, 1, .5])
 
-
     val_params = {}
     for k,v in params.items():
         if isinstance(v, float) and k != 'dt':
@@ -350,15 +369,16 @@ def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501
 
     env = None
     if dataset_type == 'training':
-        env = DoubleMassSpring(**params, random_seed=501)
+        env = SwitchedDoubleMassSpring(**params, random_seed=501)
         env.set_control_policy(control_policy)    
         dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                   num_trajectories=200, # 200 training, 100 testing
+                                  num_switches_per_traj=num_switches,
                                   x0_init_lb=x0_init_lb,
                                   x0_init_ub=x0_init_ub,
                                   save_str=save_dir)
     elif dataset_type == 'validation': 
-        env = DoubleMassSpring(**val_params, random_seed=501)
+        env = SwitchedDoubleMassSpring(**val_params, random_seed=501)
         env.set_control_policy(control_policy)
 
         x0_init_lb = rng.random() * x0_init_lb
@@ -366,6 +386,7 @@ def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501
 
         dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                   num_trajectories=20, # 500 training, 100 testing
+                                  num_switches_per_traj=num_switches,
                                   x0_init_lb=x0_init_lb,
                                   x0_init_ub=x0_init_ub,
                                   save_str=save_dir)
@@ -383,6 +404,7 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('--type', type=str, default='training')
+    parser.add_argument('--num_switches', type=int, default=0)
     args = parser.parse_args()
 
     assert(args.type.lower() == 'training' or args.type.lower() == 'validation')

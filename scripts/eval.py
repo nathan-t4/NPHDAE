@@ -1,6 +1,7 @@
 from scripts.train import *
 
-default_validation_dataset_path = 'results/double_mass_spring_data/2sin_val.pkl'
+# default_validation_dataset_path = 'results/double_mass_spring_data/2sin_val.pkl'
+default_validation_dataset_path = 'results/switched_double_mass_spring_data/1_switch_5sin_val.pkl'
 
 def eval(args):
     rng = jax.random.key(0)

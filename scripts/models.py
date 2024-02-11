@@ -1,15 +1,9 @@
 import jraph
-import jax
 import diffrax
-import flax
 import flax.linen as nn
-import equinox as eqx
 
 import numpy as np
 
-from typing import Tuple
-
-from jax.experimental.ode import odeint
 import jax.numpy as jnp
 
 from typing import Sequence
@@ -35,37 +29,35 @@ class MLP(nn.Module):
                 x = nn.Dropout(rate=self.dropout_rate, deterministic=self.deterministic)(x)
         return x
     
-    
-class NeuralODE(flax.struct.PyTreeNode):
+class NeuralODE(nn.Module):
     ''' 
-        Simple Neural ODE - https://github.com/patrick-kidger/diffrax/issues/115
-        TODO: work in progress
+        Simple Neural ODE
+         - https://github.com/patrick-kidger/diffrax/issues/115
+         - https://github.com/google/flax/discussions/2891
     '''
     derivative_net: MLP
+    solver: diffrax._solver = diffrax.Dopri8()
 
-    def init(self, rng, coords):      
-        rng, derivative_net_rng = jax.random.split(rng)
-        coords, derivative_net_params = self.derivative_net.init_with_output(derivative_net_rng, coords)
-
-        self.params = flax.core.FrozenDict({"derivative_net": derivative_net_params})
-
-        return self.params
-
-
+    @nn.compact
     def __call__(self, inputs):
+        if self.is_initializing():
+            self.derivative_net(inputs)
         
-        def derivative_fn(t, y, args):
-            return self.derivative_net.apply(self.params["derivative_net"], y)
+        derivative_net_params = self.derivative_net.variables["params"]
+
+        def derivative_fn(t, y, params):
+            return self.derivative_net.apply({'params': params}, y)
         
         term = diffrax.ODETerm(derivative_fn)
 
         solution = diffrax.diffeqsolve(
             term,
-            diffrax.Euler(), 
+            self.solver, 
             t0=0,
             t1=1,
             dt0=0.1,
-            y0=inputs)
+            y0=inputs,
+            args=derivative_net_params)
         
         return solution.ys
     
@@ -75,6 +67,7 @@ class GraphNet(nn.Module):
     num_message_passing_steps: int = 1
     layer_norm: bool = False
     use_edge_model: bool = False
+    use_global_model: bool = False
 
     globals_output_size: int = 0
     edge_output_size: int = 1
@@ -94,17 +87,22 @@ class GraphNet(nn.Module):
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
-            inputs = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            if self.use_global_model:
+                inputs = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            else:
+                inputs = jnp.concatenate((nodes, senders, receivers), axis=1)
             # inputs = nodes
             model = MLP(feature_sizes=node_feature_sizes, activation='relu', 
                         dropout_rate=self.dropout_rate, deterministic=self.deterministic)
-            # model = NeuralODE(derivative_net) # TODO
             return model(inputs)
 
         def update_edge_fn(edges, senders, receivers, globals_):
             # TODO: difference btw senders and receivers?
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
-            inputs = jnp.concatenate((edges, senders, globals_), axis=1)
+            if self.use_global_model:
+                inputs = jnp.concatenate((edges, senders, globals_), axis=1)
+            else:
+                inputs = jnp.concatenate((edges, senders), axis=1)
             model = MLP(feature_sizes=edge_feature_sizes, activation='relu',
                         dropout_rate=self.dropout_rate, deterministic=self.deterministic)
             return model(inputs)
@@ -120,6 +118,9 @@ class GraphNet(nn.Module):
         
         if not self.use_edge_model:
             update_edge_fn = None
+        
+        if not self.use_global_model:
+            update_global_fn = None
 
         encoder = jraph.GraphMapFeatures(
             embed_edge_fn=nn.Dense(features=self.latent_size),
@@ -173,7 +174,13 @@ class GraphNet(nn.Module):
         return processed_graph
     
 class GNODE(nn.Module):
-    """ EncodeProcessDecode GN """
+    """ 
+        EncodeProcessDecode GNODE
+
+        Graph Neural Network with Neural ODE message passing functions
+        
+        The neural ODEs takes concatenated latent features as input and its output is passed through a linear layer
+    """
     num_message_passing_steps: int = 1
     layer_norm: bool = False
     use_edge_model: bool = False
@@ -195,21 +202,23 @@ class GNODE(nn.Module):
         cur_vel = graph.nodes[:,1]
 
         def update_node_fn(nodes, senders, receivers, globals_):
-            node_feature_sizes = [self.latent_size] * self.hidden_layers
             inputs = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
-            # inputs = nodes
+            node_feature_sizes = [inputs.shape[1]] * self.hidden_layers
             derivative_net = MLP(feature_sizes=node_feature_sizes, activation='relu', 
                                  dropout_rate=self.dropout_rate, deterministic=self.deterministic)
             model = NeuralODE(derivative_net)
-            return model(inputs)
+            output = model(inputs).squeeze()
+            return nn.Dense(self.latent_size)(output)
 
         def update_edge_fn(edges, senders, receivers, globals_):
             # TODO: difference btw senders and receivers?
-            edge_feature_sizes = [self.latent_size] * self.hidden_layers
             inputs = jnp.concatenate((edges, senders, globals_), axis=1)
-            model = MLP(feature_sizes=edge_feature_sizes, activation='relu',
-                        dropout_rate=self.dropout_rate, deterministic=self.deterministic)
-            return model(inputs)
+            edge_feature_sizes = [inputs.shape[1]] * self.hidden_layers
+            derivative_net = MLP(feature_sizes=edge_feature_sizes, activation='relu',
+                                 dropout_rate=self.dropout_rate, deterministic=self.deterministic)
+            model = NeuralODE(derivative_net)
+            output = model(inputs).squeeze()
+            return nn.Dense(self.latent_size)(output)
             
         def update_global_fn(nodes, edges, globals_):
             del nodes, edges

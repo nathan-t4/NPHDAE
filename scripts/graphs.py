@@ -161,3 +161,7 @@ def draw_jraph_graph_structure(jraph_graph: jraph.GraphsTuple) -> None:
     nx_graph = convert_jraph_to_networkx_graph(jraph_graph)
     pos = nx.spring_layout(nx_graph)
     nx.draw(nx_graph, pos=pos, with_labels=True, node_size=500, font_color='yellow')
+
+if __name__ == '__main__':
+    build_graph(dataset_path='results/double_mass_spring_data/no_control_train.pkl',
+                batch_size=1, render=True)

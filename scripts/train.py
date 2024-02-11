@@ -22,26 +22,32 @@ from scripts.data_utils import *
 from scripts.models import *
 from utils.logging_utils import *
 
-training_data_path = 'results/double_mass_spring_data/no_control_train.pkl'
+# training_data_path = 'results/double_mass_spring_data/no_control_train.pkl'
+# validation_data_path = 'results/double_mass_spring_data/no_control_val.pkl'
+
 # validation_data_path = 'results/double_mass_spring_data/5uniform.pkl'
-validation_data_path = 'results/double_mass_spring_data/no_control_val.pkl'
+# 
+
+training_data_path = 'results/switched_double_mass_spring_data/1_switch_no_control_train.pkl'
+validation_data_path = 'results/switched_double_mass_spring_data/1_switch_no_control_val.pkl'
 
 def train(args):
     platform = jax.local_devices()[0].platform
     print('Running on platform:', platform.upper())
 
     # work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%Y%m%d-%H%M%S")}')
-    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%m%d")}_generalization_control/passive_to_passive_{strftime("%H%M%S")}')
+    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%m%d")}_test_switched_system/GNN_1_switch_no_globals_{strftime("%H%M%S")}')
     log_dir = os.path.join(work_dir, 'log')
     checkpoint_dir = os.path.join(work_dir, 'checkpoints')
 
+    # Network parameters
     model_type = 'GraphNet'
-
     net_params = {
         'num_message_passing_steps': 2,
         'use_edge_model': True,
+        'use_global_model': False,
     }
-
+    # Training parameters
     training_params = {
         'batch_size': 5,
         'lr': 1e-4,
@@ -49,6 +55,8 @@ def train(args):
         'log_every_steps': 10,
         'checkpoint_every_steps': int(1e3),
         'num_train_steps': int(1e4),
+        'training_dataset_path': training_data_path,
+        'validation_dataset_path': validation_data_path,
     }
 
     def create_model(model_type: str, params):
@@ -73,7 +81,6 @@ def train(args):
     net = create_model(model_type, net_params)
     init_graph = build_graph(dataset_path=args.training_data, key=init_rng, batch_size=1, render=False)[0]
     params = jax.jit(net.init)(init_rng, init_graph)
-    # params = net.init(init_rng, init_graph)
     state = train_state.TrainState.create(
         apply_fn=net.apply, params=params, tx=tx,
     )
