@@ -1,13 +1,14 @@
 from scripts.train import *
 
 # default_validation_dataset_path = 'results/double_mass_spring_data/2sin_val.pkl'
-default_validation_dataset_path = 'results/switched_double_mass_spring_data/1_switch_5sin_val.pkl'
+default_validation_dataset_path = 'results/switched_double_mass_spring_data/1_switch_5uniform_val.pkl'
 
 def eval(args):
     rng = jax.random.key(0)
     rng, init_rng = jax.random.split(rng)
     init_graph = build_graph(dataset_path=args.data, key=init_rng, batch_size=1)[0]
     work_dir = args.dir
+    plot_dir = os.path.join(work_dir, 'plots')
 
     def load_params(path: str):
         with open(path) as f:
@@ -23,6 +24,7 @@ def eval(args):
 
     val_net = GraphNet(**net_params)
     params = jax.jit(val_net.init)(init_rng, init_graph)
+    # params = val_net.init(init_rng, init_graph)
     state = train_state.TrainState.create(
         apply_fn=val_net.apply, params=params, tx=tx,
     )
@@ -38,9 +40,9 @@ def eval(args):
     val_graphs = build_graph(dataset_path=args.data,
                              key=val_rng,
                              batch_size=10)
-    val_metrics = eval_model(val_state, val_graphs)
-    # writer.write_scalars(init_epoch + training_params['num_train_steps'], 
-                        #  add_prefix_to_keys(val_metrics.compute(), 'val'))
+    val_metrics, pred_qs, exp_qs, pred_as, exp_as = eval_model(val_state, val_graphs)
+    save_evaluation_curves(plot_dir, 'position_val', pred_qs, exp_qs)
+    save_evaluation_curves(plot_dir, 'acceleration_val', pred_as, exp_as)
 
     print(f"Validation loss {round(val_metrics.compute()['loss'],4)}")
 

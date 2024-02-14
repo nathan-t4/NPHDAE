@@ -9,6 +9,7 @@ import utils.graph_utils as graph_utils
 
 def build_graph(dataset_path: str, 
                 key, # PRNGKey
+                horizon: int = 1,
                 batch_size: int = 1,
                 add_undirected_edges: bool = False,
                 add_self_loops: bool = False,
@@ -18,6 +19,7 @@ def build_graph(dataset_path: str,
 
         :param path: path to dataset
         :param key: jax PRNG key
+        :param horizon: number of previous velocities to include in node features
         :param dataset_type: sample from training or validation dataset
         :param batch_size: num of graphs to return
         :param add_undirected_edges: Add undirected edges to graph
@@ -48,6 +50,7 @@ def build_graph(dataset_path: str,
     for i in range(batch_size):
         graphs.append(build_double_spring_mass_graph(data=data,
                                                      t=rnd_times[i], 
+                                                     horizon=horizon,
                                                      traj_idx=rnd_traj_idx[i]))
 
     # Merge all graphs into one using jraph.batch (TODO)
@@ -70,6 +73,7 @@ def build_graph(dataset_path: str,
 
 def build_double_spring_mass_graph(data, 
                                    t: int = 0, 
+                                   horizon: int = 1,
                                    traj_idx: int = 0) -> jraph.GraphsTuple:
     """
         Convert double spring mass environment to a jraph.GraphsTuple
@@ -85,9 +89,9 @@ def build_double_spring_mass_graph(data,
     config = data['config']
     state = data['state_trajectories']
 
-    mass = jnp.array([100, config['m1'], config['m2']]).T
-    spring_constant = jnp.array([config['k1'], config['k2']])
-    damping_constant = jnp.array([config['b1'], config['b2']])
+    mass = jnp.asarray([100, config['m1'], config['m2']]).T
+    spring_constant = jnp.asarray([config['k1'], config['k2']])
+    damping_constant = jnp.asarray([config['b1'], config['b2']])
 
 
     # position: qs[t] gives position at time t
@@ -109,23 +113,33 @@ def build_double_spring_mass_graph(data,
     # velocities
     vs = ps / mass.reshape(1,-1)
 
-    n_node = jnp.array([len(mass)])         # num nodes
-    n_edge = jnp.array([jnp.shape(dqs)[1]]) # num edges
-
-    # Test embeddings
-    # nodes = vs[t].reshape(n_node.item(), -1)             # shape = (n_node, n_node_feats)
-    # edges = (dqs[t]).reshape(n_edge.item(), -1)          # shape = (n_edge, n_edge_feats)
+    n_node = jnp.asarray([len(mass)])         # num nodes
+    n_edge = jnp.asarray([jnp.shape(dqs)[1]]) # num edges
 
     # Following embeddings from "Learning to Simulate Complex Physics with Graph Networks"
-    nodes = jnp.concatenate((qs[t], vs[t])).reshape(n_node.item(), -1)
+    # Add previous velocity histories
+    vs_history = []
+    counter = 0
+    for k in reversed(range(horizon)):
+        if t - k < 0:
+            counter += 1
+        elif counter > 0:
+            [vs_history.append(vs[t-k]) for _ in range(counter + 1)]
+            counter = 0
+        else:
+            vs_history.append(vs[t-k])
+    vs_history = jnp.asarray(vs_history).reshape(-1, n_node.item()).T    
+    nodes = jnp.column_stack((qs[t], vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]
     edges = dqs[t].reshape((n_edge.item(), -1))
+
     # edges = jnp.concatenate((dqs[t], spring_constant, damping_constant)).reshape(n_edge.item(), -1)
     
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])
 
-    # global context is [t, masses, ICs]. shape = (n_global_feats, 1) 
-    global_context = jnp.concatenate((jnp.array([t]), mass, qs[0]), dtype=jnp.int32).reshape(-1,1)
+    # global context, shape = (n_global_feats, 1) 
+    global_context = jnp.concatenate((jnp.array([traj_idx, t, horizon]), mass, qs[0]), dtype=jnp.int32).reshape(-1,1)
+    # global_context = jnp.array([t])
 
     graph = jraph.GraphsTuple(
         nodes=nodes,

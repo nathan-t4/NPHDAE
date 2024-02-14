@@ -322,19 +322,20 @@ class SwitchedDoubleMassSpring(SwitchedEnvironment):
 
         plt.show()
 
-def generate_dataset(params, 
-                     dataset_type: str = 'training',
-                     num_switches: int = 0,
-                     env_seed: int = 501):
+def generate_dataset(args, env_seed: int = 501):
     """
         TODO: 
             use params dict to initialize env
             fix hardcoded parts (dataset_type == ...)
     """
     def control_policy(state, t, jax_key):
-        # return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
-        return 5.0 * jnp.array([jnp.sin(t)])
-        # return jnp.array([t-t]) # zero input
+        control_name = args.control.lower()
+        if control_name == 'uniform':
+            return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
+        elif control_name == 'sin':
+            return 5.0 * jnp.array([jnp.sin(t)])
+        elif control_name == 'passive':
+            return jnp.array([t-t]) # zero input
     
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'results/switched_double_mass_spring_data'))
@@ -368,16 +369,16 @@ def generate_dataset(params,
             val_params[k] = v
 
     env = None
-    if dataset_type == 'training':
+    if args.type == 'training':
         env = SwitchedDoubleMassSpring(**params, random_seed=501)
         env.set_control_policy(control_policy)    
         dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                   num_trajectories=200, # 200 training, 100 testing
-                                  num_switches_per_traj=num_switches,
+                                  num_switches_per_traj=args.num_switches,
                                   x0_init_lb=x0_init_lb,
                                   x0_init_ub=x0_init_ub,
                                   save_str=save_dir)
-    elif dataset_type == 'validation': 
+    elif args.type == 'validation': 
         env = SwitchedDoubleMassSpring(**val_params, random_seed=501)
         env.set_control_policy(control_policy)
 
@@ -386,7 +387,7 @@ def generate_dataset(params,
 
         dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                   num_trajectories=20, # 500 training, 100 testing
-                                  num_switches_per_traj=num_switches,
+                                  num_switches_per_traj=args.num_switches,
                                   x0_init_lb=x0_init_lb,
                                   x0_init_ub=x0_init_ub,
                                   save_str=save_dir)
@@ -405,8 +406,9 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--type', type=str, default='training')
     parser.add_argument('--num_switches', type=int, default=0)
+    parser.add_argument('--control', type=str, default='passive')
     args = parser.parse_args()
 
     assert(args.type.lower() == 'training' or args.type.lower() == 'validation')
 
-    generate_dataset(None, dataset_type=args.type.lower())
+    generate_dataset(args)

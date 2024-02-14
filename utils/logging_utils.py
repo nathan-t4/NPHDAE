@@ -1,4 +1,7 @@
+import os
 import flax
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
 
 from typing import Dict, Any
 from clu import metrics
@@ -14,3 +17,18 @@ class EvalMetrics(metrics.Collection):
 def add_prefix_to_keys(result: Dict[str, Any], prefix: str) -> Dict[str, Any]:
   """Adds a prefix to the keys of a dict, returning a new dict."""
   return {f'{prefix}_{key}': val for key, val in result.items()}
+
+def save_evaluation_curves(dir: str, name: str, pred: jnp.ndarray, exp: jnp.ndarray) -> None:
+    """ Save error plots from evaluation"""
+    labels_fn = lambda xs, s: [f'{x} {s}' for x in xs] # helper function to create labels list
+    assert pred.shape == exp.shape
+    fig, ax = plt.subplots()
+    ax.set_title(f'{name.capitalize()} Error')
+    ax.set_xlabel('Time')
+
+    ax.plot(jnp.arange(len(pred)), exp - pred, label=labels_fn(list(range(pred.shape[1])), 'error'))
+    ax.legend()
+    if not os.path.isdir(dir):
+        os.makedirs(dir)
+    plt.savefig(os.path.join(dir, f'{name}.png'))
+    plt.close()
