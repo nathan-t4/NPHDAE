@@ -34,8 +34,9 @@ def build_graph(dataset_path: str,
     num_trajs, num_timesteps, _ = np.shape(data['state_trajectories'])
     # Sample random times
     rnd_times = np.random.randint(low=0, high=num_timesteps-1, size=batch_size)
-    rnd_traj_idx = np.random.randint(low=0, high=num_trajs, size=batch_size)
-
+    # rnd_traj_idx = np.random.randint(low=0, high=num_trajs, size=batch_size)
+    rnd_traj_idx = np.zeros(shape=batch_size, dtype=np.int32) # TODO: FOR DEBUGGING
+    
     # Training/validation split based on traj_idx
     # DATA_SPLIT_PERCENTAGE = 0.8
     # if dataset_type == 'training':

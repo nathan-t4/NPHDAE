@@ -1,5 +1,6 @@
 import os
 import flax
+import json
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
@@ -32,3 +33,13 @@ def save_evaluation_curves(dir: str, name: str, pred: jnp.ndarray, exp: jnp.ndar
         os.makedirs(dir)
     plt.savefig(os.path.join(dir, f'{name}.png'))
     plt.close()
+
+def save_params(work_dir, training_params, net_params):
+    # Save run params to json
+    run_params = {
+        'training_params': training_params,
+        'net_params': net_params
+    }
+    run_params_file = os.path.join(work_dir, 'run_params.js')
+    with open(run_params_file, "w") as outfile:
+        json.dump(run_params, outfile)

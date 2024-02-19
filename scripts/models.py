@@ -38,9 +38,10 @@ class NeuralODE(nn.Module):
     '''
     derivative_net: MLP
     solver: diffrax._solver = diffrax.Dopri8()
+    dt: jnp.float32 = 0.01
 
     @nn.compact
-    def __call__(self, inputs):
+    def __call__(self, inputs, ts=[0,1]):
         if self.is_initializing():
             self.derivative_net(inputs)
         
@@ -54,9 +55,9 @@ class NeuralODE(nn.Module):
         solution = diffrax.diffeqsolve(
             term,
             self.solver, 
-            t0=0,
-            t1=1,
-            dt0=0.1,
+            t0=ts[0],
+            t1=ts[1],
+            dt0=self.dt,
             y0=inputs,
             args=derivative_net_params)
         
@@ -78,7 +79,7 @@ class GraphNet(nn.Module):
     dropout_rate: float = 0
     deterministic: bool = True
 
-    dt: float = 1.0
+    dt: float = 0.01 # mp steps * 0.01? TODO: this should be the same as the data dt...what is this?
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple) -> jraph.GraphsTuple:

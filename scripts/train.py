@@ -5,7 +5,8 @@ import json
 
 from time import strftime
 from argparse import ArgumentParser
-from typing import Tuple, Optional
+from typing import Tuple
+from frozendict import frozendict
 
 from clu import metric_writers
 from clu import metrics
@@ -16,11 +17,11 @@ from flax.training import train_state
 from scripts.graphs import *
 from scripts.data_utils import *
 from scripts.models import *
-from utils.logging_utils import *
+from utils.train_utils import *
 
 # Prevent GPU out-of-memory (OOM) errors 
 # os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'platform'
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.60' # default is .75
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.50' # default is .75
 
 training_data_path = 'results/double_mass_spring_data/no_control_train.pkl'
 validation_data_path = 'results/double_mass_spring_data/no_control_val.pkl'
@@ -36,7 +37,7 @@ def train(args):
     print('Running on platform:', platform.upper())
 
     # work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%Y%m%d-%H%M%S")}')
-    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%m%d")}_test_models/GNN_10_mp_steps_{strftime("%H%M%S")}')
+    work_dir = os.path.join(os.curdir, f'results/gnn/{strftime("%m%d")}_test_models/GNN_10_mp_steps_1_traj{strftime("%H%M%S")}')
     log_dir = os.path.join(work_dir, 'log')
     plot_dir = os.path.join(work_dir, 'plots')
     checkpoint_dir = os.path.join(work_dir, 'checkpoints')
@@ -45,32 +46,34 @@ def train(args):
 
     # Network parameters
     model_type = 'GraphNet'
-    net_params = {
-        'num_message_passing_steps': 10,
+    net_params = frozendict({
+        'num_message_passing_steps': 1,
         'use_edge_model': True,
         'dropout_rate': 0.1,
-    }
+    })
     # Training parameters
-    training_params = {
+    training_params = frozendict({
         'batch_size': 5,
         'horizon': 5,
         'lr': 1e-4,
-        'train_steps': 5,
+        'train_steps': 2,
         'eval_steps': 5,
         'eval_every_steps': 50,
         'log_every_steps': 20,
         'checkpoint_every_steps': int(1e3),
-        'plot_every_steps': int(1e3),
-        'num_training_steps': int(1e4),
+        'plot_every_steps': int(1e2),
+        'num_epochs': int(5e3),
         'training_dataset_path': training_data_path,
         'validation_dataset_path': validation_data_path,
-    }
+    })
 
     def create_model(model_type: str, params):
         if model_type == 'GNODE':
             return GNODE(**params)
         elif model_type == 'GraphNet':
             return GraphNet(**params)
+        elif model_type == 'NeuralODE':
+            return NeuralODE(**params) # TODO!!!!
         else:
             raise NotImplementedError(f'Invalid model type {model_type}')
     
@@ -91,8 +94,8 @@ def train(args):
                              batch_size=1, 
                              horizon=training_params['horizon'], 
                              render=False)[0]
-    params = jax.jit(net.init)(init_rng, init_graph)
-    # params = net.init(init_rng, init_graph)
+    # params = jax.jit(net.init)(init_rng, init_graph)
+    params = net.init(init_rng, init_graph)
     state = train_state.TrainState.create(
         apply_fn=net.apply, params=params, tx=tx,
     )
@@ -108,14 +111,14 @@ def train(args):
 
     # Create logger to report training progress
     report_progress = periodic_actions.ReportProgress(
-        num_train_steps=training_params['num_training_steps'], 
+        num_train_steps=training_params['num_epochs'], 
         writer=writer
     )
 
     print("Starting training")
     train_metrics = None
     # Training loop
-    for epoch in range(init_epoch, init_epoch + training_params['num_training_steps']):
+    for epoch in range(init_epoch, init_epoch + training_params['num_epochs']):
         rng, dropout_rng, graph_rng = jax.random.split(rng, 3)
     
         with jax.profiler.StepTraceAnnotation('train', step_num=epoch):
@@ -134,7 +137,7 @@ def train(args):
 
         report_progress(epoch)
 
-        is_last_step = (epoch == training_params['num_training_steps'])
+        is_last_step = (epoch == training_params['num_epochs'])
 
         if epoch % training_params['log_every_steps'] == 0 or is_last_step:
             writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))
@@ -153,24 +156,17 @@ def train(args):
                 if epoch % training_params['plot_every_steps'] == 0 or is_last_step:
                     save_evaluation_curves(plot_dir, f'{epoch}_position_eval', pred_qs, exp_qs)
                     save_evaluation_curves(plot_dir, f'{epoch}_acceleration_eval', pred_as, exp_as)
-                    if (eval_metrics.compute()['loss'] < int(1e-7)):
+                    if (eval_metrics.compute()['loss'] < int(1e-6)):
                         print(f"Stop training early since evaluation error is {eval_metrics.compute()['loss']}")
-                        training_params['num_training_steps'] = epoch - init_epoch
+                        training_params['num_epochs'] = epoch - init_epoch
                         ckpt.save(state)
                         break
 
         if epoch & training_params['checkpoint_every_steps'] == 0 or is_last_step:
             with report_progress.timed('checkpoint'):
                 ckpt.save(state)
-    
-    # Save run params to json
-    run_params = {
-        'training_params': training_params,
-        'net_params': net_params
-    }
-    run_params_file = os.path.join(work_dir, 'run_params.js')
-    with open(run_params_file, "w") as outfile:
-        json.dump(run_params, outfile)
+
+    save_params(work_dir, training_params, net_params)
     
     # Validation loop
     print("Validating policy")
@@ -184,7 +180,7 @@ def train(args):
         val_metrics, pred_qs, exp_qs, pred_as, exp_as = eval_model(val_state, val_graphs)
         save_evaluation_curves(plot_dir, 'position_val', pred_qs, exp_qs)
         save_evaluation_curves(plot_dir, 'acceleration_val', pred_as, exp_as)
-        writer.write_scalars(init_epoch + training_params['num_training_steps'], 
+        writer.write_scalars(init_epoch + training_params['num_epochs'], 
                              add_prefix_to_keys(val_metrics.compute(), 'val'))
 
     print(f"Validation loss {round(val_metrics.compute()['loss'],4)}")
@@ -235,7 +231,7 @@ def train_step(state: train_state.TrainState,
         pred_as = []; exp_as = []
         loss = 0
         
-        for g in graphs:
+        for i, g in enumerate(graphs): # TODO: can use jax.vmap
             for _ in jnp.arange(training_params['train_steps']):
                 traj_idx = g.globals[0]
                 _, _, _, _, exp_a = get_labelled_data([g], [traj_idx])
