@@ -1,6 +1,7 @@
 import jraph
 import jax
 import diffrax
+import flax
 import flax.linen as nn
 
 import numpy as np
@@ -32,23 +33,23 @@ class MLP(nn.Module):
     
 class NeuralODE(nn.Module):
     ''' 
+        TODO: fix params
         Simple Neural ODE
          - https://github.com/patrick-kidger/diffrax/issues/115
          - https://github.com/google/flax/discussions/2891
     '''
     derivative_net: MLP
-    solver: diffrax._solver = diffrax.Dopri8()
+    solver: diffrax._solver = diffrax.Euler()
     dt: jnp.float32 = 0.01
 
     @nn.compact
     def __call__(self, inputs, ts=[0,1]):
         if self.is_initializing():
             self.derivative_net(inputs)
-        
-        derivative_net_params = self.derivative_net.variables["params"]
+        derivative_net_params = self.derivative_net.variables
 
         def derivative_fn(t, y, params):
-            return self.derivative_net.apply({'params': params}, y)
+            return self.derivative_net.apply(params, y)
         
         term = diffrax.ODETerm(derivative_fn)
 
@@ -56,13 +57,14 @@ class NeuralODE(nn.Module):
             term,
             self.solver, 
             t0=ts[0],
-            t1=ts[1],
-            dt0=self.dt,
+            t1=ts[-1],
+            dt0=ts[1]-ts[0],
             y0=inputs,
-            args=derivative_net_params)
+            args=derivative_net_params,
+            saveat=diffrax.SaveAt(ts=ts))
         
         return solution.ys
-    
+
 
 class GraphNet(nn.Module):
     """ EncodeProcessDecode GN """
