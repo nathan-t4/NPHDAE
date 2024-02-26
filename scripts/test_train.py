@@ -2,7 +2,7 @@ import jax
 import os
 from scripts.train import *
 from scripts.models import GraphNet
-from scripts.data_utils import load_data_jnp
+from utils.data_utils import load_data_jnp
 
 
 def test_update_fns(path: str | os.PathLike): 

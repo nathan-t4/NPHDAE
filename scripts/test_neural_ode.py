@@ -11,28 +11,31 @@ from clu import checkpoint
 from flax.training.train_state import TrainState
 
 from scripts.models import *
-from scripts.data_utils import *
+from utils.data_utils import *
 from utils.train_utils import *
 
 training_data_path = 'results/double_mass_spring_data/no_control_train.pkl'
 evaluation_data_path = 'results/double_mass_spring_data/no_control_val.pkl'
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.50' # default is .75
+# os.environ['XLA_PYTHON_CLIENT_ALLOCATOR']='platform'
 
 def create_neural_ODE_config(args):
     training_params = ml_collections.ConfigDict({
-        'num_epochs': int(200),
+        'num_epochs': int(800),
         'traj_idx': 0,
-        'horizon': 10,
-        'batch_size': 5,
+        'horizon': 20,
+        'batch_size': 8,
         'rollout_timesteps': 1500,
-        'eval_every_steps': 10,
+        'eval_every_steps': 25,
         'checkpoint_every_steps': 10,
+        'clear_cache_every_steps': 50,
     })
 
     derivative_net_params = ml_collections.ConfigDict({
-        'feature_sizes': [3,10,10,3], # [input, hidden, output]
+        'feature_sizes': [4,10,4], # [input, hidden, output], inputs = (state, time)
         'activation': 'relu',
+        'deterministic': False,
     })
 
     config = ml_collections.ConfigDict()
@@ -50,11 +53,8 @@ def create_neural_ODE_config(args):
 
 def test_neural_ODE(config: ml_collections.ConfigDict):
     """ Test Neural ODEs """
-
-    data = load_data_jnp(training_data_path)
-
     if config.config.dir == None:
-        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_neural_ode/{strftime("%H%M%S")}')
+        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_neural_ode/1_traj_test_{strftime("%H%M%S")}')
     else:
         work_dir = config.config.dir
 
@@ -76,9 +76,10 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
     })
 
     net = NeuralODE(**net_params)
-    x = jnp.ones((1,3))
+    x = jnp.ones((1,4))
     variables = net.init(init_rng, x)
     tx = optax.adam(1e-3)
+    # tx = optax.adabelief(3e-3)
 
     batched_apply = jax.vmap(net.apply, in_axes=(None,0,0))
 
@@ -95,7 +96,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
     )
     
     def train_epoch(state, ds, batch_size, rng):
-        ds_size = len(ds) - config.training_params.horizon
+        ds_size = len(ds)
         steps_per_epoch = ds_size // batch_size
         perms = jax.random.permutation(rng, ds_size)
         perms = perms[:steps_per_epoch * batch_size]
@@ -108,35 +109,36 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
             qf = data[:,3:6]
             t0 = jnp.squeeze(data[:,-2])
             tf = jnp.squeeze(data[:,-1])
-            pred_qf = state.apply_fn({'params': params}, qi, jnp.column_stack((t0, tf)) * net_params['dt'])
+            inputs = jnp.column_stack((qi, t0 * net_params['dt']))
+            targets = jnp.column_stack((jnp.squeeze(qf), t0 * net_params['dt']))
+            pred_qf = state.apply_fn({'params': params}, inputs, jnp.column_stack((t0, tf)) * net_params['dt'])
             # pred_qf = [batch_dim, ts, ys]
-            loss = int(1e6) * optax.l2_loss(predictions=pred_qf[:,-1], targets=jnp.squeeze(qf)).mean()
+            loss = int(1e6) * optax.l2_loss(predictions=pred_qf[:,-1], targets=targets).mean()
             return loss
             
         def train_batch(state, t0s):
             t0s = jnp.reshape(t0s, (-1,1))
-            tfs = jnp.reshape(t0s + config.training_params.horizon, (-1,1))
+            tfs = jnp.reshape(t0s + config.training_params.horizon, (-1,1)).clip(max=ds_size)
             batch_qis = jnp.squeeze(ds[t0s, 0:3], 1)
             batch_qfs = jnp.squeeze(ds[tfs, 0:3], 1)
             batch_data = jnp.concatenate((batch_qis, batch_qfs, t0s, tfs), axis=1)
             loss, grads = jax.value_and_grad(loss_fn)(state.params, batch_data)
+
             state = state.apply_gradients(grads=grads)
 
             return state, loss
         
         state, epoch_loss = jax.lax.scan(train_batch, state, perms)
-            
         train_loss = jnp.asarray(epoch_loss).mean()
 
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
-    def rollout(state, ds, t0=0):
-        init_qs = np.reshape(ds[t0, 0:3], (1,-1))
+    def rollout(state, ds, t0=0, dt=net_params['dt']):
+        init_qs = ds[t0, 0:3]
         exp_qs_buffer = ds[t0:t0+config.training_params.rollout_timesteps+1, 0:3]
-        pred_qs_buffer = []
-
-        ts = np.arange(t0, t0+config.training_params.rollout_timesteps+1).reshape(1,-1) * net_params['dt']
-        next_qs = state.apply_fn({'params': state.params}, init_qs, ts)
+        inputs = np.append(init_qs, t0).reshape(1,-1)
+        ts = np.arange(t0, t0+config.training_params.rollout_timesteps+1).reshape(1,-1) * dt
+        next_qs = state.apply_fn({'params': state.params}, inputs, ts)
         pred_qs_buffer = jnp.asarray(next_qs).squeeze(axis=0)
         exp_qs_buffer = jnp.asarray(exp_qs_buffer)
         ts = ts.squeeze(axis=0)
@@ -148,10 +150,21 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
             os.makedirs(plot_dir)
 
         plt.title(f'{prefix}: Error from rollout')
-        plt.plot(ts, exp_qs_buffer - pred_qs_buffer)
+        plt.plot(ts, exp_qs_buffer - pred_qs_buffer[:,:-1])
         plt.xlabel('Time [s]')
         plt.ylabel('Position error')
+        plt.ylim((-4,4))
         plt.savefig(os.path.join(plot_dir, f'{prefix}_pos_error.png'))
+        plt.show() if show else plt.clf()
+
+        plt.title(f'{prefix}: Position of mass 0 (ground)')
+        plt.plot(ts, pred_qs_buffer[:,0], label='predicted')
+        plt.plot(ts, exp_qs_buffer[:,0], label='expected')
+        plt.xlabel('Time [s]')
+        plt.ylabel('Position')
+        plt.ylim((-4,4))
+        plt.legend()
+        plt.savefig(os.path.join(plot_dir, f'{prefix}_mass0_pos.png'))
         plt.show() if show else plt.clf()
 
         plt.title(f'{prefix}: Position of mass 1')
@@ -159,6 +172,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
         plt.plot(ts, exp_qs_buffer[:,1], label='expected')
         plt.xlabel('Time [s]')
         plt.ylabel('Position')
+        plt.ylim((-4,4))
         plt.legend()
         plt.savefig(os.path.join(plot_dir, f'{prefix}_mass1_pos.png'))
         plt.show() if show else plt.clf()
@@ -168,27 +182,37 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
         plt.plot(ts, exp_qs_buffer[:,2], label='expected')
         plt.xlabel('Time [s]')
         plt.ylabel('Position')
+        plt.ylim((-4,4))
         plt.legend()
         plt.savefig(os.path.join(plot_dir, f'{prefix}_mass2_pos.png'))
         plt.show() if show else plt.clf()
 
+    train_data = load_data_jnp(config.config.training_data_path)
+    eval_data = load_data_jnp(config.config.evaluation_data_path)
     
-    train_metrics = None
-    ds = data[config.training_params.traj_idx]
-    # eval_ds = data[config.training_params.eval_traj_idx] # TODO
-
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
     state = ckpt.restore_or_initialize(state)
-    ds_size = len(ds) - config.training_params.horizon
+
+    num_train_trajs = np.shape(train_data)[0]
+    num_eval_trajs = np.shape(eval_data)[0]
+
+    init_ds = train_data[0]
+    ds_size = len(init_ds) - config.training_params.horizon
     steps_per_epoch = ds_size // config.training_params.batch_size
 
     init_epoch = int(state.step) // steps_per_epoch + 1
     final_epoch = init_epoch + config.training_params.num_epochs
 
+    train_metrics = None
     print("Start training")
     for epoch in range(init_epoch, final_epoch):
         rng, train_rng = jax.random.split(rng)
-        state, metrics_update = train_epoch(state, ds, config.training_params.batch_size, train_rng)
+        # rng_idx = jax.random.randint(train_rng, [1], minval=0, maxval=num_train_trajs-1).item()
+        rng_idx = 0
+        train_ds = train_data[rng_idx]
+        # if epoch < 0.3 * final_epoch: # TODO
+        #     train_ds = jax.random.permutation(train_rng, train_ds)[:0.10 * ds_size]
+        state, metrics_update = train_epoch(state, train_ds, config.training_params.batch_size, train_rng)
 
         if train_metrics is None:
             train_metrics = metrics_update
@@ -201,25 +225,34 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
 
         if epoch % config.training_params.eval_every_steps == 0 or is_last_step:
             with report_progress.timed('eval'):
-                ts, pred_qs, exp_qs = rollout(state, ds)
+                rng, eval_rng = jax.random.split(rng)
+                rng_idx = jax.random.randint(eval_rng, [1], minval=0, maxval=num_eval_trajs-1).item()
+                # eval_ds = eval_data[rng_idx]
+                eval_ds = train_data[0]
+                ts, pred_qs, exp_qs = rollout(state, eval_ds)
             plot(ts, pred_qs, exp_qs, prefix=f'Epoch {epoch}')
-            del ts, pred_qs, exp_qs
             
         if epoch % config.training_params.checkpoint_every_steps == 0 or is_last_step:
             with report_progress.timed('checkpoint'):
                 ckpt.save(state)
 
+        if epoch % config.training_params.clear_cache_every_steps == 0 or is_last_step: 
+            jax.clear_caches()
+
         print(f'Epoch {epoch}: loss = {round(train_metrics.compute()["loss"], 4)}')
 
-    config.to_json()
+    config_js = config.to_json()
+    run_params_file = os.path.join(work_dir, 'run_params.js')
+    with open(run_params_file, "w") as outfile:
+        json.dump(config_js, outfile)
 
     print("Start validation")
-    ts, pred_qs, exp_qs = rollout(state, ds)
+    rng, val_rng = jax.random.split(rng)
+    rng_idx = jax.random.randint(val_rng, [1], minval=0, maxval=num_eval_trajs-1).item()
+    # val_ds = eval_data[rng_idx]
+    val_ds = train_data[0]
+    ts, pred_qs, exp_qs = rollout(state, val_ds)
     plot(ts, pred_qs, exp_qs, prefix=f'Epoch {final_epoch}')
-
-def test_graph_network():
-    # TODO
-    pass
 
 if __name__ == '__main__':
     parser = ArgumentParser()

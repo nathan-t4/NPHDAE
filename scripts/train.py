@@ -15,7 +15,7 @@ from clu import periodic_actions
 from flax.training import train_state
 
 from scripts.graphs import *
-from scripts.data_utils import *
+from utils.data_utils import *
 from scripts.models import *
 from utils.train_utils import *
 
