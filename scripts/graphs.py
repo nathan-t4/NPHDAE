@@ -7,13 +7,13 @@ import matplotlib.pyplot as plt
 
 import utils.graph_utils as graph_utils
 
-def generate_graph_batch(data, t0s, horizon, 
+def generate_graph_batch(data, traj_idx, t0s, horizon, 
                          add_undirected_edges = False, add_self_loops = False, 
                          render=False):
-
     graphs = []
-    for t0 in t0s: # TODO: generalize to the case when traj_idx is a vector
+    for t0 in t0s:
         graphs.append(build_graph_from_data(data=data, 
+                                            traj_idx=traj_idx,
                                             t=t0,
                                             horizon=horizon))
 
@@ -31,12 +31,12 @@ def generate_graph_batch(data, t0s, horizon,
 
     return graphs
 
-def build_graph_from_data(data, t, horizon) -> jraph.GraphsTuple:
+def build_graph_from_data(data, traj_idx, t, horizon) -> jraph.GraphsTuple:
     mass = jnp.array([100, 1, 1])
-    qs = jnp.array(data[t, 0:3]).squeeze()
-    dqs = jnp.array(data[t, 3:5]).squeeze()
-    ps = jnp.array(data[t, 5:8]).squeeze()
-    vs = ps / mass
+    qs = jnp.array(data[traj_idx, t, 0:3]).squeeze()
+    dqs = jnp.array(data[traj_idx, t, 3:5]).squeeze()
+    # ps = jnp.array(data[t, 5:8]).squeeze()
+    # vs = ps / mass
     n_node = jnp.array([3])       # num nodes
     n_edge = jnp.array([2])       # num edges
 
@@ -45,7 +45,7 @@ def build_graph_from_data(data, t, horizon) -> jraph.GraphsTuple:
 
     # assert t >= horizon [!]
     vs_history = []
-    [vs_history.append(data[t-k,5:8] / mass) for k in reversed(range(horizon))]
+    [vs_history.append(data[traj_idx, t-k, 5:8] / mass) for k in reversed(range(horizon))]
     vs_history = jnp.asarray(vs_history).T
 
     nodes = jnp.column_stack((qs, vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]

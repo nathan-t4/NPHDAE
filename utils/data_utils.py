@@ -4,10 +4,12 @@ import jax
 import tensorflow as tf
 import numpy as np
 import jax.numpy as jnp
+import ml_collections
 
 from argparse import ArgumentParser
+from typing import Tuple
 
-def load_data_jnp(path: str | os.PathLike) -> jnp.ndarray:
+def load_data_jnp(path: str | os.PathLike) -> Tuple[jnp.ndarray, ml_collections.ConfigDict]:
     """
         Load experimental data to tensorflow dataset
     """
@@ -15,6 +17,7 @@ def load_data_jnp(path: str | os.PathLike) -> jnp.ndarray:
     
     state = data['state_trajectories']
     config = data['config']
+    dt = config['dt']
 
     m = jnp.array([100, config['m1'], config['m2']])
    
@@ -34,18 +37,21 @@ def load_data_jnp(path: str | os.PathLike) -> jnp.ndarray:
                     axis=-1) # p_wall, p1, p2
     
     vs = ps / (m.reshape(-1))
-    # TODO: Verlet integrator or finite difference v
-    # acs = q[t+dt] + q[t-dt] - 2*q[t] / (dt**2)
-    accs = jnp.diff(vs, axis=1)
+    accs = jnp.diff(vs, axis=1) / dt
     initial_acc = jnp.expand_dims(accs[:,0,:], axis=1)
     accs = jnp.concatenate((initial_acc, accs), axis=1) # add acceleration at first time step
-    
     # The dataset has dimensions [num_trajectories, num_timesteps, (qs, dqs, ps)]
     data = jnp.concatenate((qs, dqs, ps, accs), axis=-1)
     # Stop gradient for data
     data = jax.lax.stop_gradient(data)
 
-    return data
+    normalization_stats = ml_collections.ConfigDict()
+    normalization_stats.acceleration = ml_collections.ConfigDict({
+        'mean': jnp.mean(accs),
+        'std': jnp.std(accs),
+    })
+
+    return data, normalization_stats
 
 def load_data_tf(data: str | dict) -> tf.data.Dataset:
     """
