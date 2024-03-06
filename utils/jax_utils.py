@@ -1,5 +1,7 @@
 import jax
 import jax.numpy as jnp
+
+from functools import partial
 """ 
     Source: https://github.com/bhchiang/rt/blob/master/utils/transforms.py#L5 
     Also see: https://github.com/google/jax/discussions/5322 
@@ -16,7 +18,7 @@ def pytrees_vmap(fn):
         return results
     return g
 
-def product_loop_nest(f, carry, *xs):
+def scan_loop(f, carry, *xs):
     """ 
         Source: https://github.com/google/jax/discussions/10401
         TODO: fix 
@@ -37,3 +39,10 @@ def product_loop_nest(f, carry, *xs):
         loop = scan_one_more(f, x)
     
     return loop(carry, *xs)
+
+def double_scan(f, init, x1s, x2s):
+    def outer_loop(carry, x_i):
+        carry, ys = jax.lax.scan(lambda s, x1 : f(s, x1, x_i), carry, x1s)
+        return carry, ys
+
+    return jax.lax.scan(outer_loop, init, x2s) # inner loop

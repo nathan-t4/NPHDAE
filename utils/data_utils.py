@@ -46,6 +46,14 @@ def load_data_jnp(path: str | os.PathLike) -> Tuple[jnp.ndarray, ml_collections.
     data = jax.lax.stop_gradient(data)
 
     normalization_stats = ml_collections.ConfigDict()
+    normalization_stats.position = ml_collections.ConfigDict({
+        'mean': jnp.mean(qs),
+        'std': jnp.std(qs),
+    })
+    normalization_stats.velocity = ml_collections.ConfigDict({
+        'mean': jnp.mean(vs),
+        'std': jnp.std(vs),
+    })
     normalization_stats.acceleration = ml_collections.ConfigDict({
         'mean': jnp.mean(accs),
         'std': jnp.std(accs),

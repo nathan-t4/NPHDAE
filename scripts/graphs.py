@@ -7,23 +7,22 @@ import matplotlib.pyplot as plt
 
 import utils.graph_utils as graph_utils
 
-def generate_graph_batch(data, traj_idx, t0s, horizon, 
+def generate_graph_batch(data, traj_idx, t0s, horizon, mode='acceleration',
                          add_undirected_edges = False, add_self_loops = False, 
                          render=False):
     graphs = []
-    for t0 in t0s:
+
+    if isinstance(traj_idx, int): traj_idx = [traj_idx] * len(t0s) # hack
+
+    for idx, t0 in zip(traj_idx, t0s):
         graphs.append(build_graph_from_data(data=data, 
-                                            traj_idx=traj_idx,
+                                            traj_idx=idx,
                                             t=t0,
-                                            horizon=horizon))
+                                            horizon=horizon,
+                                            mode=mode))
 
-    if add_undirected_edges:
-        for i in range(len(graphs)):
-            graphs[i] = graph_utils.add_undirected_edges(graphs[i])
-
-    if add_self_loops:
-        for i in range(len(graphs)):
-            graphs[i] = graph_utils.add_self_loops(graphs[i])
+    for i in range(len(graphs)):
+        graphs[i] = graph_utils.add_edges(graphs[i], add_undirected_edges, add_self_loops)
 
     if render:
         draw_jraph_graph_structure(graphs[0])
@@ -31,7 +30,7 @@ def generate_graph_batch(data, traj_idx, t0s, horizon,
 
     return graphs
 
-def build_graph_from_data(data, traj_idx, t, horizon) -> jraph.GraphsTuple:
+def build_graph_from_data(data, traj_idx, t, horizon, mode='acceleration') -> jraph.GraphsTuple:
     mass = jnp.array([100, 1, 1])
     qs = jnp.array(data[traj_idx, t, 0:3]).squeeze()
     dqs = jnp.array(data[traj_idx, t, 3:5]).squeeze()
@@ -40,21 +39,30 @@ def build_graph_from_data(data, traj_idx, t, horizon) -> jraph.GraphsTuple:
     n_node = jnp.array([3])       # num nodes
     n_edge = jnp.array([2])       # num edges
 
-    # Following embeddings from "Learning to Simulate Complex Physics with Graph Networks"
-    # Add previous velocity histories
-
-    # assert t >= horizon [!]
-    vs_history = []
-    [vs_history.append(data[traj_idx, t-k, 5:8] / mass) for k in reversed(range(horizon))]
-    vs_history = jnp.asarray(vs_history).T
-
-    nodes = jnp.column_stack((qs, vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]
-    edges = dqs.reshape((-1,1))   # n_edge * num_features
+    
+    if mode == 'acceleration':
+        # Following embeddings from "Learning to Simulate Complex Physics with Graph Networks"
+        # Add previous velocity histories
+        # assert t >= horizon [!]
+        vs_history = []
+        [vs_history.append(data[traj_idx, t-k, 5:8] / mass) for k in reversed(range(horizon))]
+        vs_history = jnp.asarray(vs_history).T
+        nodes = jnp.column_stack((qs, vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]
+        edges = dqs.reshape((-1,1))   # n_edge * num_features
+    elif mode == 'position':
+        qs_history = []
+        [qs_history.append(data[traj_idx, t-k-1, 0:3]) for k in reversed(range(horizon))]
+        nodes = jnp.column_stack((qs, qs_history))
+        edges = dqs.reshape((-1,1))
+    else:
+        raise RuntimeError('Invalid mode for build_graph_from_data')
+    
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])
 
     # global context, shape = (n_global_feats, 1) 
-    global_context = jnp.concatenate((jnp.array([t, horizon]), mass), dtype=jnp.int32).reshape(-1,1)
+    q0 = jnp.array(data[traj_idx, 0, 0:3]).squeeze()
+    global_context = jnp.concatenate((jnp.array([t]), q0, mass)).reshape(-1,1)
 
     graph = jraph.GraphsTuple(
         nodes=nodes,

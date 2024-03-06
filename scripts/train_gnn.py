@@ -29,24 +29,26 @@ def create_gnn_config(args):
     })
     config.training_params = ml_collections.ConfigDict({
         'num_epochs': int(1e3),
-        'traj_idx': 0,
         'horizon': 5,
-        'batch_size': 4,
+        'batch_size': 2,
         'rollout_timesteps': 1500,
-        'eval_every_steps': 100,
+        'eval_every_steps': 50,
         'checkpoint_every_steps': 100,
         'clear_cache_every_steps': 10,
-        'add_undirected_edges': False,
-        'add_self_loops': False,
+        'add_undirected_edges': True,
+        'add_self_loops': True,
     })
     config.net_params = ml_collections.ConfigDict({
-        'num_mp_steps': 1, # too large causes oversmoothing
-        'latent_size': 32, # too large causes oversmoothing
-        'hidden_layers': 1,
+        'prediction': 'acceleration',
+        'integration_method': 'semi_implicit_euler', 
+        'num_mp_steps': 2, # too large causes oversmoothing
+        'latent_size': 128, # too large causes oversmoothing
+        'hidden_layers': 2,
+        'activation': 'relu',
         'use_edge_model': True,
         'layer_norm': True,
         'shared_params': False,
-        'dropout_rate': 0.5,
+        'dropout_rate': 0.5, # TODO: use 0.5
         'add_undirected_edges': config.training_params.add_undirected_edges,
         'add_self_loops': config.training_params.add_self_loops,
     })
@@ -54,7 +56,7 @@ def create_gnn_config(args):
 
 def test_graph_network(config: ml_collections.ConfigDict):
     if config.config.dir == None:
-        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gat/latent_size_32_{strftime("%H%M%S")}')
+        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/test_norm_128_128_mp_2_batch_2_{strftime("%H%M%S")}')
     else:
         work_dir = config.config.dir
             
@@ -98,27 +100,36 @@ def test_graph_network(config: ml_collections.ConfigDict):
     def random_batch(ds, batch_size, rng, axis=0):
         ds_size = ds.shape[axis]
         steps_per_epoch = ds_size // batch_size
-        perms = jax.random.permutation(rng, ds_size)
-        perms = perms[:steps_per_epoch * batch_size]
-        perms = perms.reshape((steps_per_epoch, batch_size))
-        perms = jnp.asarray(perms)
+        perms = jnp.arange(ds_size)
+        perms = jax.random.permutation(rng, perms)
+        perms = perms[: steps_per_epoch * batch_size].sort().reshape(-1,batch_size)
+        perms = jax.random.permutation(rng, perms, axis=0)
         return perms
 
-    def train_epoch_test(state, ds, batch_size, rng):
-        # TODO: batch over trajectories and time (currently only time)
+    def train_epoch(state, ds, batch_size, rng):
+        ''' Train one epoch using all trajectories '''     
         traj_perms = random_batch(ds, batch_size, rng, axis=0)
         t0_perms = random_batch(ds, batch_size, rng, axis=1)
         t0_perms = t0_perms.clip(min=config.training_params.horizon)
 
         def loss_fn(params, batch_graphs, batch_targets):
             pred_graphs = state.apply_fn(params, batch_graphs)
-            predictions = pred_graphs.nodes[:,:,-1]
+            if config.net_params.prediction == 'acceleration':
+                predictions = pred_graphs.nodes[:,:,-1]
+            elif config.net_params.prediction == 'position':
+                predictions = pred_graphs.nodes[:,:,0]
             loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
             return loss
 
         def train_batch(state, trajs, t0s):
-            batch_accs = ds[trajs, t0s, 8:11]
-            batch_data = batch_accs.reshape(-1,3)
+            if config.net_params.prediction == 'acceleration':
+                batch_accs = ds[trajs, t0s, 8:11]
+                batch_data = batch_accs.reshape(-1,3) 
+            elif config.net_params.prediction == 'position':
+                batch_qs = ds[trajs, t0s, 0:3]
+                batch_data = batch_qs.reshape(-1,3)
+            else:
+                raise RuntimeError('Invalid prediction - train_batch')
             graphs = generate_graph_batch(data=ds, 
                                           traj_idx=trajs,
                                           t0s=t0s,
@@ -130,22 +141,22 @@ def test_graph_network(config: ml_collections.ConfigDict):
             state = state.apply_gradients(grads=grads)
             return state, loss
         
-        print('shapes', traj_perms.shape, t0_perms.shape)
+        state, epoch_loss = double_scan(train_batch, state, traj_perms, t0_perms)
+        # state, epoch_loss = jax.lax.scan(train_batch, state, t0_perms)
 
-        out = product_loop_nest(lambda i, j, k: i * j * k, 0,
-                        jnp.arange(3), jnp.arange(4), jnp.arange(5))
-        print(out)
-        state, epoch_loss = product_loop_nest(train_batch, state, traj_perms, t0_perms) # TODO: test product_loop_nest
+        train_loss = jnp.asarray(epoch_loss).mean()
 
-        return epoch_loss
+        return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
-    def train_epoch(state, ds, batch_size, rng):        
+    def train_epoch_1_traj(state, ds, batch_size, rng):
+        ''' Train one epoch using just one trajectory (traj_idx = 0) '''     
         t0_perms = random_batch(ds, batch_size, rng, axis=1)
         t0_perms = t0_perms.clip(min=config.training_params.horizon) # for velocity history (horizon)
         epoch_loss = []
 
+        dropout_rng = jax.random.split(rng, batch_size)
         def loss_fn(params, batch_graphs, batch_targets):
-            pred_graphs = state.apply_fn(params, batch_graphs)
+            pred_graphs = state.apply_fn(params, batch_graphs, rngs={'dropout': dropout_rng})
             predictions = pred_graphs.nodes[:,:,-1]
             loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
             return loss
@@ -171,15 +182,15 @@ def test_graph_network(config: ml_collections.ConfigDict):
 
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
-    def rollout(state, ds, t0=0):
+    def rollout(state, ds, traj_idx=0, t0=0):
         net.training = False
 
         t0 = jnp.array(t0).clip(min=config.training_params.horizon)
         ts = jnp.arange(t0, config.training_params.rollout_timesteps) * net.dt
-        exp_qs_buffer = ds[0, t0:config.training_params.rollout_timesteps, 0:3]
-        exp_as_buffer = ds[0, t0:config.training_params.rollout_timesteps, 8:11]
+        exp_qs_buffer = ds[traj_idx, t0:config.training_params.rollout_timesteps, 0:3]
+        exp_as_buffer = ds[traj_idx, t0:config.training_params.rollout_timesteps, 8:11]
         graphs = generate_graph_batch(data=ds, 
-                                      traj_idx=0,
+                                      traj_idx=traj_idx,
                                       t0s=[t0], 
                                       horizon=config.training_params.horizon,
                                       add_undirected_edges=config.training_params.add_undirected_edges,
@@ -188,65 +199,97 @@ def test_graph_network(config: ml_collections.ConfigDict):
         
         def forward_pass(graph, x):
             graph = state.apply_fn(state.params, graph)
-            pred_accs = graph.nodes[:,:,-1]
             pred_qs = graph.nodes[:,:,0]
-            graph = graph._replace(nodes=graph.nodes[:,:,:-1]) # remove acceleration    
-            return graph, (pred_qs.squeeze(), pred_accs.squeeze())
+            if config.net_params.prediction == 'acceleration':
+                pred_accs = graph.nodes[:,:,-1]
+                graph = graph._replace(nodes=graph.nodes[:,:,:-1]) # remove acceleration    
+                return graph, (pred_qs.squeeze(), pred_accs.squeeze())
+            elif config.net_params.prediction == 'position':
+                return graph, pred_qs.squeeze()
         
         final_batched_graph, pred_data = jax.lax.scan(forward_pass, batched_graph, None, length=config.training_params.rollout_timesteps - config.training_params.horizon)
-
-        net.training = True
-        return ts, np.array(pred_data), np.array((exp_qs_buffer, exp_as_buffer))
+        if config.net_params.prediction == 'acceleration':
+            return ts, np.array(pred_data), np.array((exp_qs_buffer, exp_as_buffer))
+        elif config.net_params.prediction == 'position':
+            return ts, np.array(pred_data), np.array(exp_qs_buffer)        
 
     def plot(ts, pred_data, exp_data, prefix, show=False):
         if not os.path.isdir(plot_dir):
             os.makedirs(plot_dir)
-
-        fig, (ax1, ax2) = plt.subplots(2,1)
-
-        ax1.set_title('Position')
-        ax1.plot(ts, exp_data[0] - pred_data[0], label=[f'Mass {i}' for i in range(3)])
-        ax1.set_xlabel('Time [$s$]')
-        ax1.set_ylabel('Position error [$m$]')
-        ax1.set_ylim([-0.5,0.5])
-        ax1.legend()
-
-        fig.suptitle(f'{prefix}: Error from rollout')
-        ax2.set_title('Acceleration')
-        ax2.plot(ts, exp_data[1] - pred_data[1], label=[f'Mass {i}' for i in range(3)])
-        ax2.set_xlabel('Time [$s$]')
-        ax2.set_ylabel('Acceleration error [$m/s^2$]')
-        ax2.set_ylim([-0.3,0.3])
-        ax2.legend()
-
-        plt.tight_layout()
-        fig.savefig(os.path.join(plot_dir, f'{prefix}_error.png'))
-        plt.show() if show else plt.close()
-
-        for i in range(3):
+        if config.net_params.prediction == 'acceleration':
             fig, (ax1, ax2) = plt.subplots(2,1)
-            fig.suptitle(f'{prefix}: Mass {i}')
-            ax1.set_title(f'Position')
-            ax1.plot(ts, pred_data[0,:,i], label='predicted')
-            ax1.plot(ts, exp_data[0,:,i], label='expected')
+
+            ax1.set_title('Position')
+            ax1.plot(ts, exp_data[0] - pred_data[0], label=[f'Mass {i}' for i in range(3)])
             ax1.set_xlabel('Time [$s$]')
-            ax1.set_ylabel('Position [$m$]')
-            ax1.set_ylim([-0.5,0.5])
+            ax1.set_ylabel('Position error [$m$]')
+            # ax1.set_ylim([-0.5,0.5])
             ax1.legend()
 
-            ax2.set_title(f'Acceleration')
-            ax2.plot(ts, pred_data[1,:,i], label='predicted')
-            ax2.plot(ts, exp_data[1,:,i], label='expected')
+            fig.suptitle(f'{prefix}: Error from rollout')
+            ax2.set_title('Acceleration')
+            ax2.plot(ts, exp_data[1] - pred_data[1], label=[f'Mass {i}' for i in range(3)])
             ax2.set_xlabel('Time [$s$]')
-            ax2.set_ylabel('Acceleration [$m/s^2$]')
-            ax2.set_ylim([-0.3,0.3])
+            ax2.set_ylabel('Acceleration error [$m/s^2$]')
+            # ax2.set_ylim([-0.3,0.3])
             ax2.legend()
 
             plt.tight_layout()
-            plt.savefig(os.path.join(plot_dir, f'{prefix}_mass{i}.png'))
-            if show: plt.show()
-            plt.close()
+            fig.savefig(os.path.join(plot_dir, f'{prefix}_error.png'))
+            plt.show() if show else plt.close()
+
+            for i in range(3):
+                fig, (ax1, ax2) = plt.subplots(2,1)
+                fig.suptitle(f'{prefix}: Mass {i}')
+                ax1.set_title(f'Position')
+                ax1.plot(ts, pred_data[0,:,i], label='predicted')
+                ax1.plot(ts, exp_data[0,:,i], label='expected')
+                ax1.set_xlabel('Time [$s$]')
+                ax1.set_ylabel('Position [$m$]')
+                # ax1.set_ylim([-0.5,0.5])
+                ax1.legend()
+
+                ax2.set_title(f'Acceleration')
+                ax2.plot(ts, pred_data[1,:,i], label='predicted')
+                ax2.plot(ts, exp_data[1,:,i], label='expected')
+                ax2.set_xlabel('Time [$s$]')
+                ax2.set_ylabel('Acceleration [$m/s^2$]')
+                # ax2.set_ylim([-0.3,0.3])
+                ax2.legend()
+
+                plt.tight_layout()
+                plt.savefig(os.path.join(plot_dir, f'{prefix}_mass{i}.png'))
+                if show: plt.show()
+                plt.close()
         
+        elif config.net_params.prediction == 'position':
+            fig, ax1 = plt.subplots(1)
+
+            ax1.set_title('Position')
+            ax1.plot(ts, exp_data - pred_data, label=[f'Mass {i}' for i in range(3)])
+            ax1.set_xlabel('Time [$s$]')
+            ax1.set_ylabel('Position error [$m$]')
+            # ax1.set_ylim([-0.5,0.5])
+            ax1.legend()
+            plt.tight_layout()
+            fig.savefig(os.path.join(plot_dir, f'{prefix}_error.png'))
+            plt.show() if show else plt.close()
+
+            for i in range(3):
+                fig, ax1 = plt.subplots(1)
+                fig.suptitle(f'{prefix}: Mass {i}')
+                ax1.set_title(f'Position')
+                ax1.plot(ts, pred_data[:,i], label='predicted')
+                ax1.plot(ts, exp_data[:,i], label='expected')
+                ax1.set_xlabel('Time [$s$]')
+                ax1.set_ylabel('Position [$m$]')
+                # ax1.set_ylim([-0.5,0.5])
+                ax1.legend()
+
+                plt.tight_layout()
+                plt.savefig(os.path.join(plot_dir, f'{prefix}_mass{i}.png'))
+                if show: plt.show()
+                plt.close()
         plt.close()
 
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
@@ -254,9 +297,9 @@ def test_graph_network(config: ml_collections.ConfigDict):
 
     trajs_size = len(train_data)
     ts_size = len(train_data[0]) - config.training_params.horizon
-    # steps_per_epoch = ts_size // config.training_params.batch_size * trajs_size // config.training_params.batch_size
+    steps_per_epoch = ts_size // config.training_params.batch_size * trajs_size // config.training_params.batch_size
 
-    steps_per_epoch = ts_size // config.training_params.batch_size
+    # steps_per_epoch = ts_size // config.training_params.batch_size
 
     init_epoch = int(state.step) // steps_per_epoch + 1
     final_epoch = init_epoch + config.training_params.num_epochs
@@ -265,10 +308,10 @@ def test_graph_network(config: ml_collections.ConfigDict):
     train_metrics = None
     print("Start training")
     for epoch in range(init_epoch, final_epoch):
+        net.training = True
         rng, train_rng = jax.random.split(rng)
-        train_ds = train_data
-        state, metrics_update = train_epoch(state, train_ds, config.training_params.batch_size, train_rng)
-
+        state, metrics_update = train_epoch_1_traj(state, train_data, config.training_params.batch_size, train_rng) # test fit on one trajectory for now
+        # state, metrics_update = train_epoch(state, train_data, config.training_params.batch_size, train_rng)
         if train_metrics is None:
             train_metrics = metrics_update
         else:
@@ -281,10 +324,9 @@ def test_graph_network(config: ml_collections.ConfigDict):
         if epoch % config.training_params.eval_every_steps == 0 or is_last_step:
             with report_progress.timed('eval'):
                 rng, eval_rng = jax.random.split(rng)
-                # rng_idx = jax.random.randint(eval_rng, [1], minval=0, maxval=len(eval_data)-1).item()
-                # eval_ds = eval_data[rng_idx]
-                eval_ds = train_data
-                ts, pred_data, exp_data = rollout(state, eval_ds)
+                rng_idx = jax.random.randint(eval_rng, [1], minval=0, maxval=len(eval_data)-1).item()
+                # ts, pred_data, exp_data = rollout(state, eval_data, rng_idx)
+                ts, pred_data, exp_data = rollout(state, train_data)
             plot(ts, pred_data, exp_data, prefix=f'Epoch {epoch}')
             
         if epoch % config.training_params.checkpoint_every_steps == 0 or is_last_step:

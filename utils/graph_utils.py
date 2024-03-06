@@ -2,6 +2,13 @@ import flax
 import jraph
 import jax.numpy as jnp
 
+def add_edges(graph, undirected_edges, self_loops):
+    if undirected_edges:
+        graph = add_undirected_edges(graph)
+    if self_loops:
+        graph = add_self_loops(graph)
+    return graph
+
 def add_undirected_edges(graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
     new_senders = jnp.concatenate((graph.senders, graph.receivers), axis=0)
     new_receivers = jnp.concatenate((graph.receivers, graph.senders), axis=0)

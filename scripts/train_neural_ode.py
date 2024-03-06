@@ -14,27 +14,25 @@ from scripts.models import *
 from utils.data_utils import *
 from utils.train_utils import *
 
-training_data_path = 'results/double_mass_spring_data/no_control_train.pkl'
-evaluation_data_path = 'results/double_mass_spring_data/no_control_val.pkl'
-
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.50' # default is .75
 # os.environ['XLA_PYTHON_CLIENT_ALLOCATOR']='platform'
 
 def create_neural_ODE_config(args):
     training_params = ml_collections.ConfigDict({
-        'num_epochs': int(800),
+        'num_epochs': int(8e2),
         'traj_idx': 0,
-        'horizon': 20,
+        'horizon': 20, # VARY! 
         'batch_size': 8,
         'rollout_timesteps': 1500,
-        'eval_every_steps': 25,
-        'checkpoint_every_steps': 10,
+        'eval_every_steps': 50,
+        'checkpoint_every_steps': 50,
         'clear_cache_every_steps': 50,
+        'dt': 0.01, # Note: dt is arbitrary since horizon is fixed
     })
 
     derivative_net_params = ml_collections.ConfigDict({
-        'feature_sizes': [4,10,4], # [input, hidden, output], inputs = (state, time)
-        'activation': 'relu',
+        'feature_sizes': [16, 16, 3], # [hidden, output], inputs = (state, time)
+        'activation': 'softplus',
         'deterministic': False,
     })
 
@@ -54,7 +52,7 @@ def create_neural_ODE_config(args):
 def test_neural_ODE(config: ml_collections.ConfigDict):
     """ Test Neural ODEs """
     if config.config.dir == None:
-        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_neural_ode/1_traj_test_{strftime("%H%M%S")}')
+        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_neural_ode/16_16_{strftime("%H%M%S")}')
     else:
         work_dir = config.config.dir
 
@@ -70,16 +68,11 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
 
     derivative_net = MLP(**config.derivative_net_params)
 
-    net_params = ml_collections.FrozenConfigDict({
-        'derivative_net': derivative_net,
-        'dt': 0.01, # TODO: make sure this is consistent with ts[1] - ts[0]
-    })
-
-    net = NeuralODE(**net_params)
-    x = jnp.ones((1,4))
+    net = NeuralODE(derivative_net=derivative_net)
+    x = jnp.ones(3)
     variables = net.init(init_rng, x)
-    tx = optax.adam(1e-3)
-    # tx = optax.adabelief(3e-3)
+    # tx = optax.adam(1e-3)
+    tx = optax.adabelief(3e-3)
 
     batched_apply = jax.vmap(net.apply, in_axes=(None,0,0))
 
@@ -107,17 +100,15 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
         def loss_fn(params, data):
             qi = data[:,0:3]
             qf = data[:,3:6]
-            t0 = jnp.squeeze(data[:,-2])
-            tf = jnp.squeeze(data[:,-1])
-            inputs = jnp.column_stack((qi, t0 * net_params['dt']))
-            targets = jnp.column_stack((jnp.squeeze(qf), t0 * net_params['dt']))
-            pred_qf = state.apply_fn({'params': params}, inputs, jnp.column_stack((t0, tf)) * net_params['dt'])
-            # pred_qf = [batch_dim, ts, ys]
-            loss = int(1e6) * optax.l2_loss(predictions=pred_qf[:,-1], targets=targets).mean()
+            t0 = jnp.squeeze(data[:,-2]) * config.training_params['dt']
+            tf = jnp.squeeze(data[:,-1]) * config.training_params['dt']
+            pred_qf = state.apply_fn({'params': params}, qi, jnp.column_stack((t0, tf)))
+            # pred_qf = [batch_dim, ts, ys] 
+            loss = int(1e6) * optax.l2_loss(predictions=pred_qf[:,-1,:], targets=qf).mean() # get pred_qf at last timestep only
             return loss
             
         def train_batch(state, t0s):
-            t0s = jnp.reshape(t0s, (-1,1))
+            t0s = jnp.reshape(t0s, (-1,1)) 
             tfs = jnp.reshape(t0s + config.training_params.horizon, (-1,1)).clip(max=ds_size)
             batch_qis = jnp.squeeze(ds[t0s, 0:3], 1)
             batch_qfs = jnp.squeeze(ds[tfs, 0:3], 1)
@@ -133,10 +124,10 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
 
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
-    def rollout(state, ds, t0=0, dt=net_params['dt']):
+    def rollout(state, ds, t0=0, dt=config.training_params['dt']):
         init_qs = ds[t0, 0:3]
         exp_qs_buffer = ds[t0:t0+config.training_params.rollout_timesteps+1, 0:3]
-        inputs = np.append(init_qs, t0).reshape(1,-1)
+        inputs = np.reshape(init_qs, (1,-1))
         ts = np.arange(t0, t0+config.training_params.rollout_timesteps+1).reshape(1,-1) * dt
         next_qs = state.apply_fn({'params': state.params}, inputs, ts)
         pred_qs_buffer = jnp.asarray(next_qs).squeeze(axis=0)
@@ -150,10 +141,10 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
             os.makedirs(plot_dir)
 
         plt.title(f'{prefix}: Error from rollout')
-        plt.plot(ts, exp_qs_buffer - pred_qs_buffer[:,:-1])
+        plt.plot(ts, exp_qs_buffer - pred_qs_buffer, label=[f'Mass {i}' for i in range(3)])
         plt.xlabel('Time [s]')
         plt.ylabel('Position error')
-        plt.ylim((-4,4))
+        # plt.ylim((-0.5,0.5))
         plt.savefig(os.path.join(plot_dir, f'{prefix}_pos_error.png'))
         plt.show() if show else plt.clf()
 
@@ -162,7 +153,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
         plt.plot(ts, exp_qs_buffer[:,0], label='expected')
         plt.xlabel('Time [s]')
         plt.ylabel('Position')
-        plt.ylim((-4,4))
+        # plt.ylim((-0.5,0.5))
         plt.legend()
         plt.savefig(os.path.join(plot_dir, f'{prefix}_mass0_pos.png'))
         plt.show() if show else plt.clf()
@@ -172,7 +163,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
         plt.plot(ts, exp_qs_buffer[:,1], label='expected')
         plt.xlabel('Time [s]')
         plt.ylabel('Position')
-        plt.ylim((-4,4))
+        # plt.ylim((-0.5,0.5))
         plt.legend()
         plt.savefig(os.path.join(plot_dir, f'{prefix}_mass1_pos.png'))
         plt.show() if show else plt.clf()
@@ -182,13 +173,13 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
         plt.plot(ts, exp_qs_buffer[:,2], label='expected')
         plt.xlabel('Time [s]')
         plt.ylabel('Position')
-        plt.ylim((-4,4))
+        # plt.ylim((-0.5,0.5))
         plt.legend()
         plt.savefig(os.path.join(plot_dir, f'{prefix}_mass2_pos.png'))
         plt.show() if show else plt.clf()
 
-    train_data = load_data_jnp(config.config.training_data_path)
-    eval_data = load_data_jnp(config.config.evaluation_data_path)
+    train_data, _ = load_data_jnp(config.config.training_data_path)
+    eval_data, _ = load_data_jnp(config.config.evaluation_data_path)
     
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
     state = ckpt.restore_or_initialize(state)
@@ -207,11 +198,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
     print("Start training")
     for epoch in range(init_epoch, final_epoch):
         rng, train_rng = jax.random.split(rng)
-        # rng_idx = jax.random.randint(train_rng, [1], minval=0, maxval=num_train_trajs-1).item()
-        rng_idx = 0
-        train_ds = train_data[rng_idx]
-        # if epoch < 0.3 * final_epoch: # TODO
-        #     train_ds = jax.random.permutation(train_rng, train_ds)[:0.10 * ds_size]
+        train_ds = train_data[0]
         state, metrics_update = train_epoch(state, train_ds, config.training_params.batch_size, train_rng)
 
         if train_metrics is None:
@@ -249,7 +236,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
     print("Start validation")
     rng, val_rng = jax.random.split(rng)
     rng_idx = jax.random.randint(val_rng, [1], minval=0, maxval=num_eval_trajs-1).item()
-    # val_ds = eval_data[rng_idx]
+    # val_ds = eval_data[rng_id# dt is arbitrary since horizon is fixed...x]
     val_ds = train_data[0]
     ts, pred_qs, exp_qs = rollout(state, val_ds)
     plot(ts, pred_qs, exp_qs, prefix=f'Epoch {final_epoch}')

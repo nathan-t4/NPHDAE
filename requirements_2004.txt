@@ -28,6 +28,7 @@ grpcio==1.60.0
 h5py==3.10.0
 idna==3.6
 importlib-resources==6.1.1
+-e git+ssh://git@github.com/nathan-t4/gnode.git@2f0cc63f817a8f39c07d88e34d99bcc9665971ae#egg=invariant_gnode
 jax==0.4.24
 jaxlib==0.4.23+cuda12.cudnn89
 jaxtyping==0.2.25
