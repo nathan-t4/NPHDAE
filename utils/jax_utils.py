@@ -46,3 +46,6 @@ def double_scan(f, init, x1s, x2s):
         return carry, ys
 
     return jax.lax.scan(outer_loop, init, x2s) # inner loop
+
+def num_parameters(params):
+    return sum(x.size for x in jax.tree_util.tree_leaves(params))

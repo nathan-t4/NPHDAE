@@ -305,16 +305,22 @@ class DoubleMassSpring(Environment):
 
         plt.show()
 
-def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501):
+def generate_dataset(args, env_seed: int = 501):
     """
         TODO: 
             use params dict to initialize env
             fix hardcoded parts (dataset_type == ...)
     """
     def control_policy(state, t, jax_key):
-        return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
-        # return 5.0 * jnp.array([jnp.sin(t)])
-        # return jnp.array([t-t]) # zero input
+        control_name = args.control.lower()
+        if control_name == 'uniform':
+            return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
+        elif control_name == 'sin':
+            return 5.0 * jnp.array([jnp.sin(t)])
+        elif control_name == 'passive':
+            return jnp.array([t-t]) # zero input
+        else:
+            raise RuntimeError('Invalid control flag')
     
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'results/double_mass_spring_data'))
@@ -332,7 +338,7 @@ def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501
         'k2': 1.5,
         'b1': 1.7,
         'b2': 1.5,
-        'state_measure_spring_elongation': True,
+        'state_measure_spring_elongation': False,
         'nonlinear_damping': True,
         'nonlinear_spring': False,
     }
@@ -349,7 +355,7 @@ def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501
             val_params[k] = v
 
     env = None
-    if dataset_type == 'training':
+    if args.type == 'training':
         env = DoubleMassSpring(**params, random_seed=501)
         env.set_control_policy(control_policy)    
         dataset = env.gen_dataset(trajectory_num_steps=1500, 
@@ -357,7 +363,7 @@ def generate_dataset(params, dataset_type: str = 'training', env_seed: int = 501
                                   x0_init_lb=x0_init_lb,
                                   x0_init_ub=x0_init_ub,
                                   save_str=save_dir)
-    elif dataset_type == 'validation': 
+    elif args.type == 'validation': 
         env = DoubleMassSpring(**val_params, random_seed=501)
         env.set_control_policy(control_policy)
 
@@ -383,8 +389,9 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('--type', type=str, default='training')
+    parser.add_argument('--control', type=str, default='passive')
     args = parser.parse_args()
 
     assert(args.type.lower() == 'training' or args.type.lower() == 'validation')
 
-    generate_dataset(None, dataset_type=args.type.lower())
+    generate_dataset(args)

@@ -13,6 +13,7 @@ from flax.training.train_state import TrainState
 from scripts.models import *
 from utils.data_utils import *
 from utils.train_utils import *
+from utils.jax_utils import *
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.50' # default is .75
 # os.environ['XLA_PYTHON_CLIENT_ALLOCATOR']='platform'
@@ -75,7 +76,7 @@ def test_neural_ODE(config: ml_collections.ConfigDict):
     tx = optax.adabelief(3e-3)
 
     batched_apply = jax.vmap(net.apply, in_axes=(None,0,0))
-
+    print(f"Number of parameters {num_parameters(variables['params'])}")
 
     state = TrainState.create(
          apply_fn=batched_apply,

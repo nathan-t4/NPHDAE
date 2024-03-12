@@ -3,15 +3,10 @@ import jax
 import diffrax
 import flax
 import flax.linen as nn
-
-import numpy as np
-
 import jax.numpy as jnp
 
 from typing import Sequence
 from ml_collections import FrozenConfigDict
-
-from utils.graph_utils import add_edges
 
 class MLP(nn.Module):
     feature_sizes: Sequence[int]
@@ -86,6 +81,7 @@ class GraphNet(nn.Module):
     layer_norm: bool = False
     use_edge_model: bool = False
     shared_params: bool = False
+    horizon: int = 5
 
     globals_output_size: int = 0
     edge_output_size: int = 1
@@ -96,7 +92,7 @@ class GraphNet(nn.Module):
     # MLP parameters
     latent_size: int = 16
     hidden_layers: int = 2
-    activation: str = 'softplus'
+    activation: str = 'relu'
     dropout_rate: float = 0
     training: bool = True
 
@@ -107,32 +103,32 @@ class GraphNet(nn.Module):
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
-        cur_pos = graph.nodes[:,0].reshape(-1)
+        cur_pos = graph.nodes[:,0]
         if self.prediction == 'acceleration':
-            cur_vel = graph.nodes[:,-1].reshape(-1)
-            prev_vel = graph.nodes[:,1:]
+            cur_vel = graph.nodes[:,self.horizon]
+            prev_vel = graph.nodes[:,1:self.horizon+1] # including cur_vel
         elif self.prediction == 'position':
-            prev_pos = graph.nodes[:,1:]
+            prev_pos = graph.nodes[:,1:self.horizon+1]
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
-            inputs = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
             model = MLP(feature_sizes=node_feature_sizes, 
                         activation=self.activation, 
                         dropout_rate=self.dropout_rate, 
                         deterministic=not self.training,
                         with_layer_norm=self.layer_norm)
-            return model(inputs)
+            return model(input)
 
         def update_edge_fn(edges, senders, receivers, globals_):
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
-            inputs = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
             model = MLP(feature_sizes=edge_feature_sizes,
                         activation=self.activation,
                         dropout_rate=self.dropout_rate, 
                         deterministic=not self.training,
                         with_layer_norm=self.layer_norm)
-            return model(inputs)
+            return model(input)
             
         def update_global_fn(nodes, edges, globals_):
             del nodes, edges
@@ -165,7 +161,7 @@ class GraphNet(nn.Module):
             )
             processor_nets.append(net)
 
-        # Decoder # TODO: maybe remove hidden layers?
+        # Decoder
         decoder = jraph.GraphMapFeatures(
             embed_node_fn=MLP(
                 feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
@@ -219,18 +215,19 @@ class GraphNet(nn.Module):
             
             if self.add_self_loops:
                 next_edges = jnp.concatenate((next_edges, jnp.zeros((3, 1))), axis=0)
-
-            graph = graph._replace(nodes=next_nodes,
-                                   edges=next_edges)            
+            
+            graph = graph._replace(nodes=next_nodes)            
             return graph
 
         # Encode features to latent space
         processed_graph = encoder(graph)
-
+        prev_graph = processed_graph
         # Message passing
         for i in range(self.num_mp_steps): 
             processed_graph = processor_nets[i](processed_graph)
-
+            processed_graph = processed_graph._replace(nodes=processed_graph.nodes + prev_graph.nodes,
+                                                       edges=processed_graph.edges + prev_graph.edges)
+            prev_graph = processed_graph
         # def mp_step(carry, net):
         #     return net(carry), _
         # processed_graph, _ = jax.lax.scan(mp_step, processed_graph, processor_nets)
@@ -252,7 +249,8 @@ class GNODE(nn.Module):
 
         TODO:
         - fix neural ODE call - time explicitly given (from globals)?
-        
+        - inherit GraphNet?       
+        - explicitly add horizon for neural ODE (integration time) 
     """
     normalization_stats: FrozenConfigDict
 
@@ -260,14 +258,19 @@ class GNODE(nn.Module):
     layer_norm: bool = False
     use_edge_model: bool = False
     shared_params: bool = False
+    horizon: int = 5
+    ode_horizon: int = 1
 
     globals_output_size: int = 0
     edge_output_size: int = 1
     node_output_size: int = 1
-    
+    prediction: str = 'acceleration'
+    integration_method: str = 'semi_implicit_euler'
+
     # MLP parameters
     latent_size: int = 16
     hidden_layers: int = 2
+    activation: str = 'relu'
     dropout_rate: float = 0
     training: bool = True
 
@@ -279,45 +282,49 @@ class GNODE(nn.Module):
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
         cur_pos = graph.nodes[:,0].reshape(-1)
-        cur_vel = graph.nodes[:,-1].reshape(-1)
-        prev_vel = graph.nodes[:,1:]
+        cur_vel = graph.nodes[:,self.horizon].reshape(-1)
+        prev_vel = graph.nodes[:,1:self.horizon+1]
         def update_node_fn(nodes, senders, receivers, globals_):
-            inputs = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
-            node_feature_sizes = [inputs.shape[1]] * self.hidden_layers
+            input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            node_feature_sizes = [self.latent_size] * self.hidden_layers + [input.shape[1]]
             derivative_net = MLP(feature_sizes=node_feature_sizes, 
-                                 activation='relu', 
+                                 activation=self.activation, 
                                  dropout_rate=self.dropout_rate, 
                                  deterministic=not self.training)
-            model = NeuralODE(derivative_net)
-            output = model(inputs).squeeze()
-            return nn.Dense(self.latent_size)(output)
+            model = jax.vmap(NeuralODE(derivative_net), in_axes=(0,None))
+            time = globals_[0]
+            integration_times = jnp.array([time, time + self.ode_horizon]).squeeze() * self.dt
+            # jax.debug.print('integration times {}', integration_times)
+            output = model(input, integration_times)
+            return nn.Dense(self.latent_size)(output[:,-1]) # -1 because only use ode solution at last ts
 
         def update_edge_fn(edges, senders, receivers, globals_):
-            inputs = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
-            edge_feature_sizes = [inputs.shape[1]] * self.hidden_layers
+            input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            edge_feature_sizes = [self.latent_size] * self.hidden_layers + [input.shape[1]]
             derivative_net = MLP(feature_sizes=edge_feature_sizes, 
-                                 activation='relu',
+                                 activation=self.activation,
                                  dropout_rate=self.dropout_rate, 
                                  deterministic=not self.training)
-            model = NeuralODE(derivative_net)
-            output = model(inputs).squeeze()
-            return nn.Dense(self.latent_size)(output)
+            model = jax.vmap(NeuralODE(derivative_net), in_axes=(0,None))
+            time = globals_[0]
+            integration_times = jnp.array([time, time + self.ode_horizon]).squeeze() * self.dt
+            output = model(input, integration_times)
+            return nn.Dense(self.latent_size)(output[:,-1]) # -1 because only use ode solution at last ts
             
         def update_global_fn(nodes, edges, globals_):
             del nodes, edges
             time = globals_[0]
             static_params = globals_[1:]
-            globals_ = jnp.concatenate((jnp.array([time + 1]), static_params))
+            globals_ = jnp.concatenate((jnp.array([time + self.ode_horizon]), static_params))
             return globals_ 
-        
-        if not self.use_edge_model:
-            update_edge_fn = None
 
        # Encoder
         encoder = jraph.GraphMapFeatures(
             embed_edge_fn=MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              activation=self.activation,
                               with_layer_norm=self.layer_norm),
             embed_node_fn=MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              activation=self.activation,
                               with_layer_norm=self.layer_norm),
         )
         
@@ -335,17 +342,20 @@ class GNODE(nn.Module):
             )
             processor_nets.append(net)
 
+        decoder_latent_sizes = [self.latent_size] * self.hidden_layers
         # Decoder
         decoder = jraph.GraphMapFeatures(
-            embed_node_fn=MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size]),
-            embed_edge_fn=MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size]),
+            embed_node_fn=MLP(feature_sizes=decoder_latent_sizes + [self.node_output_size],
+                              activation=self.activation),
+            embed_edge_fn=MLP(feature_sizes=decoder_latent_sizes + [self.edge_output_size],
+                              activation=self.activation),
         )
 
-        def decoder_postprocessor(graph: jraph.GraphsTuple, mode='semi_implicit_euler'):
+        def decoder_postprocessor(graph: jraph.GraphsTuple):
             # Use predicted acceleration to update node features using semi-implicit Euler integration
             next_nodes = None
             next_edges = None
-            if mode == 'semi_implicit_euler':
+            if self.integration_method == 'semi_implicit_euler':
                 if self.layer_norm:
                     normalized_acc = graph.nodes.reshape(-1)
                     pred_acc = normalized_acc * self.normalization_stats.acceleration.std + self.normalization_stats.acceleration.mean
@@ -357,7 +367,7 @@ class GNODE(nn.Module):
                 next_nodes = jnp.column_stack([next_pos, prev_vel[:,1:], next_vel, pred_acc])
                 next_edges = jnp.diff(next_pos).reshape(-1,1)
                 
-            elif mode == 'verlet':
+            elif self.integration_method == 'verlet':
                 # TODO: test - need to change node features for this
                 pred_acc = graph.nodes.reshape(-1)
                 next_pos = 2 * cur_pos - prev_pos + pred_acc * self.dt**2
@@ -383,10 +393,13 @@ class GNODE(nn.Module):
 
         # Encode features to latent space
         processed_graph = encoder(graph)
-
+        prev_graph = processed_graph
         # Message passing
-        for i in range(self.num_mp_steps):
+        for i in range(self.num_mp_steps): 
             processed_graph = processor_nets[i](processed_graph)
+            processed_graph = processed_graph._replace(nodes=processed_graph.nodes + prev_graph.nodes,
+                                                       edges=processed_graph.edges + prev_graph.edges)
+            prev_graph = processed_graph
 
         # Decode latent space features back to node features
         processed_graph = decoder(processed_graph)

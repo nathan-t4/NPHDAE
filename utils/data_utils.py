@@ -76,13 +76,5 @@ if __name__ == '__main__':
     parser.add_argument('--path', type=str, required=True)
     args = parser.parse_args()
 
-    data = np.load(args.path, allow_pickle=True)
-
-    data_tf = load_data_tf(data)
-
-    # print(f'Dataset specs: {data_tf.element_spec}')
-    
-    test_batch = data_tf.batch(batch_size=3, deterministic=False, drop_remainder=True)
-    test_batch_np = list(test_batch.as_numpy_iterator())
-    print(f'Test batch length: {len(test_batch_np)}')
-    print(f'First batch shape: {np.shape(test_batch_np[0])}')
+    data, norm_stats = load_data_jnp(args.path)
+    print(data.shape)   

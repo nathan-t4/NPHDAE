@@ -353,7 +353,7 @@ def generate_dataset(args, env_seed: int = 501):
         'k2': 1.5,
         'b1': 1.7,
         'b2': 1.5,
-        'state_measure_spring_elongation': True,
+        'state_measure_spring_elongation': False,
         'nonlinear_damping': True,
         'nonlinear_spring': False,
     }

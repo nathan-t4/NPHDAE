@@ -45,7 +45,7 @@ def build_graph_from_data(data, traj_idx, t, horizon, mode='acceleration') -> jr
         # Add previous velocity histories
         # assert t >= horizon [!]
         vs_history = []
-        [vs_history.append(data[traj_idx, t-k, 5:8] / mass) for k in reversed(range(horizon))]
+        [vs_history.append((data[traj_idx, t-k, 5:8]).squeeze() / mass) for k in reversed(range(horizon))]
         vs_history = jnp.asarray(vs_history).T
         nodes = jnp.column_stack((qs, vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]
         edges = dqs.reshape((-1,1))   # n_edge * num_features
@@ -62,7 +62,9 @@ def build_graph_from_data(data, traj_idx, t, horizon, mode='acceleration') -> jr
 
     # global context, shape = (n_global_feats, 1) 
     q0 = jnp.array(data[traj_idx, 0, 0:3]).squeeze()
-    global_context = jnp.concatenate((jnp.array([t]), q0, mass)).reshape(-1,1)
+    v0 = jnp.array(data[traj_idx, 0, 5:8]).squeeze() / mass
+    global_context = jnp.concatenate((jnp.array([t]), q0, v0)).reshape(-1,1)
+    
 
     graph = jraph.GraphsTuple(
         nodes=nodes,
@@ -193,7 +195,7 @@ def build_double_spring_mass_graph(data,
     receivers = jnp.array([1,2])
 
     # global context, shape = (n_global_feats, 1) 
-    global_context = jnp.concatenate((jnp.array([t, horizon]), mass, qs[0]), dtype=jnp.int32).reshape(-1,1)
+    global_context = jnp.concatenate((jnp.array([t]), qs[0], vs[0]), dtype=jnp.int32).reshape(-1,1)
     # global_context = jnp.array([t])
 
     graph = jraph.GraphsTuple(
