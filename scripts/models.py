@@ -69,11 +69,9 @@ class NeuralODE(nn.Module):
                 
         return solution.ys
 
-
 class GraphNet(nn.Module):
     """ 
         EncodeProcessDecode GN 
-        TODO: add noise
     """
     normalization_stats: FrozenConfigDict
 
@@ -81,7 +79,8 @@ class GraphNet(nn.Module):
     layer_norm: bool = False
     use_edge_model: bool = False
     shared_params: bool = False
-    horizon: int = 5
+    vel_history: int = 5
+    noise_std: float = 0.0003
 
     globals_output_size: int = 0
     edge_output_size: int = 1
@@ -102,13 +101,18 @@ class GraphNet(nn.Module):
     dt: float = num_mp_steps * 0.01
 
     @nn.compact
-    def __call__(self, graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
+    def __call__(self, graph: jraph.GraphsTuple, rng) -> jraph.GraphsTuple:
+        if self.training: 
+            # TODO: Try with noise
+            rng, noise_rng = jax.random.split(rng)
+            new_nodes = jnp.column_stack((graph.nodes[:,0].T + self.noise_std * jax.random.normal(noise_rng, (len(graph.nodes),)), graph.nodes[:,1:]))
+            graph = graph._replace(nodes=new_nodes)
         cur_pos = graph.nodes[:,0]
         if self.prediction == 'acceleration':
-            cur_vel = graph.nodes[:,self.horizon]
-            prev_vel = graph.nodes[:,1:self.horizon+1] # including cur_vel
+            cur_vel = graph.nodes[:,self.vel_history]
+            prev_vel = graph.nodes[:,1:self.vel_history+1] # including cur_vel
         elif self.prediction == 'position':
-            prev_pos = graph.nodes[:,1:self.horizon+1]
+            prev_pos = graph.nodes[:,1:self.vel_history+1]
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
@@ -174,6 +178,7 @@ class GraphNet(nn.Module):
         def decoder_postprocessor(graph: jraph.GraphsTuple):
             next_nodes = None
             next_edges = None
+            # TODO: use diffrax solvers?
             if self.prediction == 'acceleration':
                 # Use predicted acceleration to update node features using semi-implicit Euler integration
                 if self.integration_method == 'semi_implicit_euler':
@@ -258,8 +263,8 @@ class GNODE(nn.Module):
     layer_norm: bool = False
     use_edge_model: bool = False
     shared_params: bool = False
-    horizon: int = 5
-    ode_horizon: int = 1
+    vel_history: int = 5
+    horizon: int = 1
 
     globals_output_size: int = 0
     edge_output_size: int = 1
@@ -282,8 +287,8 @@ class GNODE(nn.Module):
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple) -> jraph.GraphsTuple:
         cur_pos = graph.nodes[:,0].reshape(-1)
-        cur_vel = graph.nodes[:,self.horizon].reshape(-1)
-        prev_vel = graph.nodes[:,1:self.horizon+1]
+        cur_vel = graph.nodes[:,self.vel_history].reshape(-1)
+        prev_vel = graph.nodes[:,1:self.vel_history+1]
         def update_node_fn(nodes, senders, receivers, globals_):
             input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
             node_feature_sizes = [self.latent_size] * self.hidden_layers + [input.shape[1]]
@@ -293,7 +298,7 @@ class GNODE(nn.Module):
                                  deterministic=not self.training)
             model = jax.vmap(NeuralODE(derivative_net), in_axes=(0,None))
             time = globals_[0]
-            integration_times = jnp.array([time, time + self.ode_horizon]).squeeze() * self.dt
+            integration_times = jnp.array([time, time + self.horizon]).squeeze() * self.dt
             # jax.debug.print('integration times {}', integration_times)
             output = model(input, integration_times)
             return nn.Dense(self.latent_size)(output[:,-1]) # -1 because only use ode solution at last ts
@@ -307,7 +312,7 @@ class GNODE(nn.Module):
                                  deterministic=not self.training)
             model = jax.vmap(NeuralODE(derivative_net), in_axes=(0,None))
             time = globals_[0]
-            integration_times = jnp.array([time, time + self.ode_horizon]).squeeze() * self.dt
+            integration_times = jnp.array([time, time + self.horizon]).squeeze() * self.dt
             output = model(input, integration_times)
             return nn.Dense(self.latent_size)(output[:,-1]) # -1 because only use ode solution at last ts
             
@@ -315,7 +320,7 @@ class GNODE(nn.Module):
             del nodes, edges
             time = globals_[0]
             static_params = globals_[1:]
-            globals_ = jnp.concatenate((jnp.array([time + self.ode_horizon]), static_params))
+            globals_ = jnp.concatenate((jnp.array([time + self.horizon]), static_params))
             return globals_ 
 
        # Encoder

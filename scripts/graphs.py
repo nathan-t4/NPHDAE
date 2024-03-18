@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 import utils.graph_utils as graph_utils
 
-def generate_graph_batch(data, traj_idx, t0s, horizon, mode='acceleration',
+def generate_graph_batch(data, traj_idx, t0s, vel_history, mode='acceleration',
                          add_undirected_edges = False, add_self_loops = False, 
                          render=False):
     graphs = []
@@ -18,7 +18,7 @@ def generate_graph_batch(data, traj_idx, t0s, horizon, mode='acceleration',
         graphs.append(build_graph_from_data(data=data, 
                                             traj_idx=idx,
                                             t=t0,
-                                            horizon=horizon,
+                                            vel_history=vel_history,
                                             mode=mode))
 
     for i in range(len(graphs)):
@@ -30,42 +30,38 @@ def generate_graph_batch(data, traj_idx, t0s, horizon, mode='acceleration',
 
     return graphs
 
-def build_graph_from_data(data, traj_idx, t, horizon, mode='acceleration') -> jraph.GraphsTuple:
-    mass = jnp.array([100, 1, 1])
-    qs = jnp.array(data[traj_idx, t, 0:3]).squeeze()
-    dqs = jnp.array(data[traj_idx, t, 3:5]).squeeze()
-    # ps = jnp.array(data[t, 5:8]).squeeze()
-    # vs = ps / mass
-    n_node = jnp.array([3])       # num nodes
-    n_edge = jnp.array([2])       # num edges
-
+def build_graph_from_data(data, traj_idx, t, vel_history, mode='acceleration') -> jraph.GraphsTuple:
+    mass = jnp.array([1, 1])
+    qs = jnp.array(data[traj_idx, t, 0:2]).squeeze()
+    dqs = jnp.a
+    n_node = jnp.array([2])       # num nodes
+    n_edge = jnp.array([1])       # num edges
     
     if mode == 'acceleration':
         # Following embeddings from "Learning to Simulate Complex Physics with Graph Networks"
         # Add previous velocity histories
-        # assert t >= horizon [!]
+        # assert t >= vel_history [!]
         vs_history = []
-        [vs_history.append((data[traj_idx, t-k, 5:8]).squeeze() / mass) for k in reversed(range(horizon))]
+        [vs_history.append((data[traj_idx, t-k, 3:5]).squeeze() / mass) for k in reversed(range(vel_history))]
         vs_history = jnp.asarray(vs_history).T
-        nodes = jnp.column_stack((qs, vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]
+        nodes = jnp.column_stack((qs, vs_history)) # [q, v^{t-vel_history+1}, v_{t-vel_history+2}, ..., v_t]
         edges = dqs.reshape((-1,1))   # n_edge * num_features
     elif mode == 'position':
         qs_history = []
-        [qs_history.append(data[traj_idx, t-k-1, 0:3]) for k in reversed(range(horizon))]
+        [qs_history.append(data[traj_idx, t-k-1, 0:2]) for k in reversed(range(vel_history))]
         nodes = jnp.column_stack((qs, qs_history))
         edges = dqs.reshape((-1,1))
     else:
         raise RuntimeError('Invalid mode for build_graph_from_data')
     
-    senders = jnp.array([0,1])
-    receivers = jnp.array([1,2])
+    senders = jnp.array([0])
+    receivers = jnp.array([1])
 
     # global context, shape = (n_global_feats, 1) 
-    q0 = jnp.array(data[traj_idx, 0, 0:3]).squeeze()
-    v0 = jnp.array(data[traj_idx, 0, 5:8]).squeeze() / mass
+    q0 = jnp.array(data[traj_idx, 0, 0:2]).squeeze()
+    v0 = jnp.array(data[traj_idx, 0, 3:5]).squeeze() / mass
     global_context = jnp.concatenate((jnp.array([t]), q0, v0)).reshape(-1,1)
     
-
     graph = jraph.GraphsTuple(
         nodes=nodes,
         edges=edges,
@@ -80,7 +76,7 @@ def build_graph_from_data(data, traj_idx, t, horizon, mode='acceleration') -> jr
 
 def build_graph(dataset_path: str, 
                 key, # PRNGKey
-                horizon: int = 1,
+                vel_history: int = 1,
                 batch_size: int = 1,
                 add_undirected_edges: bool = False,
                 add_self_loops: bool = False,
@@ -91,7 +87,7 @@ def build_graph(dataset_path: str,
 
         :param path: path to dataset
         :param key: jax PRNG key
-        :param horizon: number of previous velocities to include in node features
+        :param vel_history: number of previous velocities to include in node features
         :param dataset_type: sample from training or validation dataset
         :param batch_size: num of graphs to return
         :param add_undirected_edges: Add undirected edges to graph
@@ -113,7 +109,7 @@ def build_graph(dataset_path: str,
     for i in range(batch_size):
         graphs.append(build_double_spring_mass_graph(data=data,
                                                      t=rnd_times[i], 
-                                                     horizon=horizon,
+                                                     vel_history=vel_history,
                                                      traj_idx=rnd_traj_idx[i]))
 
     if add_undirected_edges:
@@ -132,7 +128,7 @@ def build_graph(dataset_path: str,
 
 def build_double_spring_mass_graph(data, 
                                    t: int = 0, 
-                                   horizon: int = 1,
+                                   vel_history: int = 1,
                                    traj_idx: int = 0) -> jraph.GraphsTuple:
     """
         TODO: deprecate?
@@ -180,7 +176,7 @@ def build_double_spring_mass_graph(data,
     # Add previous velocity histories
     vs_history = []
     counter = 0
-    for k in reversed(range(horizon)):
+    for k in reversed(range(vel_history)):
         if t - k < 0:
             counter += 1
         elif counter > 0:
@@ -189,7 +185,7 @@ def build_double_spring_mass_graph(data,
         else:
             vs_history.append(vs[t-k])
     vs_history = jnp.asarray(vs_history).reshape(-1, n_node.item()).T    
-    nodes = jnp.column_stack((qs[t], vs_history)) # [q, v^{t-horizon+1}, v_{t-horizon+2}, ..., v_t]
+    nodes = jnp.column_stack((qs[t], vs_history)) # [q, v^{t-vel_history+1}, v_{t-vel_history+2}, ..., v_t]
     edges = dqs[t].reshape((n_edge.item(), -1))    
     senders = jnp.array([0,1])
     receivers = jnp.array([1,2])
