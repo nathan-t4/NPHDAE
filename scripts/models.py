@@ -73,7 +73,7 @@ class GraphNet(nn.Module):
     """ 
         EncodeProcessDecode GN 
     """
-    normalization_stats: FrozenConfigDict
+    norm_stats: FrozenConfigDict
 
     num_mp_steps: int = 1
     layer_norm: bool = False
@@ -86,7 +86,7 @@ class GraphNet(nn.Module):
     edge_output_size: int = 1
     node_output_size: int = 1
     prediction: str = 'acceleration'
-    integration_method: str = 'semi_implicit_euler'
+    integration_method: str = 'SemiImplicitEuler'
     
     # MLP parameters
     latent_size: int = 16
@@ -98,12 +98,12 @@ class GraphNet(nn.Module):
     add_self_loops: bool = False
     add_undirected_edges: bool = False
 
-    dt: float = num_mp_steps * 0.01
+    dt: float = 0.01
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple, rng) -> jraph.GraphsTuple:
         if self.training: 
-            # TODO: Try with noise
+            # TODO: add noise to all node features (self.noise_std for all?)
             rng, noise_rng = jax.random.split(rng)
             new_nodes = jnp.column_stack((graph.nodes[:,0].T + self.noise_std * jax.random.normal(noise_rng, (len(graph.nodes),)), graph.nodes[:,1:]))
             graph = graph._replace(nodes=new_nodes)
@@ -138,7 +138,7 @@ class GraphNet(nn.Module):
             del nodes, edges
             time = globals_[0]
             static_params = globals_[1:]
-            globals_ = jnp.concatenate((jnp.array([time + 1]), static_params))
+            globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
             return globals_ 
         
         # Encoder
@@ -165,6 +165,13 @@ class GraphNet(nn.Module):
             )
             processor_nets.append(net)
 
+        # def create_graph_net(carry, x):
+        #     return None, jraph.GraphNetwork(update_node_fn=update_node_fn,
+        #                                     update_edge_fn=update_edge_fn,
+        #                                     update_global_fn=update_global_fn)
+        
+        # _, processor_nets = jax.lax.scan(create_graph_net, None, None, num_nets)
+
         # Decoder
         decoder = jraph.GraphMapFeatures(
             embed_node_fn=MLP(
@@ -178,63 +185,83 @@ class GraphNet(nn.Module):
         def decoder_postprocessor(graph: jraph.GraphsTuple):
             next_nodes = None
             next_edges = None
-            # TODO: use diffrax solvers?
-            if self.prediction == 'acceleration':
-                # Use predicted acceleration to update node features using semi-implicit Euler integration
-                if self.integration_method == 'semi_implicit_euler':
-                    if self.layer_norm:
-                        normalized_acc = graph.nodes.reshape(-1)
-                        pred_acc = normalized_acc * self.normalization_stats.acceleration.std + self.normalization_stats.acceleration.mean
-                    else:
-                        pred_acc = graph.nodes.reshape(-1)
-                    next_vel = cur_vel + pred_acc * self.dt
-                    next_pos = cur_pos + next_vel * self.dt
-                    next_nodes = jnp.column_stack((next_pos, prev_vel[:,1:], next_vel, pred_acc))
-                    next_edges = jnp.diff(next_pos).reshape(-1,1)
-                    
-                elif self.integration_method == 'verlet':
-                    # TODO: test - need to change node features for this
-                    normalized_acc = graph.nodes.reshape(-1)
-                    next_pos = 2 * cur_pos - prev_pos + pred_acc * self.dt**2
-                    pred_acc = normalized_acc * self.normalization_stats.acceleration.std + self.normalization_stats.acceleration.mean
-                    next_nodes = jnp.column_stack([next_pos, cur_pos, pred_acc])
-                    next_edges = jnp.diff(next_pos).reshape(-1,1)
-
-                else:
-                    raise RuntimeError('Invalid acceleration decoder postprocessor')
+            # if self.prediction == 'acceleration':
+            def force(t, args):
+                del t, args
+                normalized_acc = graph.nodes
+                pred_acc = normalized_acc * self.norm_stats.acceleration.std + self.norm_stats.acceleration.mean
+                return pred_acc
             
-            elif self.prediction == 'position':
-                if self.layer_norm:
-                    normalized_pos = graph.nodes.reshape(-1)
-                    pred_pos = normalized_pos * self.normalization_stats.position.std + self.normalization_stats.position.mean
-                else:
-                    pred_pos = graph.nodes.reshape(-1)
-
-                next_vel = (pred_pos - cur_pos) / self.dt
-
-                next_nodes = jnp.column_stack((pred_pos, prev_pos[:,1:], cur_pos))
-                next_edges = jnp.diff(pred_pos).reshape(-1, 1)
+            def newtons_equation_of_motion(t, y, args):
+                # return jnp.array([[0, 1], [0, 0]]) @ y + jnp.array([[0],[force(t, args)]])
+                A = jnp.array([[0, 0, 1, 0], 
+                                [0, 0, 0, 1], 
+                                [0, 0, 0, 0], 
+                                [0, 0, 0, 0]])
+                F = jnp.concatenate((jnp.array([[0], [0]]), force(t, args)))
+                return A @ y + F
+            
+            @jax.jit
+            def solve(y0, args):
+                t0 = 0
+                t1 = self.num_mp_steps * self.dt
+                dt0 = self.dt
+                match self.integration_method:
+                    case 'Euler':
+                        term = diffrax.ODETerm(newtons_equation_of_motion)
+                        solver = diffrax.Euler()
+                        sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
+                        next_pos = sol.ys[-1, 0:2]
+                        next_vel = sol.ys[-1, 2:4]
+                    case 'Tsit5':
+                        term = diffrax.ODETerm(newtons_equation_of_motion)
+                        solver = diffrax.Tsit5()
+                        sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
+                        next_pos = sol.ys[-1, 0:2]
+                        next_vel = sol.ys[-1, 2:4]
+                    case 'SemiImplicitEuler':
+                        pred_acc = force(t0, args).squeeze()
+                        next_vel = cur_vel + pred_acc * (dt0 * self.num_mp_steps)
+                        next_pos = cur_pos + next_vel * (dt0 * self.num_mp_steps)
+                    case _:
+                        raise NotImplementedError('Invalid integration method')    
+                return next_pos, next_vel
+            
+            y0 = jnp.concatenate((cur_pos, cur_vel), axis=0).reshape(-1, 1)
+            args = None
+            next_pos, next_vel = solve(y0, args)  
+            next_nodes = jnp.column_stack((next_pos, prev_vel[:,1:], next_vel, force(None, args))) # TODO: pass time into force?
+            next_edges = jnp.diff(next_pos.squeeze()).reshape(-1,1)
+            # else:
+            #     raise NotImplementedError('Invalid prediction mode')
             
             if self.add_undirected_edges:
                 next_edges = jnp.concatenate((next_edges, next_edges), axis=0)
             
             if self.add_self_loops:
-                next_edges = jnp.concatenate((next_edges, jnp.zeros((3, 1))), axis=0)
+                next_edges = jnp.concatenate((next_edges, jnp.zeros((2, 1))), axis=0)
             
-            graph = graph._replace(nodes=next_nodes)            
+            if self.use_edge_model:
+                graph = graph._replace(nodes=next_nodes, edges=next_edges)
+            else:
+                graph = graph._replace(nodes=next_nodes)   
+            # graph = graph._replace(nodes=next_nodes)
             return graph
 
         # Encode features to latent space
         processed_graph = encoder(graph)
         prev_graph = processed_graph
         # Message passing
-        for i in range(self.num_mp_steps): 
+        for i in range(num_nets): 
             processed_graph = processor_nets[i](processed_graph)
             processed_graph = processed_graph._replace(nodes=processed_graph.nodes + prev_graph.nodes,
                                                        edges=processed_graph.edges + prev_graph.edges)
             prev_graph = processed_graph
-        # def mp_step(carry, net):
-        #     return net(carry), _
+        # def mp_step(graph, net):
+        #     next_graph = net(graph)
+        #     next_graph = next_graph._replace(nodes=next_graph.nodes + graph.nodes,
+        #                                      edges=next_graph.edges + graph.edges)
+        #     return next_graph, _
         # processed_graph, _ = jax.lax.scan(mp_step, processed_graph, processor_nets)
         # Decode latent space features back to node features
         processed_graph = decoder(processed_graph)
@@ -257,7 +284,7 @@ class GNODE(nn.Module):
         - inherit GraphNet?       
         - explicitly add horizon for neural ODE (integration time) 
     """
-    normalization_stats: FrozenConfigDict
+    norm_stats: FrozenConfigDict
 
     num_mp_steps: int = 1
     layer_norm: bool = False
@@ -363,7 +390,7 @@ class GNODE(nn.Module):
             if self.integration_method == 'semi_implicit_euler':
                 if self.layer_norm:
                     normalized_acc = graph.nodes.reshape(-1)
-                    pred_acc = normalized_acc * self.normalization_stats.acceleration.std + self.normalization_stats.acceleration.mean
+                    pred_acc = normalized_acc * self.norm_stats.acceleration.std + self.norm_stats.acceleration.mean
                 else:
                     pred_acc = graph.nodes.reshape(-1)
                 next_vel = cur_vel + pred_acc * self.dt

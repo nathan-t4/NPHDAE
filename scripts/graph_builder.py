@@ -118,8 +118,8 @@ class DMSDGraphBuilder(GraphBuilder):
                 nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history))
                 # Edge features are relative positions
                 edges = self._dqs[traj_idx, t].reshape((-1,1))
-                # Global features are time, q0, v0
-                global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0])).reshape(-1,1)
+                # Global features are time, q0, v0, a0
+                global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
             case 'position':
                 raise NotImplementedError
             
@@ -170,3 +170,8 @@ class DMSDGraphBuilder(GraphBuilder):
         obj._dt                     = aux_data[13]
         obj._setup_graph_params()
         return obj
+    
+# @register_pytree_node_class
+class PowerNetworkGraphBuilder(GraphBuilder):
+    def __init__(self, path, add_undirected_edges, add_self_loops):
+        super().__init__(path, add_undirected_edges, add_self_loops)

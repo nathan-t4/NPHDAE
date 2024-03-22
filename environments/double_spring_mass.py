@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 
 from environments.environment import Environment
+from environments.utils import merge_datasets
 
 ###### Code to generate a dataset of double-pendulum trajectories ######
 
@@ -343,14 +344,17 @@ def generate_dataset(args, env_seed: int = 501):
         'nonlinear_spring': False,
     }
 
-    x0_init_lb = jnp.array([0, -.5, -0.5, -.5])
-    x0_init_ub = jnp.array([0.5, .5, 1, .5])
+    x0_init_lb = jnp.array([-.05, -.05, -.05, -.05])
+    x0_init_ub = jnp.array([.0, .0, .0, .0])
+    # x0_init_ub = x0_init_lb
 
 
     val_params = {}
     for k,v in params.items():
         if isinstance(v, float) and k != 'dt':
-            val_params[k] = v * rng.random()
+            val_params[k] = v + 0.1 * rng.uniform(-1, 1)
+        # if k == 'm1' or k == 'm2':
+        #     val_params[k] = v + 0.1 * rng.uniform(-1, 1)
         else:
             val_params[k] = v
 
@@ -358,23 +362,57 @@ def generate_dataset(args, env_seed: int = 501):
     if args.type == 'training':
         env = DoubleMassSpring(**params, random_seed=501)
         env.set_control_policy(control_policy)    
-        dataset = env.gen_dataset(trajectory_num_steps=1500, 
-                                  num_trajectories=200, # 200 training, 100 testing
-                                  x0_init_lb=x0_init_lb,
-                                  x0_init_ub=x0_init_ub,
-                                  save_str=save_dir)
+        dataset = None
+        for _ in range(50):
+            env.m1 = rng.uniform(0.98, 1.02)
+            env.m2 = rng.uniform(0.98, 1.02)
+            env.k1 = rng.uniform(1.18, 1.22)
+            env.k2 = rng.uniform(1.48, 1.52)
+            env.b1 = rng.uniform(1.68, 1.72)
+            env.b2 = rng.uniform(1.48, 1.52)
+            
+            new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
+                                          num_trajectories=10,
+                                          x0_init_lb=x0_init_lb,
+                                          x0_init_ub=x0_init_ub)
+            if dataset is not None:
+                dataset = merge_datasets(dataset, new_dataset)
+            else:
+                dataset = new_dataset
+
+        assert os.path.isdir(save_dir)
+        save_path = os.path.join(os.path.abspath(save_dir),  
+            datetime.now().strftime(f'train_{500}_%H-%M-%S.pkl'))
+        with open(save_path, 'wb') as f:
+            pickle.dump(dataset, f)
+
     elif args.type == 'validation': 
+        num_val_trajectories = 20
+
         env = DoubleMassSpring(**val_params, random_seed=501)
         env.set_control_policy(control_policy)
 
-        x0_init_lb = rng.random() * x0_init_lb
-        x0_init_ub = rng.random() * x0_init_ub
+        # x0_init_lb = (rng.random()) * x0_init_lb
+        # x0_init_ub = (rng.random()) * x0_init_ub
+        dataset = None
+        for _ in range(10):
+            env.m1 = rng.uniform(1.05, 1.08)
+            env.m2 = rng.uniform(1.05, 1.08)
+            print(f'masses {env.m1}, {env.m2}')
+            new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
+                                          num_trajectories=num_val_trajectories // 10,
+                                          x0_init_lb=x0_init_lb,
+                                          x0_init_ub=x0_init_ub)
+            if dataset is not None:
+                dataset = merge_datasets(dataset, new_dataset)
+            else:
+                dataset = new_dataset
 
-        dataset = env.gen_dataset(trajectory_num_steps=1500, 
-                                  num_trajectories=20, # 500 training, 100 testing
-                                  x0_init_lb=x0_init_lb,
-                                  x0_init_ub=x0_init_ub,
-                                  save_str=save_dir)
+        assert os.path.isdir(save_dir)
+        save_path = os.path.join(os.path.abspath(save_dir),  
+            datetime.now().strftime(f'val_{num_val_trajectories}_%H-%M-%S.pkl'))
+        with open(save_path, 'wb') as f:
+            pickle.dump(dataset, f)
     else:
         raise NotImplementedError
 

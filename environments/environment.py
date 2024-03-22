@@ -299,7 +299,7 @@ class Environment(object):
                                                             im_shape=im_shape, 
                                                             grayscale=grayscale)
                 dataset['pixel_trajectories'].append(pixel_trajectory)
-                    
+        
         if save_str is not None:
             assert os.path.isdir(save_str)
             save_path = os.path.join(os.path.abspath(save_str),  

@@ -24,17 +24,13 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/double_mass_spring_data/no_control_train_0.05_500.pkl',
-        'evaluation_data_path': 'results/double_mass_spring_data/no_control_train_0.05_100.pkl',
-    })
-    config.optimizer_params = ml_collections.ConfigDict({
-        'learning_rate': optax.exponential_decay(init_value=10e-3, transition_steps=200, decay_rate=0.1, end_value=10e-6),
-        # 'learning_rate': 1e-3,
+        'training_data_path': 'results/double_mass_spring_data/train_500_random_params.pkl',
+        'evaluation_data_path': 'results/double_mass_spring_data/val_20_random_masses.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GraphNet',
-        'num_epochs': int(1e3),
-        'batch_size': 1,
+        'num_epochs': int(3e2),
+        'batch_size': 2,
         'rollout_timesteps': 1500,
         'log_every_steps': 1,
         'eval_every_steps': 10,
@@ -44,12 +40,17 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
         'add_self_loops': True,
         'train_multi_trajectories': True,
     })
+    config.optimizer_params = ml_collections.ConfigDict({
+        # 'learning_rate': optax.exponential_decay(init_value=1e-3, transition_steps=5e2, decay_rate=0.1, end_value=1e-5),
+        # 'learning_rate': optax.cosine_decay_schedule(init_value=1e-3, decay_steps=500, alpha=1e-5)
+        'learning_rate': 1e-3,
+    })
     config.net_params = ml_collections.ConfigDict({
         'prediction': 'acceleration',
-        'integration_method': 'semi_implicit_euler', 
+        'integration_method': 'SemiImplicitEuler', 
         # 'horizon': 5, # for gnode only
         'vel_history': 5,
-        'num_mp_steps': 1, # too large causes oversmoothing
+        'num_mp_steps': 1, # too big causes oversmoothing
         'noise_std': 0.0003,
         'latent_size': 16,
         'hidden_layers': 2,
@@ -78,7 +79,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
                 raise RuntimeError('Invalid net name')
     
     if paths.dir == None:
-        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/multi_500_noise_0.0003_16_16_vel_history_5_batch_1_{strftime("%H%M%S")}')
+        work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/test_generalization_masses_{strftime("%H%M%S")}')
     else:
         work_dir = paths.dir
             
@@ -104,7 +105,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
                                net_params.prediction, 
                                net_params.vel_history)
     
-    net_params.normalization_stats = train_gb._norm_stats
+    net_params.norm_stats = train_gb._norm_stats
     net = create_net()
     init_graph = train_gb.get_graph(traj_idx=0, t=net_params.vel_history+1)
     params = net.init(init_rng, init_graph, net_rng)
@@ -122,7 +123,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
     def train_epoch(state: TrainState, batch_size: int, rng: jax.Array):
         ''' Train one epoch using all trajectories '''     
         traj_perms = random_batch(batch_size, 0, train_gb._data.shape[0], rng)
-        t0_perms = random_batch(batch_size, net_params.vel_history+1, train_gb._data.shape[1]-time_offset, rng)
+        t0_perms = random_batch(batch_size, net_params.vel_history, train_gb._data.shape[1]-time_offset, rng)
         dropout_rng = jax.random.split(rng, batch_size)
         rng, net_rng = jax.random.split(rng)
 
@@ -145,7 +146,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
             state = state.apply_gradients(grads=grads)
             return state, loss
         
-        state, epoch_loss = double_scan(train_batch, state, traj_perms, t0_perms)
+        state, epoch_loss = double_scan(train_batch, state, traj_perms, t0_perms) # TODO: switch order
 
         train_loss = jnp.asarray(epoch_loss).mean()
 
@@ -182,10 +183,11 @@ def test_graph_network(config: ml_collections.ConfigDict):
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
     def rollout(eval_state: TrainState, traj_idx: int = 0, t0: int = 0):
-        t0 = max(t0, net_params.vel_history + 1)
-        tf_idxs = jnp.arange(t0, t0+training_params.rollout_timesteps) + time_offset # because pred_qs starts at t0+1
-        tf_idxs = jnp.unique(tf_idxs.clip(max=1501))
+        tf_idxs = (t0 + jnp.arange(training_params.rollout_timesteps // net.num_mp_steps)) * net.num_mp_steps
+        t0 = round(net.vel_history /  net.num_mp_steps) * net.num_mp_steps
+        tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + net.num_mp_steps, max=1501))
         ts = tf_idxs * net.dt
+
         exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
         exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
         graphs = eval_gb.get_graph(traj_idx, t0)
@@ -213,8 +215,10 @@ def test_graph_network(config: ml_collections.ConfigDict):
         if not os.path.isdir(plot_dir):
             os.makedirs(plot_dir)
         if net_params.prediction == 'acceleration':
+            q0 = np.round(exp_data[0,0], 3)
+            a0 = np.round(exp_data[1,0], 3)
             fig, (ax1, ax2) = plt.subplots(2,1)
-            fig.suptitle(f'{prefix}: Eval Error \n q0 = {np.round(exp_data[0,0], 3)}, a0 = {np.round(exp_data[1,0], 3)}')
+            fig.suptitle(f'{prefix}: Eval Error \n q0 = {q0}, a0 = {a0}')
 
             ax1.set_title('Position')
             ax1.plot(ts, exp_data[0] - pred_data[0], label=[f'Mass {i}' for i in range(2)])
@@ -234,7 +238,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
 
             for i in range(2):
                 fig, (ax1, ax2) = plt.subplots(2,1)
-                fig.suptitle(f'{prefix}: Mass {i}')
+                fig.suptitle(f'{prefix}: Mass {i} \n q0 = {q0[i]}, a0 = {a0[i]}')
                 ax1.set_title(f'Position')
                 ax1.plot(ts, pred_data[0,:,i], label='predicted')
                 ax1.plot(ts, exp_data[0,:,i], label='expected')
@@ -254,32 +258,32 @@ def test_graph_network(config: ml_collections.ConfigDict):
                 if show: plt.show()
                 plt.close()
         
-        elif net_params.prediction == 'position':
-            fig, ax1 = plt.subplots(1)
+        # elif net_params.prediction == 'position':
+        #     fig, ax1 = plt.subplots(1)
 
-            ax1.set_title('Position')
-            ax1.plot(ts, exp_data - pred_data, label=[f'Mass {i}' for i in range(2)])
-            ax1.set_xlabel('Time [$s$]')
-            ax1.set_ylabel(r'Position error [$\mu m$]')
-            ax1.legend()
-            plt.tight_layout()
-            fig.savefig(os.path.join(plot_dir, f'{prefix}_error.png'))
-            plt.show() if show else plt.close()
+        #     ax1.set_title('Position')
+        #     ax1.plot(ts, exp_data - pred_data, label=[f'Mass {i}' for i in range(2)])
+        #     ax1.set_xlabel('Time [$s$]')
+        #     ax1.set_ylabel(r'Position error [$\mu m$]')
+        #     ax1.legend()
+        #     plt.tight_layout()
+        #     fig.savefig(os.path.join(plot_dir, f'{prefix}_error.png'))
+        #     plt.show() if show else plt.close()
 
-            for i in range(2):
-                fig, ax1 = plt.subplots(1)
-                fig.suptitle(f'{prefix}: Mass {i}')
-                ax1.set_title(f'Position')
-                ax1.plot(ts, pred_data[:,i], label='predicted')
-                ax1.plot(ts, exp_data[:,i], label='expected')
-                ax1.set_xlabel('Time [$s$]')
-                ax1.set_ylabel(r'Position [$\mu m$]')
-                ax1.legend()
+        #     for i in range(2):
+        #         fig, ax1 = plt.subplots(1)
+        #         fig.suptitle(f'{prefix}: Mass {i}')
+        #         ax1.set_title(f'Position')
+        #         ax1.plot(ts, pred_data[:,i], label='predicted')
+        #         ax1.plot(ts, exp_data[:,i], label='expected')
+        #         ax1.set_xlabel('Time [$s$]')
+        #         ax1.set_ylabel(r'Position [$\mu m$]')
+        #         ax1.legend()
 
-                plt.tight_layout()
-                plt.savefig(os.path.join(plot_dir, f'{prefix}_mass{i}.png'))
-                if show: plt.show()
-                plt.close()
+        #         plt.tight_layout()
+        #         plt.savefig(os.path.join(plot_dir, f'{prefix}_mass{i}.png'))
+        #         if show: plt.show()
+        #         plt.close()
         plt.close()
 
     state = TrainState.create(
@@ -291,7 +295,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
     # Create evaluation network
     eval_net = create_net()
     eval_net.training = False
-    eval_net.normalization_stats = eval_gb._norm_stats
+    eval_net.norm_stats = eval_gb._norm_stats
     if training_params.net_name == 'GNODE': eval_net.horizon = 1 
     eval_state = state.replace(apply_fn=eval_net.apply)
 
@@ -342,7 +346,7 @@ def test_graph_network(config: ml_collections.ConfigDict):
                 rng, eval_rng = jax.random.split(rng)
                 rng_idx = jax.random.randint(eval_rng, [1], minval=0, maxval=len(eval_gb._data)-1).item()
                 if not training_params.train_multi_trajectories: rng_idx = 0
-                ts, pred_data, exp_data, eval_metrics = rollout(state, rng_idx)
+                ts, pred_data, exp_data, eval_metrics = rollout(state, traj_idx=rng_idx)
                 writer.write_scalars(epoch, add_prefix_to_keys(eval_metrics.compute(), 'eval'))
                 # TODO: evaluate multiple times!
                 plot(ts, pred_data, exp_data, prefix=f'Epoch {epoch}')
