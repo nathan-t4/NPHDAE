@@ -61,7 +61,7 @@ class DMSDGraphBuilder(GraphBuilder):
         config = data['config']
         self._dt = config['dt']
         # Masses
-        self._m = jnp.array([config['m1'], config['m2']])
+        self._m = jnp.array([config['m1'], config['m2']]).T
         # Absolute position
         self._qs = jnp.stack((state[:,:,0],  # q1
                         state[:,:,2]), # q2
@@ -73,7 +73,7 @@ class DMSDGraphBuilder(GraphBuilder):
                         state[:,:,3]), # p2
                         axis=-1)
         # Velocities
-        self._vs = self._ps / self._m
+        self._vs = self._ps / jnp.expand_dims(self._m, 1)  # reshape m to fit shape of velocity
         # Accelerations
         self._accs = jnp.diff(self._vs, axis=1) / self._dt
         final_acc = jnp.expand_dims(self._accs[:,-1,:], axis=1) # duplicate final acceleration
@@ -112,7 +112,7 @@ class DMSDGraphBuilder(GraphBuilder):
         match self._mode:
             case 'acceleration':
                 vs_history = []                
-                [vs_history.append(self._vs[traj_idx, t-k]) for k in reversed(range(self._vel_history))]
+                [vs_history.append(self._ps[traj_idx, t-k]) for k in reversed(range(self._vel_history))]
                 vs_history = jnp.asarray(vs_history).T
                 # Node features are current position, velocity history, current velocity
                 nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history))
@@ -175,3 +175,26 @@ class DMSDGraphBuilder(GraphBuilder):
 class PowerNetworkGraphBuilder(GraphBuilder):
     def __init__(self, path, add_undirected_edges, add_self_loops):
         super().__init__(path, add_undirected_edges, add_self_loops)
+
+    def _load_data(self, path):
+        return super()._load_data(path)
+    
+    def _get_norm_stats(self):
+        return super()._get_norm_stats()
+    
+    def _setup_graph_params():
+        pass
+    
+    def get_graph(self, **kwargs) -> jraph.GraphsTuple:
+        return super().get_graph(**kwargs)
+    
+    def get_graph_batch(self, **kwargs) -> Sequence[jraph.GraphsTuple]:
+        return super().get_graph_batch(**kwargs)
+    
+    def tree_flatten():
+        pass
+    
+    @classmethod
+    def tree_unflatten():
+        pass
+    

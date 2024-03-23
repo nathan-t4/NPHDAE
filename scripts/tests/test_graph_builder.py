@@ -5,16 +5,8 @@ import matplotlib.patches as mpatches
 from argparse import ArgumentParser
 from scripts.graph_builder import DMSDGraphBuilder
 
-if __name__ == '__main__':
-    parser = ArgumentParser()
-    parser.add_argument('--path', type=str, required=True)
-    parser.add_argument('--eval_path', type=str, required=True)
-    args = parser.parse_args()
-
+def plot_trajs(args):
     gb = DMSDGraphBuilder(args.path, True, True, 'acceleration', 5)
-    # graphs = gb.get_graph_batch(jnp.array([0,0]), jnp.array([6,7]))
-    # print(gb._data.shape)
-    # print(graphs)
     eval_gb = DMSDGraphBuilder(args.eval_path, True, True, 'acceleration', 5)
 
     traj = gb._qs[0]
@@ -36,3 +28,17 @@ if __name__ == '__main__':
     plt.legend(handles=[red_patch, blue_patch])
     plt.tight_layout()
     plt.show()
+
+if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument('--path', type=str)
+    parser.add_argument('--eval_path', type=str)
+    args = parser.parse_args()
+
+    # gb = DMSDGraphBuilder(args.path, True, True, 'acceleration', 5)
+    # graphs = gb.get_graph_batch(jnp.array([0,0]), jnp.array([6,7]))
+    # print(gb._data.shape)
+    # print(graphs)
+
+    plot_trajs(args)
+    

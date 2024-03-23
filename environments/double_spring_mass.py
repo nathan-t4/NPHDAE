@@ -106,6 +106,20 @@ class DoubleMassSpring(Environment):
             'name' : name,
         }
 
+    def update_config(self):
+        self.config['dt'] = self.config['dt']
+        self.config['m1'] = self.m1
+        self.config['k1'] = self.k1
+        self.config['y1'] = self.y1
+        self.config['b1'] = self.b1
+        self.config['m2'] = self.m2
+        self.config['k2'] = self.k2
+        self.config['y2'] = self.y2
+        self.config['b2'] = self.b2
+        self.config['state_measure_spring_elongation'] = self.state_measure_spring_elongation
+        self.config['nonlinear_damping'] = self.nonlinear_damping
+        self.config['nonlinear_spring'] = self.nonlinear_spring
+
     def _define_dynamics(self):
 
         def PE(state):
@@ -360,19 +374,25 @@ def generate_dataset(args, env_seed: int = 501):
 
     env = None
     if args.type == 'training':
+        num_train_trajs = 500
+        bins = 500
         env = DoubleMassSpring(**params, random_seed=501)
         env.set_control_policy(control_policy)    
         dataset = None
-        for _ in range(50):
-            env.m1 = rng.uniform(0.98, 1.02)
-            env.m2 = rng.uniform(0.98, 1.02)
-            env.k1 = rng.uniform(1.18, 1.22)
-            env.k2 = rng.uniform(1.48, 1.52)
-            env.b1 = rng.uniform(1.68, 1.72)
-            env.b2 = rng.uniform(1.48, 1.52)
+        for _ in range(bins):
+            rng_param = lambda mean, scale : rng.uniform(mean - scale, mean + scale)
+            scales = (0.1, 0.1, 0.1)
+            env.m1 = rng_param(1, scales[0])
+            env.m2 = rng_param(1, scales[0])
+            env.k1 = rng_param(1.2, scales[1])
+            env.k2 = rng_param(1.5, scales[1])
+            env.b1 = rng_param(1.7, scales[2])
+            env.b2 = rng_param(1.5, scales[2])
+
+            env.update_config()
             
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
-                                          num_trajectories=10,
+                                          num_trajectories=num_train_trajs//bins,
                                           x0_init_lb=x0_init_lb,
                                           x0_init_ub=x0_init_ub)
             if dataset is not None:
@@ -382,7 +402,7 @@ def generate_dataset(args, env_seed: int = 501):
 
         assert os.path.isdir(save_dir)
         save_path = os.path.join(os.path.abspath(save_dir),  
-            datetime.now().strftime(f'train_{500}_%H-%M-%S.pkl'))
+            datetime.now().strftime(f'train_{num_train_trajs}_%H-%M-%S.pkl'))
         with open(save_path, 'wb') as f:
             pickle.dump(dataset, f)
 
@@ -396,9 +416,14 @@ def generate_dataset(args, env_seed: int = 501):
         # x0_init_ub = (rng.random()) * x0_init_ub
         dataset = None
         for _ in range(10):
-            env.m1 = rng.uniform(1.05, 1.08)
-            env.m2 = rng.uniform(1.05, 1.08)
-            print(f'masses {env.m1}, {env.m2}')
+            env.m1 = rng.uniform(1.2, 1.3)
+            env.m2 = rng.uniform(1.2, 1.3)
+            # env.k1 = rng.uniform(1.3, 1.35)
+            # env.k2 = rng.uniform(1.6, 1.65)
+            # env.b1 = rng.uniform(1.8, 1.85)
+            # env.b2 = rng.uniform(1.6, 1.65)
+            env.update_config()
+
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                           num_trajectories=num_val_trajectories // 10,
                                           x0_init_lb=x0_init_lb,

@@ -256,6 +256,9 @@ class Environment(object):
 
         # Save the size of the timestep used to simulate the data.
         dataset['config'] = self.config.copy()
+        for k, v in dataset['config'].items():
+            if k != 'dt': dataset['config'][k] = [v] * num_trajectories
+
         dataset['pixel_trajectories'] = []
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
