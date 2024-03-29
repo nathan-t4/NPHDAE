@@ -1,7 +1,7 @@
 [project]
-name = "invariant_gnode"
+name = "gnode"
 version = "0.0.1"
-description = "Invariant_GNODE"
+description = "GNODE"
 readme = "README.md"
 # license = {file = "LICENSE.txt"}
 requires-python=">=3.11"

@@ -11,6 +11,7 @@ from jax.experimental.ode import odeint
 import pickle
 import os
 from functools import partial
+from copy import deepcopy
 
 import jax
 import jax.numpy as jnp
@@ -326,10 +327,19 @@ def generate_dataset(args, env_seed: int = 501):
             use params dict to initialize env
             fix hardcoded parts (dataset_type == ...)
     """
+    key = jax.random.key(0)
+    coefficients = 0.5 * jax.random.uniform(key, shape=(3,), minval=-1.0, maxval=1.0)
+    scales = 1.0 * jax.random.uniform(key, shape=(3,), minval=-1.0, maxval=1.0)
+    offsets = 0.1 * jax.random.uniform(key, shape=(3,), minval=-1.0, maxval=1.0)
+
     def control_policy(state, t, jax_key):
         control_name = args.control.lower()
-        if control_name == 'uniform':
-            return 5.0 * jax.random.uniform(jax_key, shape=(1,), minval = -1.0, maxval=1.0)
+        if control_name == 'random':
+            return 1.0 * jax.random.uniform(jax_key, shape=(1,), minval=-1.0, maxval=1.0)
+        elif control_name == 'random_continuous':
+    
+            f = lambda x : coefficients[0] * jnp.cos(scales[0] * x + offsets[0]) + coefficients[1] * jnp.cos(scales[1] * x + offsets[1]) + coefficients[2] * jnp.cos(scales[2] * x + offsets[2])  
+            return jnp.array([f(t)])
         elif control_name == 'sin':
             return 5.0 * jnp.array([jnp.sin(t)])
         elif control_name == 'passive':
@@ -361,35 +371,27 @@ def generate_dataset(args, env_seed: int = 501):
     x0_init_lb = jnp.array([-.05, -.05, -.05, -.05])
     x0_init_ub = jnp.array([.0, .0, .0, .0])
     # x0_init_ub = x0_init_lb
-
-
-    val_params = {}
-    for k,v in params.items():
-        if isinstance(v, float) and k != 'dt':
-            val_params[k] = v + 0.1 * rng.uniform(-1, 1)
-        # if k == 'm1' or k == 'm2':
-        #     val_params[k] = v + 0.1 * rng.uniform(-1, 1)
-        else:
-            val_params[k] = v
+    means = deepcopy(params)
+    train_scales = (0.1, 0.1, 0.1)
+    val_scales = (0.1, 0.1, 0.1)
 
     env = None
     if args.type == 'training':
-        num_train_trajs = 500
-        bins = 500
+        num_train_trajs = 100
+        bins = num_train_trajs
         env = DoubleMassSpring(**params, random_seed=501)
-        env.set_control_policy(control_policy)    
         dataset = None
         for _ in range(bins):
             rng_param = lambda mean, scale : rng.uniform(mean - scale, mean + scale)
-            scales = (0.1, 0.1, 0.1)
-            env.m1 = rng_param(1, scales[0])
-            env.m2 = rng_param(1, scales[0])
-            env.k1 = rng_param(1.2, scales[1])
-            env.k2 = rng_param(1.5, scales[1])
-            env.b1 = rng_param(1.7, scales[2])
-            env.b2 = rng_param(1.5, scales[2])
+            env.m1 = rng_param(means['m1'], train_scales[0])
+            env.m2 = rng_param(means['m2'], train_scales[0])
+            env.k1 = rng_param(means['k1'], train_scales[1])
+            env.k2 = rng_param(means['k2'], train_scales[1])
+            env.b1 = rng_param(means['b1'], train_scales[2])
+            env.b2 = rng_param(means['b2'], train_scales[2])
 
             env.update_config()
+            env.set_control_policy(control_policy)    
             
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                           num_trajectories=num_train_trajs//bins,
@@ -409,23 +411,43 @@ def generate_dataset(args, env_seed: int = 501):
     elif args.type == 'validation': 
         num_val_trajectories = 20
 
-        env = DoubleMassSpring(**val_params, random_seed=501)
-        env.set_control_policy(control_policy)
+        env = DoubleMassSpring(**params, random_seed=501)
 
         # x0_init_lb = (rng.random()) * x0_init_lb
         # x0_init_ub = (rng.random()) * x0_init_ub
         dataset = None
-        for _ in range(10):
-            env.m1 = rng.uniform(1.2, 1.3)
-            env.m2 = rng.uniform(1.2, 1.3)
-            # env.k1 = rng.uniform(1.3, 1.35)
-            # env.k2 = rng.uniform(1.6, 1.65)
-            # env.b1 = rng.uniform(1.8, 1.85)
-            # env.b2 = rng.uniform(1.6, 1.65)
+        for i in range(num_val_trajectories):
+            if i < num_val_trajectories // 2:
+                env.m1 = rng.uniform(means['m1'] + train_scales[0], 
+                                     means['m1'] + train_scales[0] + val_scales[0])
+                env.m2 = rng.uniform(means['m2'] + train_scales[0], 
+                                     means['m2'] + train_scales[0] + val_scales[0])
+                env.k1 = rng.uniform(means['k1'] + train_scales[1], 
+                                     means['k1'] + train_scales[1] + val_scales[1])
+                env.k2 = rng.uniform(means['k2'] + train_scales[1], 
+                                     means['k2'] + train_scales[1] + val_scales[1])
+                env.b1 = rng.uniform(means['b1'] + train_scales[2], 
+                                     means['b1'] + train_scales[2] + val_scales[2])
+                env.b2 = rng.uniform(means['b2'] + train_scales[2], 
+                                     means['b2'] + train_scales[2] + val_scales[2])
+            elif i > num_val_trajectories // 2:
+                env.m1 = rng.uniform(means['m1'] - train_scales[0] - val_scales[0], 
+                                     means['m1'] - train_scales[0])
+                env.m2 = rng.uniform(means['m2'] - train_scales[0] - val_scales[0], 
+                                     means['m2'] - train_scales[0])
+                env.k1 = rng.uniform(means['k1'] - train_scales[1] - val_scales[1], 
+                                     means['k1'] - train_scales[1])
+                env.k2 = rng.uniform(means['k2'] - train_scales[1] - val_scales[1], 
+                                     means['k2'] - train_scales[1])
+                env.b1 = rng.uniform(means['b1'] - train_scales[2] - val_scales[2], 
+                                     means['b1'] - train_scales[2])
+                env.b2 = rng.uniform(means['b2'] - train_scales[2] - val_scales[2], 
+                                     means['b2'] - train_scales[2])
+            env.set_control_policy(control_policy)
             env.update_config()
 
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
-                                          num_trajectories=num_val_trajectories // 10,
+                                          num_trajectories=1,
                                           x0_init_lb=x0_init_lb,
                                           x0_init_ub=x0_init_ub)
             if dataset is not None:

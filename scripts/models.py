@@ -80,6 +80,7 @@ class GraphNet(nn.Module):
     use_edge_model: bool = False
     shared_params: bool = False
     vel_history: int = 5
+    control_history: int = 1
     noise_std: float = 0.0003
 
     globals_output_size: int = 0
@@ -101,7 +102,8 @@ class GraphNet(nn.Module):
     dt: float = 0.01
 
     @nn.compact
-    def __call__(self, graph: jraph.GraphsTuple, rng) -> jraph.GraphsTuple:
+    def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
+        # jax.debug.print('before {}', graph.nodes.shape)
         if self.training: 
             # TODO: add noise to all node features (self.noise_std for all?)
             rng, noise_rng = jax.random.split(rng)
@@ -110,7 +112,9 @@ class GraphNet(nn.Module):
         cur_pos = graph.nodes[:,0]
         if self.prediction == 'acceleration':
             cur_vel = graph.nodes[:,self.vel_history]
-            prev_vel = graph.nodes[:,1:self.vel_history+1] # including cur_vel
+            prev_vel = graph.nodes[:,1:self.vel_history+1] # include cur_vel
+            cur_u = graph.nodes[:,-1]
+            prev_u = graph.nodes[:,self.vel_history+1:] # include cur_u
         elif self.prediction == 'position':
             prev_pos = graph.nodes[:,1:self.vel_history+1]
 
@@ -208,12 +212,14 @@ class GraphNet(nn.Module):
                 dt0 = self.dt
                 match self.integration_method:
                     case 'Euler':
+                        # TODO: add control
                         term = diffrax.ODETerm(newtons_equation_of_motion)
                         solver = diffrax.Euler()
                         sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
                         next_pos = sol.ys[-1, 0:2]
                         next_vel = sol.ys[-1, 2:4]
                     case 'Tsit5':
+                        # TODO: add control
                         term = diffrax.ODETerm(newtons_equation_of_motion)
                         solver = diffrax.Tsit5()
                         sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
@@ -230,7 +236,10 @@ class GraphNet(nn.Module):
             y0 = jnp.concatenate((cur_pos, cur_vel), axis=0).reshape(-1, 1)
             args = None
             next_pos, next_vel = solve(y0, args)  
-            next_nodes = jnp.column_stack((next_pos, prev_vel[:,1:], next_vel, force(None, args))) # TODO: pass time into force?
+            next_nodes = jnp.column_stack((next_pos, 
+                                           prev_vel[:,1:], next_vel, 
+                                           prev_u[:,1:], next_u, 
+                                           force(None, args))) # TODO: pass time into force?
             next_edges = jnp.diff(next_pos.squeeze()).reshape(-1,1)
             # else:
             #     raise NotImplementedError('Invalid prediction mode')
@@ -268,6 +277,8 @@ class GraphNet(nn.Module):
 
         # Decoder post-processor
         processed_graph = decoder_postprocessor(processed_graph)
+
+        # jax.debug.print('after {}', processed_graph.nodes.shape)
 
         return processed_graph
     

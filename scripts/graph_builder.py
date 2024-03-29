@@ -46,10 +46,11 @@ class DMSDGraphBuilder(GraphBuilder):
     """ 
         Double Mass Spring Damper (DMSD) 
     """
-    def __init__(self, path, add_undirected_edges, add_self_loops, mode, vel_history):
+    def __init__(self, path, add_undirected_edges, add_self_loops, mode, vel_history, control_history):
         super().__init__(path, add_undirected_edges, add_self_loops)
         self._mode = mode
         self._vel_history = vel_history
+        self._control_history = control_history
     
     def _load_data(self, path):
         """
@@ -59,9 +60,16 @@ class DMSDGraphBuilder(GraphBuilder):
         data = np.load(path, allow_pickle=True)
         state = data['state_trajectories']
         config = data['config']
+        control = data['control_inputs']
         self._dt = config['dt']
+        # Control
+        self._control = jnp.concatenate((jnp.zeros(control.shape), control), axis=-1)
         # Masses
         self._m = jnp.array([config['m1'], config['m2']]).T
+        # Spring constants
+        self._k = jnp.array([config['k1'], config['k2']]).T
+        # Damper constants
+        self._b = jnp.array([config['b1'], config['b2']]).T
         # Absolute position
         self._qs = jnp.stack((state[:,:,0],  # q1
                         state[:,:,2]), # q2
@@ -97,6 +105,10 @@ class DMSDGraphBuilder(GraphBuilder):
             'mean': jnp.mean(self._accs),
             'std': jnp.std(self._accs),
         })
+        norm_stats.control = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._control),
+            'std': jnp.std(self._control)
+        })
 
         self._norm_stats = norm_stats
     
@@ -112,13 +124,17 @@ class DMSDGraphBuilder(GraphBuilder):
         match self._mode:
             case 'acceleration':
                 vs_history = []                
-                [vs_history.append(self._ps[traj_idx, t-k]) for k in reversed(range(self._vel_history))]
+                [vs_history.append(self._vs[traj_idx, t-k]) for k in reversed(range(self._vel_history))]
                 vs_history = jnp.asarray(vs_history).T
+
+                control_history = []
+                [control_history.append(self._control[traj_idx, t-k]) for k in reversed(range(self._control_history))]
+                control_history = jnp.asarray(control_history).T
                 # Node features are current position, velocity history, current velocity
-                nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history))
+                nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history, control_history))
                 # Edge features are relative positions
                 edges = self._dqs[traj_idx, t].reshape((-1,1))
-                # Global features are time, q0, v0, a0
+                # Global features are time, q0, v0, a0 # TODO: try global features = None
                 global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
             case 'position':
                 raise NotImplementedError
@@ -147,7 +163,7 @@ class DMSDGraphBuilder(GraphBuilder):
 
     def tree_flatten(self):
         children = () # dynamic
-        aux_data = (self._path, self._add_undirected_edges, self._add_self_loops, self._mode, self._vel_history, self._data, self._norm_stats, self._qs, self._dqs, self._ps, self._vs, self._accs, self._m, self._dt) # static
+        aux_data = (self._path, self._add_undirected_edges, self._add_self_loops, self._mode, self._vel_history, self._control_history, self._data, self._norm_stats, self._qs, self._dqs, self._ps, self._vs, self._accs, self._control, self._m, self._k, self._b, self._dt) # static
         return (children, aux_data)
 
     @classmethod
@@ -159,15 +175,19 @@ class DMSDGraphBuilder(GraphBuilder):
         obj._add_self_loops         = aux_data[2]
         obj._mode                   = aux_data[3]
         obj._vel_history            = aux_data[4]
-        obj._data                   = aux_data[5]
-        obj._norm_stats             = aux_data[6]
-        obj._qs                     = aux_data[7]
-        obj._dqs                    = aux_data[8]
-        obj._ps                     = aux_data[9]
-        obj._vs                     = aux_data[10]
-        obj._accs                   = aux_data[11]
-        obj._m                      = aux_data[12]
-        obj._dt                     = aux_data[13]
+        obj._control_history        = aux_data[5]
+        obj._data                   = aux_data[6]
+        obj._norm_stats             = aux_data[7]
+        obj._qs                     = aux_data[8]
+        obj._dqs                    = aux_data[9]
+        obj._ps                     = aux_data[10]
+        obj._vs                     = aux_data[11]
+        obj._accs                   = aux_data[12]
+        obj._control                = aux_data[13]
+        obj._m                      = aux_data[14]
+        obj._k                      = aux_data[15]
+        obj._b                      = aux_data[16]
+        obj._dt                     = aux_data[17]
         obj._setup_graph_params()
         return obj
     
