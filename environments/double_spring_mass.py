@@ -327,23 +327,19 @@ def generate_dataset(args, env_seed: int = 501):
             use params dict to initialize env
             fix hardcoded parts (dataset_type == ...)
     """
-    key = jax.random.key(0)
-    coefficients = 0.5 * jax.random.uniform(key, shape=(3,), minval=-1.0, maxval=1.0)
-    scales = 1.0 * jax.random.uniform(key, shape=(3,), minval=-1.0, maxval=1.0)
-    offsets = 0.1 * jax.random.uniform(key, shape=(3,), minval=-1.0, maxval=1.0)
 
-    def control_policy(state, t, jax_key):
+    def control_policy(state, t, jax_key, aux_data):
         control_name = args.control.lower()
         if control_name == 'random':
             return 1.0 * jax.random.uniform(jax_key, shape=(1,), minval=-1.0, maxval=1.0)
         elif control_name == 'random_continuous':
-    
+            coefficients, scales, offsets = aux_data
             f = lambda x : coefficients[0] * jnp.cos(scales[0] * x + offsets[0]) + coefficients[1] * jnp.cos(scales[1] * x + offsets[1]) + coefficients[2] * jnp.cos(scales[2] * x + offsets[2])  
             return jnp.array([f(t)])
         elif control_name == 'sin':
             return 5.0 * jnp.array([jnp.sin(t)])
         elif control_name == 'passive':
-            return jnp.array([t-t]) # zero input
+            return jnp.array([0]) # zero input
         else:
             raise RuntimeError('Invalid control flag')
     
@@ -374,10 +370,12 @@ def generate_dataset(args, env_seed: int = 501):
     means = deepcopy(params)
     train_scales = (0.1, 0.1, 0.1)
     val_scales = (0.1, 0.1, 0.1)
+    key = jax.random.key(env_seed)
+
 
     env = None
     if args.type == 'training':
-        num_train_trajs = 100
+        num_train_trajs = 1000
         bins = num_train_trajs
         env = DoubleMassSpring(**params, random_seed=501)
         dataset = None
@@ -390,8 +388,14 @@ def generate_dataset(args, env_seed: int = 501):
             env.b1 = rng_param(means['b1'], train_scales[2])
             env.b2 = rng_param(means['b2'], train_scales[2])
 
+            rng_key, key = jax.random.split(key)
+            coefficients = 0.4 * jax.random.uniform(rng_key, shape=(3,), minval=-1.0, maxval=1.0)
+            scales = 1.0 * jax.random.uniform(rng_key, shape=(3,), minval=-1.0, maxval=1.0)
+            offsets = 0.1 * jax.random.uniform(rng_key, shape=(3,), minval=-1.0, maxval=1.0)
+            aux_data = (coefficients, scales, offsets)
+
             env.update_config()
-            env.set_control_policy(control_policy)    
+            env.set_control_policy(partial(control_policy, aux_data=aux_data))    
             
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                           num_trajectories=num_train_trajs//bins,
@@ -417,6 +421,8 @@ def generate_dataset(args, env_seed: int = 501):
         # x0_init_ub = (rng.random()) * x0_init_ub
         dataset = None
         for i in range(num_val_trajectories):
+            rng_key, key = jax.random.split(key)
+
             if i < num_val_trajectories // 2:
                 env.m1 = rng.uniform(means['m1'] + train_scales[0], 
                                      means['m1'] + train_scales[0] + val_scales[0])
@@ -430,6 +436,8 @@ def generate_dataset(args, env_seed: int = 501):
                                      means['b1'] + train_scales[2] + val_scales[2])
                 env.b2 = rng.uniform(means['b2'] + train_scales[2], 
                                      means['b2'] + train_scales[2] + val_scales[2])
+                coefficients = 0.5 * jax.random.uniform(rng_key, shape=(3,), minval=-1.0, maxval=-0.4)
+                
             elif i > num_val_trajectories // 2:
                 env.m1 = rng.uniform(means['m1'] - train_scales[0] - val_scales[0], 
                                      means['m1'] - train_scales[0])
@@ -443,8 +451,15 @@ def generate_dataset(args, env_seed: int = 501):
                                      means['b1'] - train_scales[2])
                 env.b2 = rng.uniform(means['b2'] - train_scales[2] - val_scales[2], 
                                      means['b2'] - train_scales[2])
-            env.set_control_policy(control_policy)
+                coefficients = 0.5 * jax.random.uniform(rng_key, shape=(3,), minval=0.4, maxval=1.0)
+                
+                
+            scales = 1.0 * jax.random.uniform(rng_key, shape=(3,), minval=-1.0, maxval=1.0)
+            offsets = 0.1 * jax.random.uniform(rng_key, shape=(3,), minval=-1.0, maxval=1.0)
+            aux_data = (coefficients, scales, offsets)
+
             env.update_config()
+            env.set_control_policy(partial(control_policy, aux_data=aux_data))    
 
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                           num_trajectories=1,

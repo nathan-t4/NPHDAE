@@ -27,12 +27,13 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/double_mass_spring_data/train_100_0.1_0.35.pkl',
+        'training_data_path': 'results/double_mass_spring_data/train_1000_0.1_0.4.pkl',
         'evaluation_data_path': 'results/double_mass_spring_data/val_20_0.1_0.5.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GraphNet',
         'num_epochs': int(5e2),
+        'min_epochs': int(0),
         'batch_size': 2,
         'rollout_timesteps': 1500,
         'log_every_steps': 1,
@@ -45,15 +46,13 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     })
     config.optimizer_params = ml_collections.ConfigDict({
         'learning_rate': optax.exponential_decay(init_value=1e-3, transition_steps=5e2, decay_rate=0.1, end_value=1e-5),
-        # 'learning_rate': optax.cosine_decay_schedule(init_value=1e-3, decay_steps=500, alpha=1e-5)
-        # 'learning_rate': 1e-3,
     })
     config.net_params = ml_collections.ConfigDict({
         'prediction': 'acceleration',
         'integration_method': 'SemiImplicitEuler', 
         # 'horizon': 5, # for gnode only
         'vel_history': 5,
-        'control_history': 1,
+        'control_history': 5,
         'num_mp_steps': 1, # too big causes oversmoothing
         'noise_std': 0.0003,
         'latent_size': 16,
@@ -81,11 +80,6 @@ def eval(config: ml_collections.ConfigDict):
                 return GNODE(**net_params)
             case _:
                 raise RuntimeError('Invalid net name')
-    
-    # if paths.dir == None:
-    #     work_dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/test_control_{strftime("%H%M%S")}')
-    # else:
-    #     work_dir = paths.dir
             
     log_dir = os.path.join(paths.dir, 'log')
     checkpoint_dir = os.path.join(paths.dir, 'checkpoint')
@@ -179,7 +173,7 @@ def train(config: ml_collections.ConfigDict):
                 raise RuntimeError('Invalid net name')
     
     if paths.dir == None:
-        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/test_control_{strftime("%H%M%S")}')
+        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/control_300_noisy_history_5_{strftime("%H%M%S")}')
         paths.dir = config.paths.dir
             
     log_dir = os.path.join(paths.dir, 'log')
@@ -191,8 +185,9 @@ def train(config: ml_collections.ConfigDict):
 
     # Create writer for logs
     writer = metric_writers.create_default_writer(logdir=log_dir)
-
+    # Create optimizer
     tx = optax.adam(**config.optimizer_params)
+    # Create training and evaluation data loaders
     train_gb = DMSDGraphBuilder(paths.training_data_path, 
                                 training_params.add_undirected_edges, 
                                 training_params.add_self_loops, 
@@ -205,7 +200,7 @@ def train(config: ml_collections.ConfigDict):
                                net_params.prediction, 
                                net_params.vel_history,
                                net_params.control_history)
-    
+    # Initialize training network
     net_params.norm_stats = train_gb._norm_stats
     net = create_net()
     init_graph = train_gb.get_graph(traj_idx=0, t=net_params.vel_history+1)
@@ -217,6 +212,7 @@ def train(config: ml_collections.ConfigDict):
     time_offset = net.horizon if training_params.net_name == 'gnode' else net.num_mp_steps
 
     def random_batch(batch_size: int, min: int, max: int, rng: jax.Array):
+        """ Return random permutation of jnp.arange(min, max) in batches of batch_size """
         steps_per_epoch = (max - min)// batch_size
         perms = jax.random.permutation(rng, max - min)
         perms = perms[: steps_per_epoch * batch_size].reshape(-1,batch_size)
@@ -335,20 +331,21 @@ def train(config: ml_collections.ConfigDict):
         num_train_steps=training_params.num_epochs,
         writer=writer
     )
+    # Load previous checkpoint (if applicable)
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
     state = ckpt.restore_or_initialize(state)
 
     trajs_size = len(train_gb._data)
     ts_size = len(train_gb._data[0]) - train_gb._vel_history
-    
     steps_per_epoch = ts_size // training_params.batch_size
+    # Setup train_fn (use train_epoch or train_epoch_1_traj)
     if training_params.train_multi_trajectories:
         steps_per_epoch *= trajs_size // training_params.batch_size
         train_fn = train_epoch
     else:
         eval_gb = train_gb
         train_fn = train_epoch_1_traj
-
+    # Setup training epochs
     init_epoch = int(state.step) // steps_per_epoch + 1
     final_epoch = init_epoch + training_params.num_epochs
     training_params.num_epochs = final_epoch
@@ -392,7 +389,7 @@ def train(config: ml_collections.ConfigDict):
                     min_error = rollout_mean_pos_loss
                     with report_progress.timed('checkpoint'):
                         ckpt.save(state)
-                if epoch > 0: # train at least for # epochs
+                if epoch > training_params['min_epochs']: # train at least for 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_mean_pos_loss)
                     if early_stop.should_stop:
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')

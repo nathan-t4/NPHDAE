@@ -103,12 +103,16 @@ class GraphNet(nn.Module):
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
-        # jax.debug.print('before {}', graph.nodes.shape)
         if self.training: 
-            # TODO: add noise to all node features (self.noise_std for all?)
-            rng, noise_rng = jax.random.split(rng)
-            new_nodes = jnp.column_stack((graph.nodes[:,0].T + self.noise_std * jax.random.normal(noise_rng, (len(graph.nodes),)), graph.nodes[:,1:]))
+            # Add noise to first node feature (position)
+            rng, pos_rng, u_rng = jax.random.split(rng, 3)
+            pos_noise = self.noise_std * jax.random.normal(pos_rng, (len(graph.nodes),))
+            new_nodes = jnp.column_stack((graph.nodes[:,0].T + pos_noise, graph.nodes[:,1:]))
             graph = graph._replace(nodes=new_nodes)
+            # TODO: add noise to next_u?
+            next_u_noise = self.noise_std * jax.random.normal(u_rng, (1,))
+            next_u = next_u + next_u_noise
+    
         cur_pos = graph.nodes[:,0]
         if self.prediction == 'acceleration':
             cur_vel = graph.nodes[:,self.vel_history]
@@ -169,13 +173,6 @@ class GraphNet(nn.Module):
             )
             processor_nets.append(net)
 
-        # def create_graph_net(carry, x):
-        #     return None, jraph.GraphNetwork(update_node_fn=update_node_fn,
-        #                                     update_edge_fn=update_edge_fn,
-        #                                     update_global_fn=update_global_fn)
-        
-        # _, processor_nets = jax.lax.scan(create_graph_net, None, None, num_nets)
-
         # Decoder
         decoder = jraph.GraphMapFeatures(
             embed_node_fn=MLP(
@@ -197,11 +194,11 @@ class GraphNet(nn.Module):
                 return pred_acc
             
             def newtons_equation_of_motion(t, y, args):
-                # return jnp.array([[0, 1], [0, 0]]) @ y + jnp.array([[0],[force(t, args)]])
+                """ y = = [pos, vel] = [x0, x1, v0, v1] """
                 A = jnp.array([[0, 0, 1, 0], 
-                                [0, 0, 0, 1], 
-                                [0, 0, 0, 0], 
-                                [0, 0, 0, 0]])
+                               [0, 0, 0, 1], 
+                               [0, 0, 0, 0], 
+                               [0, 0, 0, 0]])
                 F = jnp.concatenate((jnp.array([[0], [0]]), force(t, args)))
                 return A @ y + F
             
@@ -212,18 +209,15 @@ class GraphNet(nn.Module):
                 dt0 = self.dt
                 match self.integration_method:
                     case 'Euler':
-                        # TODO: add control
                         term = diffrax.ODETerm(newtons_equation_of_motion)
                         solver = diffrax.Euler()
                         sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
                         next_pos = sol.ys[-1, 0:2]
                         next_vel = sol.ys[-1, 2:4]
                     case 'Tsit5':
-                        # TODO: add control
                         term = diffrax.ODETerm(newtons_equation_of_motion)
                         solver = diffrax.Tsit5()
                         sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
-                        next_pos = sol.ys[-1, 0:2]
                         next_vel = sol.ys[-1, 2:4]
                     case 'SemiImplicitEuler':
                         pred_acc = force(t0, args).squeeze()
