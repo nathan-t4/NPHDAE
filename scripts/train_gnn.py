@@ -1,6 +1,7 @@
 import os
 import jax
 import optax
+import json
 
 import matplotlib.pyplot as plt
 import jax.numpy as jnp
@@ -20,15 +21,14 @@ from graph_builder import DMSDGraphBuilder
 from scripts.models import *
 from utils.data_utils import *
 from utils.jax_utils import *
-from utils.train_utils import *
-from utils.plotter import plot
+from utils.gnn_utils import *
 
 def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/double_mass_spring_data/train_1000_0.1_0.4.pkl',
-        'evaluation_data_path': 'results/double_mass_spring_data/val_20_0.1_0.5.pkl',
+        'training_data_path': 'results/double_mass_spring_data/train_1500_0.1_0.5.pkl',
+        'evaluation_data_path': 'results/double_mass_spring_data/val_20_0.5_0.2.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GraphNet',
@@ -154,9 +154,17 @@ def eval(config: ml_collections.ConfigDict):
         ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
         writer.write_scalars(i, add_prefix_to_keys(eval_metrics.compute(), 'eval'))
         rollout_error_sum += eval_metrics.compute()['loss']
-        plot(ts, pred_data, exp_data, aux_data, plot_dir=plot_dir, prefix=f'eval_traj_{i}')
+        plot_evaluation_curves(ts, pred_data, exp_data, aux_data, plot_dir=plot_dir, prefix=f'eval_traj_{i}')
 
     print('Mean rollout error: ', rollout_error_sum / len(eval_gb._data))
+
+    # Save evaluation metrics to json
+    eval_metrics = {
+        'mean_rollout_error': (rollout_error_sum / len(eval_gb._data)).tolist()
+    }
+    eval_metrics_file = os.path.join(plot_dir, 'eval_metrics.js')
+    with open(eval_metrics_file, "w") as outfile:
+        json.dump(eval_metrics, outfile)
 
 def train(config: ml_collections.ConfigDict):
     training_params = config.training_params
@@ -173,7 +181,7 @@ def train(config: ml_collections.ConfigDict):
                 raise RuntimeError('Invalid net name')
     
     if paths.dir == None:
-        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/control_300_noisy_history_5_{strftime("%H%M%S")}')
+        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/control_1500_{strftime("%H%M%S")}')
         paths.dir = config.paths.dir
             
     log_dir = os.path.join(paths.dir, 'log')
@@ -376,9 +384,9 @@ def train(config: ml_collections.ConfigDict):
                 for i in range(len(eval_gb._data)):
                     ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
                     rollout_error_sum += eval_metrics.compute()['loss']
-                    plot(ts, pred_data, exp_data, aux_data,
-                         plot_dir=os.path.join(plot_dir, f'traj_{i}'),
-                         prefix=f'Epoch {epoch}: eval_traj_{i}')
+                    plot_evaluation_curves(ts, pred_data, exp_data, aux_data,
+                                           plot_dir=os.path.join(plot_dir, f'traj_{i}'),
+                                           prefix=f'Epoch {epoch}: eval_traj_{i}')
                 
                 rollout_mean_pos_loss = rollout_error_sum / len(eval_gb._data)
                 writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_mean_pos_loss}, 'eval'))

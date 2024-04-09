@@ -5,8 +5,6 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 
 import numpy as np
-# from scipy.integrate import odeint
-from jax.experimental.ode import odeint
 
 import pickle
 import os
@@ -21,7 +19,7 @@ from environments.utils import merge_datasets
 
 ###### Code to generate a dataset of double-pendulum trajectories ######
 
-class DoubleMassSpring(Environment):
+class NMassSpring(Environment):
     """
     Object representing a damped mass spring system.
 
@@ -31,22 +29,14 @@ class DoubleMassSpring(Environment):
         The timestep used to simulate the system dynamics.
     random_seed : 
         Manually set the random seed used to generate initial states.
-    m1 :
-        The mass of mass 1 [kg].
-    k1 : 
-        The spring constant of spring 1 [N/m].
-    y1 :
-        The unstretched length of spring 1 [m].
-    b1 :
-        The damping coefficient on mass 1 [Ns/m].
-    m2 :
-        The mass of mass 2 [kg].
-    k2 : 
-        The spring constant of spring 2 [N/m].
-    y2 :
-        The unstretched length of spring 2 [m].
-    b2 :
-        The damping coefficient on mass 2 [Ns/m].
+    m :
+        The masses [kg].
+    k : 
+        The spring constants [N/m].
+    y :
+        The unstretched length of springs [m].
+    b :
+        The damping coefficients [Ns/m].
     state_measure_spring_elongation : bool
         If True, the state of the system is measured as the elongation of the springs.
     nonlinear_damping : bool
@@ -58,34 +48,29 @@ class DoubleMassSpring(Environment):
     def __init__(self, 
                 dt=0.01, 
                 random_seed=42,
-                m1 : jnp.float32 = 1, 
-                k1 : jnp.float32 = 1, 
-                y1 : jnp.float32 = 1,
-                b1 : jnp.float32 = 0.0,
-                m2 : jnp.float32 = 1,
-                k2 : jnp.float32 = 1,
-                y2 : jnp.float32 = 1,
-                b2 : jnp.float32 = 0.0,
+                m: jnp.ndarray = jnp.array([1, 1]),
+                k: jnp.ndarray = jnp.array([1, 1]),
+                b: jnp.ndarray = jnp.array([0, 0]),
+                y: jnp.ndarray = jnp.array([1, 1]),
                 state_measure_spring_elongation : bool =True,
                 nonlinear_damping : bool = False,
                 nonlinear_spring : bool = False,
-                name : str = 'Double_Spring_Mass'
+                name : str = 'N_Spring_Mass'
                 ):
         """
-        Initialize the double-pendulum environment object.
+        Initialize the n spring-mass environment object.
         """
 
         super().__init__(dt=dt, random_seed=random_seed, name=name)
         
-        self.m1 = m1
-        self.k1 = k1
-        self.y1 = y1
-        self.b1 = b1
+        assert (len(m) == len(k) == len(b)), 'parameter arrays should have the same length'
+        self.m = m
+        self.k = k
+        self.b = b
+        self.N = int(len(m))
+        self.y = jnp.ones(self.N)
 
-        self.m2 = m2
-        self.k2 = k2
-        self.y2 = y2
-        self.b2 = b2
+        self.colors = plt.colormaps['Dark2'](np.linspace(0.15, 0.85, self.N))
 
         self.state_measure_spring_elongation = state_measure_spring_elongation
         self.nonlinear_damping = nonlinear_damping
@@ -93,14 +78,10 @@ class DoubleMassSpring(Environment):
 
         self.config = {
             'dt' : dt,
-            'm1' : m1,
-            'k1' : k1,
-            'y1' : y1,
-            'b1' : b1,
-            'm2' : m2,
-            'k2' : k2,
-            'y2' : y2,
-            'b2' : b2,
+            'm': m,
+            'k': k,
+            'b': b,
+            'y': y,
             'state_measure_spring_elongation' : state_measure_spring_elongation,
             'nonlinear_damping' : nonlinear_damping,
             'nonlinear_spring' : nonlinear_spring,
@@ -109,14 +90,10 @@ class DoubleMassSpring(Environment):
 
     def update_config(self):
         self.config['dt'] = self.config['dt']
-        self.config['m1'] = self.m1
-        self.config['k1'] = self.k1
-        self.config['y1'] = self.y1
-        self.config['b1'] = self.b1
-        self.config['m2'] = self.m2
-        self.config['k2'] = self.k2
-        self.config['y2'] = self.y2
-        self.config['b2'] = self.b2
+        self.config['m'] = self.m
+        self.config['k'] = self.k
+        self.config['y'] = self.y
+        self.config['b'] = self.b
         self.config['state_measure_spring_elongation'] = self.state_measure_spring_elongation
         self.config['nonlinear_damping'] = self.nonlinear_damping
         self.config['nonlinear_spring'] = self.nonlinear_spring
@@ -127,26 +104,34 @@ class DoubleMassSpring(Environment):
             """
             The system's potential energy.
             """
-            q1 = state[0]
-            q2 = state[2]
+            qs = state[::2]
             if self.state_measure_spring_elongation:
                 if self.nonlinear_spring:
-                    return (jnp.cosh(q1) - 1) + (jnp.cosh(q2) - 1)
+                    return sum([jnp.cosh(q) - 1 for q in qs]) 
                 else:
-                    return 1/2 * self.k1 * q1**2 + 1/2 * self.k2 * q2**2
+                    return sum([1/2 * k * q**2 for k, q in zip(self.k, qs)]) 
             else:
+                PE = 0
                 if self.nonlinear_spring:
-                    return (jnp.cosh(q1 - self.y1) - 1) + (jnp.cosh((q2 - q1) - self.y2) - 1)
+                    for i, (q, y, k) in enumerate(zip(qs, self.y, self.k)):
+                        if i == 0:
+                            PE += jnp.cosh(q - y) - 1
+                        else:
+                            PE += jnp.cosh((qs[i] - qs[i - 1]) - y) - 1
                 else:
-                    return 1/2 * self.k1 * (q1 - self.y1)**2 + 1/2 * self.k2 * ((q2 - q1) - self.y2)**2
+                    for i, (q, y, k) in enumerate(zip(qs, self.y, self.k)):
+                        if i == 0:
+                            PE += 1/2 * k * (q - y)**2
+                        else:
+                            PE += 1/2 * k * ((qs[i] - qs[i - 1]) - y)**2            
+                return PE
 
         def KE(state):
             """
             The system's kinetic energy.
             """
-            p1 = state[1]
-            p2 = state[3]
-            return p1**2 / (2 * self.m1) + p2**2 / (2 * self.m2)
+            ps = state[1::2]
+            return sum([p**2 / (2 * m) for (p, m) in zip(ps, self.m)])
 
         def H(state):
             """
@@ -163,65 +148,69 @@ class DoubleMassSpring(Environment):
             The system dynamics formulated using Hamiltonian mechanics.
             """ 
             dh = jax.grad(H)(state)
-
+            J = []
             if self.state_measure_spring_elongation:
+                # TODO
                 J = jnp.array([[0.0, 1.0, 0.0, 0.0],
                                [-1.0, 0.0, 1.0, 0.0],
                                [0.0, -1.0, 0.0, 1.0],
                                [0.0, 0.0, -1.0, 0.0]])
             else:
-                J = jnp.array([[0.0, 1.0, 0.0, 0.0],
-                                [-1.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 1.0],
-                                [0.0, 0.0, -1.0, 0.0]])
+                for _ in range(self.N):
+                    J.append([[0.0, 1.0],
+                              [-1.0, 0.0]])
+            J = jax.scipy.linalg.block_diag(*jnp.array(J))
 
             if self.nonlinear_damping:
-                p1 = state[1]
-                p2 = state[3]
-                damping1 = self.b1 * p1**2 / self.m1**2
-                damping2 = self.b2 * p2**2 / self.m2**2
+                ps = state[1::2]
+                dampings = self.b * ps**2 / self.m**2
             else:
-                damping1 = self.b1
-                damping2 = self.b2
-            R = jnp.array([[0.0, 0.0, 0.0, 0.0],
-                        [0.0, damping1, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, damping2]])
+                dampings = self.b
 
-            g = jnp.array([[0.0, 0.0, 0.0, 1.0]]).transpose()
+            diagonals = [0] * (2 * self.N)
+            diagonals[1::2] = dampings
+            R = jnp.diag(jnp.array(diagonals))
 
-            return jnp.matmul(J - R, dh) + jnp.matmul(g, control_input)
+            g = []
+            for _ in range(self.N):
+                g.extend([0.0, 1.0])
+            g = jnp.array(g).T
+
+
+            return jnp.matmul(J - R, dh) + jnp.matmul(g, control_input) # TODO: what is this?
 
         def get_power(x, u):
             """
             Get the power of the various components of the port-Hamiltonian system.
             """
             dh = jax.grad(H)(x)
-
+            J = []
             if self.state_measure_spring_elongation:
+                # TODO
                 J = jnp.array([[0.0, 1.0, 0.0, 0.0],
                                 [-1.0, 0.0, 1.0, 0.0],
                                 [0.0, -1.0, 0.0, 1.0],
                                 [0.0, 0.0, -1.0, 0.0]])
             else:
-                J = jnp.array([[0.0, 1.0, 0.0, 0.0],
-                                [-1.0, 0.0, 0.0, 0.0],
-                                [0.0, 0.0, 0.0, 1.0],
-                                [0.0, 0.0, -1.0, 0.0]])
+                for _ in range(self.N):
+                    J.append([[0.0, 1.0],
+                              [-1.0, 0.0]])
+            J = jax.scipy.linalg.block_diag(jnp.array(J))
 
             if self.nonlinear_damping:
-                p1 = x[1]
-                p2 = x[3]
-                damping1 = self.b1 * p1**2 / self.m1**2
-                damping2 = self.b2 * p2**2 / self.m2**2
+                ps = x[1::2]
+                dampings = self.b * ps**2 / self.m**2
             else:
-                damping1 = self.b1
-                damping2 = self.b2
-            R = jnp.array([[0.0, 0.0, 0.0, 0.0],
-                        [0.0, damping1, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, damping2]])
-            g = jnp.array([[0.0, 0.0, 0.0, 1.0]]).transpose()
+                dampings = self.b
+
+            diagonals = [0] * (2 * len(dampings)) # np.zeros((2*len(dampings),))
+            diagonals[1::2] = dampings
+            R = jnp.diag(jnp.array(diagonals))
+
+            g = []
+            for _ in range(self.N):
+                g.extend([0.0, 1.0])
+            g = jnp.array(g).T
 
             J_pow = jnp.matmul(dh.transpose(), jnp.matmul(J, dh))
             R_pow = jnp.matmul(dh.transpose(), jnp.matmul(- R, dh))
@@ -270,26 +259,28 @@ class DoubleMassSpring(Environment):
         T = np.arange(trajectory.shape[0]) * self._dt
 
         # We want to plot the positions of the masses, not the elongations of the springs
+        qs = trajectory[:, ::2]
         if self.state_measure_spring_elongation:
-            q1 = trajectory[:, 0] + self.y1 * jnp.ones(trajectory[:,0].shape)
-            q2 = trajectory[:, 2] + q1 + self.y2 * jnp.ones(trajectory[:,2].shape)
-        else:
-            q1 = trajectory[:, 0]
-            q2 = trajectory[:, 2]
+            # TODO: generalize
+            y1 = self.y[0]
+            y2 = self.y[1]
+            q1 = trajectory[:, 0] + y1 * jnp.ones(trajectory[:,0].shape)
+            q2 = trajectory[:, 2] + q1 + y2 * jnp.ones(trajectory[:,2].shape)
 
         ax = fig.add_subplot(211)
-        ax.plot(T, q1, linewidth=linewidth, color='blue', label='q1')
-        ax.plot(T, q2, linewidth=linewidth, color='red', label='q2')
+        for i, q in enumerate(qs.T):
+            ax.plot(T, q, linewidth=linewidth, color=self.colors[i], label=f'q{i+1}')
         ax.set_ylabel(r'$q$ $[m]$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
         ax.legend()
 
-        p1 = trajectory[:, 1]
-        p2 = trajectory[:, 3]
+        # p1 = trajectory[:, 1]
+        # p2 = trajectory[:, 3]
+        ps = trajectory[:,1::2]
         ax = fig.add_subplot(212)
-        ax.plot(T, p1, linewidth=linewidth, color='blue', label='p1')
-        ax.plot(T, p2, linewidth=linewidth, color='red', label='p2')
+        for i, p in enumerate(ps.T):
+            ax.plot(T, p, linewidth=linewidth, color=self.colors[i], label=f'p{i}')
         ax.set_ylabel(r'$p$ $[kg\frac{m}{s}]$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
@@ -323,70 +314,57 @@ class DoubleMassSpring(Environment):
 
 def generate_dataset(args, env_seed: int = 501):
     """
-        TODO: 
-            use params dict to initialize env
-            fix hardcoded parts (dataset_type == ...)
+
     """
+    N = args.N
+
+    m = [1.0, 1.0]
+    k = [1.2, 1.5]
+    b = [1.7, 1.5]
+    if N == 3:
+        m.append(1.0); k.append(1.5); b.append(1.6)
+    elif N == 4:
+        m.extend([1.0, 1.0]); k.extend([1.5, 1.4]); b.extend([1.6, 1.5])
+
+    params = {
+        'dt': 0.01,
+        'm': jnp.array(m),
+        'k': jnp.array(k),
+        'b': jnp.array(b),
+        'state_measure_spring_elongation': False,
+        'nonlinear_damping': True,
+        'nonlinear_spring': False,
+    }
 
     def control_policy(state, t, jax_key, aux_data):
+        # TODO: Generalize to inputs on all masses. Right now there is only input on the last mass
         control_name = args.control.lower()
         if control_name == 'random':
             return 1.0 * jax.random.uniform(jax_key, shape=(1,), minval=-1.0, maxval=1.0)
         elif control_name == 'random_continuous':
             coefficients, scales, offsets = aux_data
             f = lambda x : coefficients[0] * jnp.cos(scales[0] * x + offsets[0]) + coefficients[1] * jnp.cos(scales[1] * x + offsets[1]) + coefficients[2] * jnp.cos(scales[2] * x + offsets[2])  
-            return jnp.array([f(t)])
-        elif control_name == 'sin':
-            return 5.0 * jnp.array([jnp.sin(t)])
+            return jnp.concatenate((jnp.zeros(2*N-1), jnp.array(f(t)[0])))
         elif control_name == 'passive':
-            return jnp.array([0]) # zero input
+            return jnp.zeros(2*N)
         else:
             raise RuntimeError('Invalid control flag')
-    
+
     curdir = os.path.abspath(os.path.curdir)
-    save_dir = os.path.abspath(os.path.join(curdir, 'results/double_mass_spring_data'))
+    save_dir = os.path.abspath(os.path.join(curdir, f'results/{N}_mass_spring_data'))
 
     t = time.time()
 
     rng = np.random.default_rng(env_seed)
 
-    # Different datasets to test generalization (given fixed control policy)
-
-    # System 1 parameters
-    params = {
-        'dt': 0.01,
-        'm1': 1.0,
-        'm2': 1.0,
-        'k1': 1.2,
-        'k2': 1.5,
-        'b1': 1.7,
-        'b2': 1.5,
-        'state_measure_spring_elongation': False,
-        'nonlinear_damping': True,
-        'nonlinear_spring': False,
-    }
-
-    # System 2 parameters
-    # params = {
-    #     'dt': 0.01,
-    #     'm1': 2.0,
-    #     'm2': 2.0,
-    #     'k1': 2.4,
-    #     'k2': 3.0,
-    #     'b1': 3.4,
-    #     'b2': 3.0,
-    #     'state_measure_spring_elongation': False,
-    #     'nonlinear_damping': True,
-    #     'nonlinear_spring': False,
-    # }
-
-    x0_init_lb = jnp.array([-.05, -.05, -.05, -.05])
-    x0_init_ub = jnp.array([.0, .0, .0, .0])
+    # TODO: are these initial conditions sensible?
+    x0_init_lb = jnp.array([-.05] * 2 * N)
+    x0_init_ub = jnp.array([.0] * 2 * N)
 
     means = deepcopy(params)
-    means['control_coef'] = 0
-    means['control_scale'] = 0
-    means['control_offset'] = 0
+    means['control_coef'] = jnp.zeros((N,1))
+    means['control_scale'] = jnp.zeros((N,1))
+    means['control_offset'] = jnp.zeros((N,1))
 
     train_scales = {
         'm': 0.1,
@@ -409,72 +387,26 @@ def generate_dataset(args, env_seed: int = 501):
 
     env = None
     if args.type == 'training':
-        env = DoubleMassSpring(**params, random_seed=501)
+        env = NMassSpring(**params, random_seed=501)
         dataset = None
         for _ in range(args.n_train):
-            rng_param = lambda mean, scale, size : rng.uniform(mean - scale, mean + scale, size)
-            env.m1 = rng_param(means['m1'], train_scales['m'], None)
-            env.m2 = rng_param(means['m2'], train_scales['m'], None)
-            env.k1 = rng_param(means['k1'], train_scales['k'], None)
-            env.k2 = rng_param(means['k2'], train_scales['k'], None)
-            env.b1 = rng_param(means['b1'], train_scales['b'], None)
-            env.b2 = rng_param(means['b2'], train_scales['b'], None)
+            def rng_param(key, mean, scale, shape=()):
+                rng_key, key = jax.random.split(key)
+                return jax.random.uniform(rng_key, shape, minval=mean-scale, maxval=mean+scale)
+            
+            env.m = jnp.array(rng_param(key, means['m'], train_scales['m'], (N,)))
+            env.k = jnp.array(rng_param(key, means['k'], train_scales['k'], (N,)))
+            env.b = jnp.array(rng_param(key, means['b'], train_scales['b'], (N,)))
 
-            rng_key, key = jax.random.split(key)
-            coefficients = rng_param(means['control_coef'], train_scales['control_coef'], (3,))
-            scales = rng_param(means['control_scale'], train_scales['control_scale'], (3,))
-            offsets = rng_param(means['control_offset'], train_scales['control_offset'], (3,))
+            control_rng_param = jax.vmap(rng_param, in_axes=(None,0,None,None))
+            coefficients = control_rng_param(key, means['control_coef'], train_scales['control_coef'], (3,))
+            scales = control_rng_param(key, means['control_scale'], train_scales['control_scale'], (3,))
+            offsets = control_rng_param(key, means['control_offset'], train_scales['control_offset'], (3,))
             aux_data = (coefficients, scales, offsets)
 
             env.update_config()
             env.set_control_policy(partial(control_policy, aux_data=aux_data))    
             
-            new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
-                                          num_trajectories=args.n_train,
-                                          x0_init_lb=x0_init_lb,
-                                          x0_init_ub=x0_init_ub)
-            if dataset is not None:
-                dataset = merge_datasets(dataset, new_dataset)
-            else:
-                dataset = new_dataset
-
-        assert os.path.isdir(save_dir)
-        save_path = os.path.join(os.path.abspath(save_dir),  
-            datetime.now().strftime(f'train_{args.n_train}_%H-%M-%S.pkl'))
-        with open(save_path, 'wb') as f:
-            pickle.dump(dataset, f)
-
-    elif args.type == 'validation': 
-        env = DoubleMassSpring(**params, random_seed=501)
-        dataset = None
-        for i in range(args.n_val):
-            rng_key, key = jax.random.split(key)
-
-            def get_validation_range(jax_key, means_key, scales_key, shape=()):
-                assert means_key in means.keys()
-                assert scales_key in train_scales.keys() and scales_key in val_scales.keys()
-                rng_key, jax_key = jax.random.split(jax_key)
-                sampler = lambda a, b, shape: jax.random.choice(rng_key, jnp.array([a, b]), shape)
-                range_one = rng.uniform(means[means_key] + train_scales[scales_key], 
-                                        means[means_key] + train_scales[scales_key] + val_scales[scales_key])
-                range_two = rng.uniform(means[means_key] - train_scales[scales_key] - val_scales[scales_key], 
-                                        means[means_key] - train_scales[scales_key])
-                return sampler(range_one, range_two, shape)
-
-            env.m1          = get_validation_range(rng_key, 'm1', 'm')
-            env.m2          = get_validation_range(rng_key, 'm2', 'm')
-            env.k1          = get_validation_range(rng_key, 'k1', 'k')
-            env.k2          = get_validation_range(rng_key, 'k2', 'k')
-            env.b1          = get_validation_range(rng_key, 'b1', 'b')
-            env.b2          = get_validation_range(rng_key, 'b2', 'b')
-            coefficients    = get_validation_range(rng_key, 'control_coef', 'control_coef', (3,))
-            scales          = get_validation_range(rng_key, 'control_scale', 'control_scale', (3,))
-            offsets         = get_validation_range(rng_key, 'control_offset', 'control_offset', (3,))
-            
-            env.update_config()
-            aux_data = (coefficients, scales, offsets)
-            env.set_control_policy(partial(control_policy, aux_data=aux_data))    
-
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
                                           num_trajectories=1,
                                           x0_init_lb=x0_init_lb,
@@ -484,7 +416,59 @@ def generate_dataset(args, env_seed: int = 501):
             else:
                 dataset = new_dataset
 
-        assert os.path.isdir(save_dir)
+        if not os.path.isdir(save_dir):
+            os.makedirs(save_dir)
+        save_path = os.path.join(os.path.abspath(save_dir),  
+            datetime.now().strftime(f'train_{args.n_train}_%H-%M-%S.pkl'))
+        with open(save_path, 'wb') as f:
+            pickle.dump(dataset, f)
+
+    elif args.type == 'validation': 
+        env = NMassSpring(**params, random_seed=501)
+        dataset = None
+        for i in range(args.n_val):
+            rng_key, key = jax.random.split(key)
+
+            def get_validation_range(jax_key, means_key, scales_key, shape=()):
+                assert means_key in means.keys()
+                assert scales_key in train_scales.keys() and scales_key in val_scales.keys()
+                rng_key, jax_key = jax.random.split(jax_key)
+                N = len(means[means_key])
+                sampler = lambda a, b, shape: jax.random.choice(rng_key, jnp.array([a, b]), shape)
+                validation_range = []
+                for i in range(N):
+                    range_one = rng.uniform(means[means_key][i] + train_scales[scales_key], 
+                                            means[means_key][i] + train_scales[scales_key] + val_scales[scales_key])
+                    range_two = rng.uniform(means[means_key][i] - train_scales[scales_key] - val_scales[scales_key], 
+                                            means[means_key][i] - train_scales[scales_key])
+                    validation_range.append(sampler(range_one, range_two, shape))
+                return validation_range
+            env.m        = jnp.array(get_validation_range(rng_key, 'm', 'm'))
+            env.k        = jnp.array(get_validation_range(rng_key, 'k', 'k'))
+            env.b        = jnp.array(get_validation_range(rng_key, 'b', 'b'))
+            coefficients = jnp.array(get_validation_range(rng_key, 'control_coef', 'control_coef', (3,)))
+            scales       = jnp.array(get_validation_range(rng_key, 'control_scale', 'control_scale', (3,)))
+            offsets      = jnp.array(get_validation_range(rng_key, 'control_offset', 'control_offset', (3,)))
+            
+            env.update_config()
+            aux_data = (coefficients, scales, offsets)
+            print('coefficients', coefficients)
+            print('scales', scales)
+            print('offsets', offsets)
+
+            env.set_control_policy(partial(control_policy, aux_data=aux_data))    
+
+            new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
+                                          num_trajectories=1,
+                                          x0_init_lb=x0_init_lb,
+                                          x0_init_ub=x0_init_ub)
+            if dataset is not None:
+                dataset = merge_datasets(dataset, new_dataset, params=('m', 'k', 'b'))
+            else:
+                dataset = new_dataset
+
+        if not os.path.isdir(save_dir):
+            os.makedirs(save_dir)
         save_path = os.path.join(
             os.path.abspath(save_dir),  
             datetime.now().strftime(
@@ -505,6 +489,7 @@ if __name__ == "__main__":
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser()
+    parser.add_argument('--N', type=int, default=2)
     parser.add_argument('--type', type=str, default='training')
     parser.add_argument('--control', type=str, default='passive')
     parser.add_argument('--n_train', type=int, default=1500)

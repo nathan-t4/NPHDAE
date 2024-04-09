@@ -65,11 +65,14 @@ class DMSDGraphBuilder(GraphBuilder):
         # Control
         self._control = jnp.concatenate((jnp.zeros(control.shape), control), axis=-1)
         # Masses
-        self._m = jnp.array([config['m1'], config['m2']]).T
+        # self._m = jnp.array([config['m1'], config['m2']])
+        self._m = jnp.array(config['m'])
         # Spring constants
-        self._k = jnp.array([config['k1'], config['k2']]).T
+        # self._k = jnp.array([config['k1'], config['k2']])
+        self._k = jnp.array(config['k'])
         # Damper constants
-        self._b = jnp.array([config['b1'], config['b2']]).T
+        # self._b = jnp.array([config['b1'], config['b2']])
+        self._b = jnp.array(config['b'])
         # Absolute position
         self._qs = jnp.stack((state[:,:,0],  # q1
                         state[:,:,2]), # q2

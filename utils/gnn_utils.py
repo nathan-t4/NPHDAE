@@ -1,7 +1,26 @@
 import os
+import flax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-def plot(ts, pred_data, exp_data, aux_data, prefix, plot_dir, prediction='acceleration', show=False):
+
+from typing import Dict, Any
+from clu import metrics
+
+@flax.struct.dataclass
+class TrainMetrics(metrics.Collection):
+    loss: metrics.Average.from_output('loss')
+
+@flax.struct.dataclass
+class EvalMetrics(metrics.Collection):
+    loss: metrics.Average.from_output('loss')
+
+def add_prefix_to_keys(result: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+  """Adds a prefix to the keys of a dict, returning a new dict."""
+  return {f'{prefix}_{key}': val for key, val in result.items()}
+
+def plot_evaluation_curves(
+        ts, pred_data, exp_data, aux_data, prefix, plot_dir, prediction='acceleration', show=False
+    ):
     if not os.path.isdir(plot_dir):
         os.makedirs(plot_dir)
     if prediction == 'acceleration':
@@ -33,7 +52,8 @@ def plot(ts, pred_data, exp_data, aux_data, prefix, plot_dir, prediction='accele
 
         for i in range(2):
             fig, (ax1, ax2) = plt.subplots(2,1)
-            fig.suptitle(f'{prefix}: Mass {i} \n' + rf'$m_{i} = {m[i]}$, $k_{i} = {k[i]}$, $b_{i} = {b[i]}$')
+            title = f"{prefix}: Mass {i} \n $m_{i}$ = " + "{:.2f},".format(m[i]) + f" $k_{i}$ = " + "{:.2f},".format(k[i]) + f" $b_{i}$ = " + "{:.2f}".format(b[i])
+            fig.suptitle(title)
             ax1.set_title(f'Position')
             ax1.plot(ts, pred_data[0,:,i], label='predicted')
             ax1.plot(ts, exp_data[0,:,i], label='expected')

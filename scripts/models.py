@@ -109,7 +109,7 @@ class GraphNet(nn.Module):
             pos_noise = self.noise_std * jax.random.normal(pos_rng, (len(graph.nodes),))
             new_nodes = jnp.column_stack((graph.nodes[:,0].T + pos_noise, graph.nodes[:,1:]))
             graph = graph._replace(nodes=new_nodes)
-            # TODO: add noise to next_u?
+            # Add noise to next_u
             next_u_noise = self.noise_std * jax.random.normal(u_rng, (1,))
             next_u = next_u + next_u_noise
     
