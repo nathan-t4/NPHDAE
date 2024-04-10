@@ -27,8 +27,8 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/double_mass_spring_data/train_1500_0.1_0.5.pkl',
-        'evaluation_data_path': 'results/double_mass_spring_data/val_20_0.5_0.2.pkl',
+        'training_data_path': 'results/2_mass_spring_data/train_1500_0.1_0.5.pkl',
+        'evaluation_data_path': 'results/2_mass_spring_data/val_20_0.1_0.2.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GraphNet',
@@ -181,7 +181,7 @@ def train(config: ml_collections.ConfigDict):
                 raise RuntimeError('Invalid net name')
     
     if paths.dir == None:
-        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/control_1500_{strftime("%H%M%S")}')
+        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/2_msd_{strftime("%H%M%S")}')
         paths.dir = config.paths.dir
             
     log_dir = os.path.join(paths.dir, 'log')

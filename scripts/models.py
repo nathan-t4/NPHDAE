@@ -103,6 +103,7 @@ class GraphNet(nn.Module):
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
+        next_u = next_u[1::2] # get nonzero elements (even indices) corresponding to control input
         if self.training: 
             # Add noise to first node feature (position)
             rng, pos_rng, u_rng = jax.random.split(rng, 3)

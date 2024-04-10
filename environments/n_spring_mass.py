@@ -341,10 +341,19 @@ def generate_dataset(args, env_seed: int = 501):
         control_name = args.control.lower()
         if control_name == 'random':
             return 1.0 * jax.random.uniform(jax_key, shape=(1,), minval=-1.0, maxval=1.0)
-        elif control_name == 'random_continuous':
+        elif control_name == 'one_random_continuous':
             coefficients, scales, offsets = aux_data
-            f = lambda x : coefficients[0] * jnp.cos(scales[0] * x + offsets[0]) + coefficients[1] * jnp.cos(scales[1] * x + offsets[1]) + coefficients[2] * jnp.cos(scales[2] * x + offsets[2])  
-            return jnp.concatenate((jnp.zeros(2*N-1), jnp.array(f(t)[0])))
+            f = lambda x : jnp.sum(coefficients * jnp.cos(scales * x + offsets), axis=1)
+            control = [0] * (2 * N)
+            control[-1] = f(t).squeeze()[-1]
+            return jnp.array(control)
+        elif control_name == 'all_random_continuous':
+            coefficients, scales, offsets = aux_data
+            f = lambda x : jnp.sum(coefficients * jnp.cos(scales * x + offsets), axis=1)
+            control = [0] * (2 * N)
+            control[1::2] = f(t).squeeze()
+            return jnp.array(control)
+        
         elif control_name == 'passive':
             return jnp.zeros(2*N)
         else:
@@ -375,9 +384,9 @@ def generate_dataset(args, env_seed: int = 501):
         'control_offset': 0.5,
     }
     val_scales = {
-        'm': 0.5,
-        'k': 0.5,
-        'b': 0.5,
+        'm': 0.1,
+        'k': 0.1,
+        'b': 0.1,
         'control_coef': 0.2,
         'control_scale': 0.2,
         'control_offset': 0.2,
@@ -390,18 +399,25 @@ def generate_dataset(args, env_seed: int = 501):
         env = NMassSpring(**params, random_seed=501)
         dataset = None
         for _ in range(args.n_train):
-            def rng_param(key, mean, scale, shape=()):
-                rng_key, key = jax.random.split(key)
-                return jax.random.uniform(rng_key, shape, minval=mean-scale, maxval=mean+scale)
+            def rng_param(key, means_key, scales_key, shape=()):
+                N = len(means[means_key])
+                train_range = []
+                for i in range(N):
+                    range_one = rng.uniform(means[means_key][i] - train_scales[scales_key], 
+                                            means[means_key][i] + train_scales[scales_key],
+                                            size=shape)
+                    train_range.append(range_one)
+                return train_range
+                # return jax.random.uniform(rng_key, shape, minval=mean-scale, maxval=mean+scale)
             
-            env.m = jnp.array(rng_param(key, means['m'], train_scales['m'], (N,)))
-            env.k = jnp.array(rng_param(key, means['k'], train_scales['k'], (N,)))
-            env.b = jnp.array(rng_param(key, means['b'], train_scales['b'], (N,)))
+            env.m = jnp.array(rng_param(key, 'm', 'm'))
+            env.k = jnp.array(rng_param(key, 'k', 'k'))
+            env.b = jnp.array(rng_param(key, 'b', 'b'))
 
-            control_rng_param = jax.vmap(rng_param, in_axes=(None,0,None,None))
-            coefficients = control_rng_param(key, means['control_coef'], train_scales['control_coef'], (3,))
-            scales = control_rng_param(key, means['control_scale'], train_scales['control_scale'], (3,))
-            offsets = control_rng_param(key, means['control_offset'], train_scales['control_offset'], (3,))
+            coefficients = jnp.array(rng_param(key, 'control_coef', 'control_coef', (3,)))
+            scales       = jnp.array(rng_param(key, 'control_scale', 'control_scale', (3,)))
+            offsets      = jnp.array(rng_param(key, 'control_offset', 'control_offset', (3,)))
+
             aux_data = (coefficients, scales, offsets)
 
             env.update_config()
@@ -412,14 +428,14 @@ def generate_dataset(args, env_seed: int = 501):
                                           x0_init_lb=x0_init_lb,
                                           x0_init_ub=x0_init_ub)
             if dataset is not None:
-                dataset = merge_datasets(dataset, new_dataset)
+                dataset = merge_datasets(dataset, new_dataset, params=('m', 'k', 'b'))
             else:
                 dataset = new_dataset
 
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
         save_path = os.path.join(os.path.abspath(save_dir),  
-            datetime.now().strftime(f'train_{args.n_train}_%H-%M-%S.pkl'))
+            datetime.now().strftime(f'train_{args.n_train}_{train_scales["m"]}_{train_scales["control_coef"]}_%H-%M-%S.pkl'))
         with open(save_path, 'wb') as f:
             pickle.dump(dataset, f)
 
@@ -427,8 +443,7 @@ def generate_dataset(args, env_seed: int = 501):
         env = NMassSpring(**params, random_seed=501)
         dataset = None
         for i in range(args.n_val):
-            rng_key, key = jax.random.split(key)
-
+            # TODO: there are multiple rng_key
             def get_validation_range(jax_key, means_key, scales_key, shape=()):
                 assert means_key in means.keys()
                 assert scales_key in train_scales.keys() and scales_key in val_scales.keys()
@@ -443,18 +458,15 @@ def generate_dataset(args, env_seed: int = 501):
                                             means[means_key][i] - train_scales[scales_key])
                     validation_range.append(sampler(range_one, range_two, shape))
                 return validation_range
-            env.m        = jnp.array(get_validation_range(rng_key, 'm', 'm'))
-            env.k        = jnp.array(get_validation_range(rng_key, 'k', 'k'))
-            env.b        = jnp.array(get_validation_range(rng_key, 'b', 'b'))
-            coefficients = jnp.array(get_validation_range(rng_key, 'control_coef', 'control_coef', (3,)))
-            scales       = jnp.array(get_validation_range(rng_key, 'control_scale', 'control_scale', (3,)))
-            offsets      = jnp.array(get_validation_range(rng_key, 'control_offset', 'control_offset', (3,)))
+            env.m        = jnp.array(get_validation_range(key, 'm', 'm'))
+            env.k        = jnp.array(get_validation_range(key, 'k', 'k'))
+            env.b        = jnp.array(get_validation_range(key, 'b', 'b'))
+            coefficients = jnp.array(get_validation_range(key, 'control_coef', 'control_coef', (3,)))
+            scales       = jnp.array(get_validation_range(key, 'control_scale', 'control_scale', (3,)))
+            offsets      = jnp.array(get_validation_range(key, 'control_offset', 'control_offset', (3,)))
             
             env.update_config()
             aux_data = (coefficients, scales, offsets)
-            print('coefficients', coefficients)
-            print('scales', scales)
-            print('offsets', offsets)
 
             env.set_control_policy(partial(control_policy, aux_data=aux_data))    
 

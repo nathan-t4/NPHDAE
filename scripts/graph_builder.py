@@ -63,7 +63,8 @@ class DMSDGraphBuilder(GraphBuilder):
         control = data['control_inputs']
         self._dt = config['dt']
         # Control
-        self._control = jnp.concatenate((jnp.zeros(control.shape), control), axis=-1)
+        # self._control = jnp.concatenate((jnp.zeros(control.shape), control), axis=-1)
+        self._control = jnp.array(control)
         # Masses
         # self._m = jnp.array([config['m1'], config['m2']])
         self._m = jnp.array(config['m'])
@@ -121,7 +122,7 @@ class DMSDGraphBuilder(GraphBuilder):
         self.senders = jnp.array([0])
         self.receivers = jnp.array([1])
     
-    @jax.jit
+    # @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         """ Need to make sure t > self._vel_history! """
         match self._mode:
@@ -131,7 +132,7 @@ class DMSDGraphBuilder(GraphBuilder):
                 vs_history = jnp.asarray(vs_history).T
 
                 control_history = []
-                [control_history.append(self._control[traj_idx, t-k]) for k in reversed(range(self._control_history))]
+                [control_history.append(self._control[traj_idx, t-k, 1::2]) for k in reversed(range(self._control_history))]
                 control_history = jnp.asarray(control_history).T
                 # Node features are current position, velocity history, current velocity
                 nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history, control_history))
