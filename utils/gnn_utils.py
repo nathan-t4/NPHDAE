@@ -30,6 +30,8 @@ def plot_evaluation_curves(
 
         q0 = jnp.round(exp_data[0,0], 3)
         a0 = jnp.round(exp_data[1,0], 3)
+
+        N = len(m)
         """ Error Plot """
         # fig, (ax1, ax2) = plt.subplots(2,1)
         # fig.suptitle(f'{prefix}: Eval Error \n q0 = {q0}, a0 = {a0}')
@@ -50,7 +52,7 @@ def plot_evaluation_curves(
         # fig.savefig(os.path.join(plot_dir, f'{prefix}_error.png'))
         # plt.show() if show else plt.close()
 
-        for i in range(2):
+        for i in range(N):
             fig, (ax1, ax2) = plt.subplots(2,1)
             title = f"{prefix}: Mass {i} \n $m_{i}$ = " + "{:.2f},".format(m[i]) + f" $k_{i}$ = " + "{:.2f},".format(k[i]) + f" $b_{i}$ = " + "{:.2f}".format(b[i])
             fig.suptitle(title)

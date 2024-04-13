@@ -174,10 +174,9 @@ class NMassSpring(Environment):
             g = []
             for _ in range(self.N):
                 g.extend([0.0, 1.0])
-            g = jnp.array(g).T
+            g = jnp.array(g)
 
-
-            return jnp.matmul(J - R, dh) + jnp.matmul(g, control_input) # TODO: what is this?
+            return jnp.matmul(J - R, dh) + g * control_input
 
         def get_power(x, u):
             """
@@ -203,18 +202,18 @@ class NMassSpring(Environment):
             else:
                 dampings = self.b
 
-            diagonals = [0] * (2 * len(dampings)) # np.zeros((2*len(dampings),))
+            diagonals = [0] * (2 * self.N)
             diagonals[1::2] = dampings
             R = jnp.diag(jnp.array(diagonals))
 
             g = []
             for _ in range(self.N):
                 g.extend([0.0, 1.0])
-            g = jnp.array(g).T
+            g = jnp.array(g)
 
             J_pow = jnp.matmul(dh.transpose(), jnp.matmul(J, dh))
             R_pow = jnp.matmul(dh.transpose(), jnp.matmul(- R, dh))
-            g_pow = jnp.matmul(dh.transpose(), jnp.matmul(g, u))
+            g_pow = jnp.matmul(dh.transpose(), g * u)
 
             dh_dt = J_pow + R_pow + g_pow
 
@@ -264,7 +263,7 @@ class NMassSpring(Environment):
             # TODO: generalize
             y1 = self.y[0]
             y2 = self.y[1]
-            q1 = trajectory[:, 0] + y1 * jnp.ones(trajectory[:,0].shape)
+            q1 = trajectory[:, 0] + y1 * jnp.ones(trajectory[:,0].shape)# np.zeros((2*len(dampings),))
             q2 = trajectory[:, 2] + q1 + y2 * jnp.ones(trajectory[:,2].shape)
 
         ax = fig.add_subplot(211)
@@ -322,9 +321,17 @@ def generate_dataset(args, env_seed: int = 501):
     k = [1.2, 1.5]
     b = [1.7, 1.5]
     if N == 3:
-        m.append(1.0); k.append(1.5); b.append(1.6)
+        m.append(1.0)
+        k.append(1.5)
+        b.append(1.6)
     elif N == 4:
-        m.extend([1.0, 1.0]); k.extend([1.5, 1.4]); b.extend([1.6, 1.5])
+        m.extend([1.0, 1.0])
+        k.extend([1.5, 1.4])
+        b.extend([1.6, 1.5])
+    elif N == 5:
+        m.extend([1.0, 1.0, 1.0])
+        k.extend([1.5, 1.4, 1.7])
+        b.extend([1.6, 1.5, 1.2])
 
     params = {
         'dt': 0.01,
@@ -387,9 +394,9 @@ def generate_dataset(args, env_seed: int = 501):
         'm': 0.1,
         'k': 0.1,
         'b': 0.1,
-        'control_coef': 0.2,
-        'control_scale': 0.2,
-        'control_offset': 0.2,
+        'control_coef': 0.5,
+        'control_scale': 0.5,
+        'control_offset': 0.5,
     }
 
     key = jax.random.key(env_seed)
@@ -419,7 +426,6 @@ def generate_dataset(args, env_seed: int = 501):
             offsets      = jnp.array(rng_param(key, 'control_offset', 'control_offset', (3,)))
 
             aux_data = (coefficients, scales, offsets)
-
             env.update_config()
             env.set_control_policy(partial(control_policy, aux_data=aux_data))    
             
@@ -435,7 +441,8 @@ def generate_dataset(args, env_seed: int = 501):
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
         save_path = os.path.join(os.path.abspath(save_dir),  
-            datetime.now().strftime(f'train_{args.n_train}_{train_scales["m"]}_{train_scales["control_coef"]}_%H-%M-%S.pkl'))
+            datetime.now().strftime(
+                f'train_{args.n_train}_{train_scales["m"]}_{train_scales["control_coef"]}_{args.control.lower()}.pkl'))
         with open(save_path, 'wb') as f:
             pickle.dump(dataset, f)
 
@@ -443,27 +450,27 @@ def generate_dataset(args, env_seed: int = 501):
         env = NMassSpring(**params, random_seed=501)
         dataset = None
         for i in range(args.n_val):
-            # TODO: there are multiple rng_key
             def get_validation_range(jax_key, means_key, scales_key, shape=()):
                 assert means_key in means.keys()
                 assert scales_key in train_scales.keys() and scales_key in val_scales.keys()
-                rng_key, jax_key = jax.random.split(jax_key)
                 N = len(means[means_key])
-                sampler = lambda a, b, shape: jax.random.choice(rng_key, jnp.array([a, b]), shape)
+                sampler = lambda a, b, shape: rng.choice(np.array([a, b]), shape)
                 validation_range = []
                 for i in range(N):
+                    jax_key, rng_key = jax.random.split(jax_key)
                     range_one = rng.uniform(means[means_key][i] + train_scales[scales_key], 
                                             means[means_key][i] + train_scales[scales_key] + val_scales[scales_key])
                     range_two = rng.uniform(means[means_key][i] - train_scales[scales_key] - val_scales[scales_key], 
                                             means[means_key][i] - train_scales[scales_key])
                     validation_range.append(sampler(range_one, range_two, shape))
                 return validation_range
-            env.m        = jnp.array(get_validation_range(key, 'm', 'm'))
-            env.k        = jnp.array(get_validation_range(key, 'k', 'k'))
-            env.b        = jnp.array(get_validation_range(key, 'b', 'b'))
-            coefficients = jnp.array(get_validation_range(key, 'control_coef', 'control_coef', (3,)))
-            scales       = jnp.array(get_validation_range(key, 'control_scale', 'control_scale', (3,)))
-            offsets      = jnp.array(get_validation_range(key, 'control_offset', 'control_offset', (3,)))
+            keys = jax.random.split(key, 7)
+            env.m        = jnp.array(get_validation_range(keys[1], 'm', 'm'))
+            env.k        = jnp.array(get_validation_range(keys[2], 'k', 'k'))
+            env.b        = jnp.array(get_validation_range(keys[3], 'b', 'b'))
+            coefficients = jnp.array(get_validation_range(keys[4], 'control_coef', 'control_coef', (3,)))
+            scales       = jnp.array(get_validation_range(keys[5], 'control_scale', 'control_scale', (3,)))
+            offsets      = jnp.array(get_validation_range(keys[6], 'control_offset', 'control_offset', (3,)))
             
             env.update_config()
             aux_data = (coefficients, scales, offsets)
@@ -484,7 +491,7 @@ def generate_dataset(args, env_seed: int = 501):
         save_path = os.path.join(
             os.path.abspath(save_dir),  
             datetime.now().strftime(
-                f"val_{args.n_val}_{val_scales['m']}_{val_scales['control_coef']}.pkl")
+                f"val_{args.n_val}_{val_scales['m']}_{val_scales['control_coef']}_{args.control.lower()}.pkl")
         )
         with open(save_path, 'wb') as f:
             pickle.dump(dataset, f)

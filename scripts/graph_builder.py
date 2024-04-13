@@ -42,7 +42,7 @@ class GraphBuilder():
         raise NotImplementedError
     
 @register_pytree_node_class
-class DMSDGraphBuilder(GraphBuilder):
+class MSDGraphBuilder(GraphBuilder):
     """ 
         Double Mass Spring Damper (DMSD) 
     """
@@ -66,24 +66,21 @@ class DMSDGraphBuilder(GraphBuilder):
         # self._control = jnp.concatenate((jnp.zeros(control.shape), control), axis=-1)
         self._control = jnp.array(control)
         # Masses
-        # self._m = jnp.array([config['m1'], config['m2']])
+        # self._m = jnp.array([config['m1'], config['m2']]).T
         self._m = jnp.array(config['m'])
         # Spring constants
-        # self._k = jnp.array([config['k1'], config['k2']])
+        # self._k = jnp.array([config['k1'], config['k2']]).T
         self._k = jnp.array(config['k'])
         # Damper constants
-        # self._b = jnp.array([config['b1'], config['b2']])
+        # self._b = jnp.array([config['b1'], config['b2']]).T
         self._b = jnp.array(config['b'])
         # Absolute position
-        self._qs = jnp.stack((state[:,:,0],  # q1
-                        state[:,:,2]), # q2
-                        axis=-1)
+        self._qs = jnp.array(state[:,:,::2])
         # Relative positions
-        self._dqs = jnp.expand_dims(self._qs[:,:,1] - self._qs[:,:,0], axis=-1)
+        # self._dqs = jnp.expand_dims(self._qs[:,:,1] - self._qs[:,:,0], axis=-1)
+        self._dqs = jnp.diff(self._qs, axis=-1)
         # Conjugate momenta
-        self._ps = jnp.stack((state[:,:,1],  # p1
-                        state[:,:,3]), # p2
-                        axis=-1)
+        self._ps = jnp.array(state[:,:,1::2])
         # Velocities
         self._vs = self._ps / jnp.expand_dims(self._m, 1)  # reshape m to fit shape of velocity
         # Accelerations
@@ -119,10 +116,10 @@ class DMSDGraphBuilder(GraphBuilder):
     def _setup_graph_params(self):
         self.n_node = jnp.array([jnp.shape(self._qs)[-1]])
         self.n_edge = jnp.array([jnp.shape(self._dqs)[-1]])
-        self.senders = jnp.array([0])
-        self.receivers = jnp.array([1])
+        self.senders = jnp.arange(0, jnp.shape(self._qs)[-1]-1)
+        self.receivers = jnp.arange(1, jnp.shape(self._qs)[-1])
     
-    # @jax.jit
+    @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         """ Need to make sure t > self._vel_history! """
         match self._mode:
@@ -139,7 +136,8 @@ class DMSDGraphBuilder(GraphBuilder):
                 # Edge features are relative positions
                 edges = self._dqs[traj_idx, t].reshape((-1,1))
                 # Global features are time, q0, v0, a0 # TODO: try global features = None
-                global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
+                # global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
+                global_context = None
             case 'position':
                 raise NotImplementedError
             
@@ -173,7 +171,7 @@ class DMSDGraphBuilder(GraphBuilder):
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         del children
-        obj = object.__new__(DMSDGraphBuilder)
+        obj = object.__new__(MSDGraphBuilder)
         obj._path                   = aux_data[0]
         obj._add_undirected_edges   = aux_data[1]
         obj._add_self_loops         = aux_data[2]

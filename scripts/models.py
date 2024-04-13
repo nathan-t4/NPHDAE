@@ -7,6 +7,7 @@ import jax.numpy as jnp
 
 from typing import Sequence
 from ml_collections import FrozenConfigDict
+from utils.graph_utils import *
 
 class MLP(nn.Module):
     feature_sizes: Sequence[int]
@@ -69,7 +70,7 @@ class NeuralODE(nn.Module):
                 
         return solution.ys
 
-class GraphNet(nn.Module):
+class GraphNetworkSimulator(nn.Module):
     """ 
         EncodeProcessDecode GN 
     """
@@ -105,27 +106,27 @@ class GraphNet(nn.Module):
     def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
         next_u = next_u[1::2] # get nonzero elements (even indices) corresponding to control input
         if self.training: 
-            # Add noise to first node feature (position)
+            # Add noise to current position (first node feature)
             rng, pos_rng, u_rng = jax.random.split(rng, 3)
             pos_noise = self.noise_std * jax.random.normal(pos_rng, (len(graph.nodes),))
             new_nodes = jnp.column_stack((graph.nodes[:,0].T + pos_noise, graph.nodes[:,1:]))
             graph = graph._replace(nodes=new_nodes)
-            # Add noise to next_u
-            next_u_noise = self.noise_std * jax.random.normal(u_rng, (1,))
+            # Add noise to control input at current time-step (next_u)
+            next_u_noise = self.noise_std * jax.random.normal(u_rng, (len(next_u),))
             next_u = next_u + next_u_noise
     
         cur_pos = graph.nodes[:,0]
         if self.prediction == 'acceleration':
             cur_vel = graph.nodes[:,self.vel_history]
-            prev_vel = graph.nodes[:,1:self.vel_history+1] # include cur_vel
-            cur_u = graph.nodes[:,-1]
-            prev_u = graph.nodes[:,self.vel_history+1:] # include cur_u
+            prev_vel = graph.nodes[:,1:self.vel_history+1] # includes current velocity
+            prev_u = graph.nodes[:,self.vel_history+1:] # includes current u
         elif self.prediction == 'position':
             prev_pos = graph.nodes[:,1:self.vel_history+1]
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
-            input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            # input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((nodes, senders, receivers), axis=1)
             model = MLP(feature_sizes=node_feature_sizes, 
                         activation=self.activation, 
                         dropout_rate=self.dropout_rate, 
@@ -135,7 +136,8 @@ class GraphNet(nn.Module):
 
         def update_edge_fn(edges, senders, receivers, globals_):
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
-            input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            # input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((edges, senders, receivers), axis=1)
             model = MLP(feature_sizes=edge_feature_sizes,
                         activation=self.activation,
                         dropout_rate=self.dropout_rate, 
@@ -164,6 +166,9 @@ class GraphNet(nn.Module):
         if not self.use_edge_model:
             update_edge_fn = None
 
+        if graph.globals is None:
+            update_global_fn = None
+
         num_nets = self.num_mp_steps if not self.shared_params else 1
         processor_nets = []
         for _ in range(num_nets): # TODO replace with scan
@@ -191,11 +196,18 @@ class GraphNet(nn.Module):
             def force(t, args):
                 del t, args
                 normalized_acc = graph.nodes
+                # M = jnp.diag(masses)
+                # normalized_u_c = A @ M @ normalized_acc # need norm_stats for all composed subsystems 
+                # pred_uc = 
+                # pred_acc = pred_acc - u_c
                 pred_acc = normalized_acc * self.norm_stats.acceleration.std + self.norm_stats.acceleration.mean
                 return pred_acc
             
             def newtons_equation_of_motion(t, y, args):
-                """ y = = [pos, vel] = [x0, x1, v0, v1] """
+                """
+                    TODO: generalize to n-dim systems
+                    y = = [pos, vel] = [x0, x1, v0, v1] 
+                """
                 A = jnp.array([[0, 0, 1, 0], 
                                [0, 0, 0, 1], 
                                [0, 0, 0, 0], 
@@ -243,13 +255,14 @@ class GraphNet(nn.Module):
                 next_edges = jnp.concatenate((next_edges, next_edges), axis=0)
             
             if self.add_self_loops:
-                next_edges = jnp.concatenate((next_edges, jnp.zeros((2, 1))), axis=0)
+                N = len(next_u) # num of masses
+                next_edges = jnp.concatenate((next_edges, jnp.zeros((N, 1))), axis=0)
             
             if self.use_edge_model:
                 graph = graph._replace(nodes=next_nodes, edges=next_edges)
             else:
                 graph = graph._replace(nodes=next_nodes)   
-            # graph = graph._replace(nodes=next_nodes)
+
             return graph
 
         # Encode features to latent space
@@ -272,8 +285,6 @@ class GraphNet(nn.Module):
 
         # Decoder post-processor
         processed_graph = decoder_postprocessor(processed_graph)
-
-        # jax.debug.print('after {}', processed_graph.nodes.shape)
 
         return processed_graph
     

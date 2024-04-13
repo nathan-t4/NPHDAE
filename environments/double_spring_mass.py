@@ -190,6 +190,8 @@ class DoubleMassSpring(Environment):
 
             g = jnp.array([[0.0, 0.0, 0.0, 1.0]]).transpose()
 
+            jax.debug.print('g u {}', jnp.matmul(g, control_input))
+
             return jnp.matmul(J - R, dh) + jnp.matmul(g, control_input)
 
         def get_power(x, u):
@@ -430,7 +432,7 @@ def generate_dataset(args, env_seed: int = 501):
             env.set_control_policy(partial(control_policy, aux_data=aux_data))    
             
             new_dataset = env.gen_dataset(trajectory_num_steps=1500, 
-                                          num_trajectories=args.n_train,
+                                          num_trajectories=1,
                                           x0_init_lb=x0_init_lb,
                                           x0_init_ub=x0_init_ub)
             if dataset is not None:
