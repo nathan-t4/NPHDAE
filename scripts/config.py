@@ -5,12 +5,13 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/5_mass_spring_data/train_3000_0.1_0.5_all_random_continuous.pkl',
-        'evaluation_data_path': 'results/5_mass_spring_data/val_20_0.1_0.5_all_random_continuous.pkl',
+        'training_data_path': 'results/2_mass_spring_data/train_3000_0.1_0.5_all_random_continuous.pkl',
+        'evaluation_data_path': 'results/2_mass_spring_data/val_20_0.1_0.5_all_random_continuous.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GNS',
-        'trial_name': '5_msd_no_globals_3000',
+        'trial_name': '2_msd_no_globals_3000_state',
+        'loss_function': 'state',
         'num_epochs': int(5e2),
         'min_epochs': int(30),
         'batch_size': 2,
@@ -34,7 +35,7 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
         'control_history': 5,
         'num_mp_steps': 1, # too big causes oversmoothing
         'noise_std': 0.0003,
-        'latent_size': 16,
+        'latent_size': 16, # use 32 for quintuple mass spring damper, other <5 use 16
         'hidden_layers': 2,
         'activation': 'relu',
         'use_edge_model': True,

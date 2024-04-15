@@ -288,6 +288,40 @@ class GraphNetworkSimulator(nn.Module):
 
         return processed_graph
     
+class CoupledGraphNetworkSimulator(nn.Module):
+    """ 
+        Model-based composition of Graph Network Simulators
+    """
+    GNS_one: GraphNetworkSimulator
+    GNS_two: GraphNetworkSimulator
+
+    @nn.compact
+    def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
+        """
+            TODO:
+            - should graphs be merged? or graph_one and graph_two
+            - get A_cpl from senders and receivers of graph
+            - get graph -> add extra inputs u_c -> past each graph through its corresponding GNS -> get accelerations
+        """
+        next_graph_one = self.GNS_one(graph_one, next_u_one)
+        next_graph_two = self.GNS_two(graph_two, next_u_two)
+
+        N1 = len(graph_one.nodes)
+        N2 = len(graph_two.nodes)
+
+        nominal_acc = jnp.array([next_graph_one.nodes[:,-1], next_graph_two.nodes[:,-1]])
+        M = jnp.diag(jnp.concatenate((M1, M2), axis=0))
+        normalized_u_c = sum([A @ M @ nominal_acc for A in A_family]) # need norm_stats for all composed subsystems 
+        pred_uc = nominal_acc
+        pred_uc[:N1] = nominal_acc[:N1] * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
+        pred_uc[N1:] = nominal_acc[N1:] * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
+        F = next_u - pred_uc
+
+        next_graph_one = self.GNS_one(graph_one, F[:N1])
+        next_graph_two = self.GNS_two(graph_two, F[N1:])
+
+        return next_graph_one, next_graph_two
+
 class GNODE(nn.Module):
     """ 
         EncodeProcessDecode GNODE

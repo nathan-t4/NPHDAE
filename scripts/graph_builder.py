@@ -135,8 +135,10 @@ class MSDGraphBuilder(GraphBuilder):
                 nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history, control_history))
                 # Edge features are relative positions
                 edges = self._dqs[traj_idx, t].reshape((-1,1))
-                # Global features are time, q0, v0, a0 # TODO: try global features = None
+                # Global features are time, q0, v0, a0
                 # global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
+            
+                # Global features are None
                 global_context = None
             case 'position':
                 raise NotImplementedError

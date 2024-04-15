@@ -193,20 +193,33 @@ def train(config: ml_collections.ConfigDict):
         rng, net_rng = jax.random.split(rng)
 
         def loss_fn(params, batch_graphs, batch_data):
-            batch_targets, batch_control = batch_data
-            pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
-            if net_params.prediction == 'acceleration':
-                predictions = pred_graphs.nodes[:,:,-1]
-            elif net_params.prediction == 'position':
-                predictions = pred_graphs.nodes[:,:,0]
-            loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
+            if training_params.loss_function == 'acceleration':
+                batch_targets, batch_control = batch_data
+                pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
+                predictions = pred_graphs.nodes[:,:,-1] 
+                loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
+            if training_params.loss_function == 'state':
+                batch_pos, batch_vel, batch_control = batch_data
+                pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
+                pos_predictions = pred_graphs.nodes[:,:,0]
+                vel_predictions = pred_graphs.nodes[:,:,net_params.vel_history]
+                loss = int(1e6) * (optax.l2_loss(predictions=pos_predictions, targets=batch_pos).mean() \
+                     + optax.l2_loss(predictions=vel_predictions, targets=batch_vel).mean())
+            elif training_params.loss_function == 'position':
+                # TODO
+                pass
             return loss
 
         def train_batch(state, trajs, t0s):
             tfs = t0s + time_offset
-            batch_accs = train_gb._accs[trajs, tfs]
             batch_control = train_gb._control[trajs, tfs]
-            batch_data = (batch_accs, batch_control)
+            if training_params.loss_function == 'acceleration':
+                batch_accs = train_gb._accs[trajs, tfs]
+                batch_data = (batch_accs, batch_control)
+            elif training_params.loss_function == 'state':
+                batch_pos = train_gb._qs[trajs, tfs]
+                batch_vel = train_gb._vs[trajs, tfs]
+                batch_data = (batch_pos, batch_vel, batch_control)
             graphs = train_gb.get_graph_batch(trajs, t0s)
             # batch_graph = pytrees_stack(graphs) # explicitly batch graphs
             loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data)
