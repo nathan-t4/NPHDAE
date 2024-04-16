@@ -5,7 +5,7 @@ import flax
 import flax.linen as nn
 import jax.numpy as jnp
 
-from typing import Sequence
+from typing import Sequence, Callable
 from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
 
@@ -292,35 +292,84 @@ class CoupledGraphNetworkSimulator(nn.Module):
     """ 
         Model-based composition of Graph Network Simulators
     """
+    compose_graph: Callable[[jraph.GraphsTuple, jraph.GraphsTuple, jraph.GraphsTuple, jnp.array, jnp.array], jraph.GraphsTuple]
+    decompose_graph: Callable[[jraph.GraphsTuple, jnp.array, jnp.array], tuple[jraph.GraphsTuple, jraph.GraphsTuple, jraph.GraphsTuple]]
     GNS_one: GraphNetworkSimulator
     GNS_two: GraphNetworkSimulator
+    new_receivers: jnp.array
+    new_senders: jnp.array
+    A_cpl: jnp.array
 
     @nn.compact
-    def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
+    def __call__(
+        self, composed_graph: jraph.GraphsTuple, composed_next_u: jnp.array, composed_mass: jnp.array, rng
+        ) -> jraph.GraphsTuple:
         """
             TODO:
             - should graphs be merged? or graph_one and graph_two
             - get A_cpl from senders and receivers of graph
             - get graph -> add extra inputs u_c -> past each graph through its corresponding GNS -> get accelerations
-        """
-        next_graph_one = self.GNS_one(graph_one, next_u_one)
-        next_graph_two = self.GNS_two(graph_two, next_u_two)
 
+                       delta y
+                      <-------> 
+            ||---0---1  o---o  2---3---4
+        """
+        graph_one, graph_c, graph_two = self.decompose_graph(composed_graph, self.new_receivers, self.new_senders)
         N1 = len(graph_one.nodes)
         N2 = len(graph_two.nodes)
 
-        nominal_acc = jnp.array([next_graph_one.nodes[:,-1], next_graph_two.nodes[:,-1]])
-        M = jnp.diag(jnp.concatenate((M1, M2), axis=0))
-        normalized_u_c = sum([A @ M @ nominal_acc for A in A_family]) # need norm_stats for all composed subsystems 
-        pred_uc = nominal_acc
-        pred_uc[:N1] = nominal_acc[:N1] * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
-        pred_uc[N1:] = nominal_acc[N1:] * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
-        F = next_u - pred_uc
+        jax.debug.print('senders composed {}', composed_graph.senders)
 
-        next_graph_one = self.GNS_one(graph_one, F[:N1])
-        next_graph_two = self.GNS_two(graph_two, F[N1:])
+        jax.debug.print('receivers composed {}', composed_graph.receivers)
 
-        return next_graph_one, next_graph_two
+        jax.debug.print('senders: 1 {} and c {} and 2 {}', graph_one.senders, graph_c.senders, graph_two.senders)
+
+        jax.debug.print('receivers: 1 {} and c {} and 2 {}', graph_one.receivers, graph_c.receivers, graph_two.receivers)
+
+        next_u_1 = composed_next_u[:2*N1]
+        next_u_2 = composed_next_u[2*N1:]
+
+        jax.debug.print('u_1 {} u_2 {}', next_u_1, next_u_2)
+
+        next_graph_one = self.GNS_one(graph_one, next_u_1, rng)
+        next_graph_two = self.GNS_two(graph_two, next_u_2, rng)
+
+        # nominal normalized accelerations
+        nominal_acc_one = next_graph_one.nodes[:,-1]
+        nominal_acc_two = next_graph_two.nodes[:,-1]
+
+        # rescale accelerations
+        acc_one = nominal_acc_one * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
+        acc_two = nominal_acc_two * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
+        combined_acc = jnp.concatenate((acc_one, acc_two), axis=0).T
+
+        jax.debug.print('combined acc {}', combined_acc)
+
+        jax.debug.print('A_cpl {}', self.A_cpl)
+
+        # calculate u_c (TODO: predict u_c! is the new edge a spring? what is the spring constant?)
+        M = jnp.diag(composed_mass) # assume masses are known
+        u_add = self.A_cpl @ M @ combined_acc
+
+        # get control inputs for composed system
+        u_c = [0] * (2 * (N1+N2))
+        u_c[1::2] = u_add
+        u_c = jnp.array(u_c)
+
+        jax.debug.print('u_c {}', u_c)
+
+
+        F_1 = next_u_1 - u_c[:2*N1]
+        F_2 = next_u_2 - u_c[2*N1:]
+
+        jax.debug.print('F_1 {} F_2 {}', F_1, F_2)
+
+        # predict composed system dynamics
+        next_graph_one = self.GNS_one(graph_one, F_1, rng)
+        next_graph_two = self.GNS_two(graph_two, F_2, rng)
+
+        next_graph = self.compose_graph(next_graph_one, graph_c, next_graph_two, self.new_receivers, self.new_senders)
+        return next_graph
 
 class GNODE(nn.Module):
     """ 
