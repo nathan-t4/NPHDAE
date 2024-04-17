@@ -317,10 +317,15 @@ def generate_dataset(args, env_seed: int = 501):
     """
     N = args.N
 
-    m = [1.0, 1.0]
-    k = [1.2, 1.5]
-    b = [1.7, 1.5]
-    if N == 3:
+    m = [1.0]
+    k = [1.2]
+    b = [1.7]
+    
+    if N == 2:
+        m = [1.0, 1.0]
+        k = [1.2, 1.5]
+        b = [1.7, 1.5]
+    elif N == 3:
         m.append(1.0)
         k.append(1.5)
         b.append(1.6)
