@@ -333,13 +333,16 @@ def generate_dataset(args, env_seed: int = 501):
         k.extend([1.5, 1.4, 1.7])
         b.extend([1.6, 1.5, 1.2])
 
+    """ Set damping constant to zero """
+    b = [0] * N
+
     params = {
         'dt': 0.01,
         'm': jnp.array(m),
         'k': jnp.array(k),
         'b': jnp.array(b),
         'state_measure_spring_elongation': False,
-        'nonlinear_damping': True,
+        'nonlinear_damping': False, # True
         'nonlinear_spring': False,
     }
 
@@ -374,8 +377,8 @@ def generate_dataset(args, env_seed: int = 501):
     rng = np.random.default_rng(env_seed)
 
     # TODO: are these initial conditions sensible?
-    x0_init_lb = jnp.array([-.05] * 2 * N)
-    x0_init_ub = jnp.array([.0] * 2 * N)
+    # x0_init_lb = jnp.array([-.05] * 2 * N)
+    # x0_init_ub = jnp.array([.0] * 2 * N)
 
     means = deepcopy(params)
     means['control_coef'] = jnp.zeros((N,1))
@@ -385,7 +388,8 @@ def generate_dataset(args, env_seed: int = 501):
     train_scales = {
         'm': 0.1,
         'k': 0.1,
-        'b': 0.1,
+        # 'b': 0.1,
+        'b': 0.0,
         'control_coef': 0.5,
         'control_scale': 0.5,
         'control_offset': 0.5,
@@ -393,7 +397,8 @@ def generate_dataset(args, env_seed: int = 501):
     val_scales = {
         'm': 0.1,
         'k': 0.1,
-        'b': 0.1,
+        # 'b': 0.1,
+        'b': 0.0,
         'control_coef': 0.5,
         'control_scale': 0.5,
         'control_offset': 0.5,
@@ -404,6 +409,18 @@ def generate_dataset(args, env_seed: int = 501):
     env = None
     if args.type == 'training':
         env = NMassSpring(**params, random_seed=501)
+    
+        y = sum([jnp.concatenate((jnp.zeros((i)), jnp.array(env.y[i:]))) for i in range(len(env.y))])
+
+        x0_init_lb = [0] * 2 * N
+        x0_init_lb[::2] = 0.5 * y
+        x0_init_lb = jnp.array(x0_init_lb)
+
+        x0_init_ub = [0] * 2 * N
+        x0_init_ub[::2] = 1.5 * y
+        x0_init_ub = jnp.array(x0_init_ub)
+
+
         dataset = None
         for _ in range(args.n_train):
             def rng_param(key, means_key, scales_key, shape=()):
@@ -448,6 +465,17 @@ def generate_dataset(args, env_seed: int = 501):
 
     elif args.type == 'validation': 
         env = NMassSpring(**params, random_seed=501)
+
+        y = sum([jnp.concatenate((jnp.zeros((i)), env.y[i:])) for i in range(len(env.y))])
+
+        x0_init_lb = [0] * 2 * N
+        x0_init_lb[::2] = 0.5 * y
+        x0_init_lb = jnp.array(x0_init_lb)
+
+        x0_init_ub = [0] * 2 * N
+        x0_init_ub[::2] = 1.5 * y
+        x0_init_ub = jnp.array(x0_init_ub)
+
         dataset = None
         for i in range(args.n_val):
             def get_validation_range(jax_key, means_key, scales_key, shape=()):

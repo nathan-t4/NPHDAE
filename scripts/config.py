@@ -5,12 +5,12 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict()
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/3_mass_spring_data/train_3000_0.1_0.5_all_random_continuous.pkl',
-        'evaluation_data_path': 'results/3_mass_spring_data/val_20_0.1_0.5_all_random_continuous.pkl',
+        'training_data_path': 'results/2_mass_spring_data/train_3000_0.1_0.5_passive.pkl',
+        'evaluation_data_path': 'results/2_mass_spring_data/val_20_0.1_0.5_passive.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GNS',
-        'trial_name': '3_msd_no_globals_3000_state',
+        'trial_name': '2_msd_no_globals_3000_passive',
         'loss_function': 'acceleration',
         'num_epochs': int(5e2),
         'min_epochs': int(30),

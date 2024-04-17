@@ -256,7 +256,8 @@ def eval_composite_GNS(config: ml_collections.ConfigDict):
     # hard-coded coupling adjacency matrix
     new_receivers = jnp.array([1, 2])
     new_senders = jnp.array([2, 1])
-    A_cpl = get_A_cpl(new_receivers, new_senders, len(gb_composed._m[0]))
+    num_masses = len(gb_composed._m[0])
+    A_cpl = get_A_cpl(new_receivers, new_senders, num_masses)
 
     # Initialized composite GNS
     eval_net_composed = CoupledGraphNetworkSimulator(compose_graph=compose_graph,
@@ -283,7 +284,10 @@ def eval_composite_GNS(config: ml_collections.ConfigDict):
     )
 
     def rollout(state: TrainState, traj_idx: int = 0, t0: int = 0):
-        # assert rollout_timesteps, num_mp_steps are the same for training_params_one and training_params_two
+        """
+            rollout 
+            - get graph
+        """
         tf_idxs = (t0 + jnp.arange(eval_params.rollout_timesteps // num_mp_steps)) * num_mp_steps
         t0 = round(vel_history /  num_mp_steps) * num_mp_steps # min of one and two?
         tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + num_mp_steps, max=1500))
