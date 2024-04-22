@@ -2,89 +2,182 @@ import os
 import pickle
 import jax
 import jax.numpy as jnp
+import numpy as np
+from copy import deepcopy
+from functools import partial
 from tqdm import tqdm
 from helpers.integrator_factory import integrator_factory
+from environments.utils import *
 
-save_path = os.path.join(os.curdir, 'results/free_spring/' + 'test.pkl')
+def generate_trajectory(args, seed=0):
+    rng = np.random.default_rng(seed)
 
-dataset = {}
+    save_dir = os.path.join(os.curdir, 'results/free_spring/')
+    if not os.path.isdir(save_dir):
+        os.makedirs(save_dir)
 
-num_trajectories = 20
-trajectory_num_steps = 1500
-config = {
-    'dt': 0.001,
-    'm': [1.0, 1.0],
-    'k': 1.0,
-    'b': 0, # TODO
-    'y': 1.0,
-}
-N = len(config['m']) # num masses
+    default_config = {
+        'dt': 0.01,
+        'm': [1.0, 1.0],
+        'k': [1.0],
+        'b': [0],
+        'y': [1.0],
+    }
 
-x0_lb = jnp.array([0] * 2 * N) 
-x0_ub = 1.5 * jnp.array([0, 0.1, 0, config['y']])
+    N = len(default_config['m']) # num masses
 
-assert x0_lb.shape == x0_ub.shape
+    x0_lb = jnp.array([0, 0, default_config['y'][0], 0]) 
+    x0_ub = 10 * jnp.array([0.1, 0, default_config['y'][0], 0])
 
-timesteps = jnp.arange(trajectory_num_steps) * config['dt']
+    assert x0_lb.shape == x0_ub.shape
 
-f = jnp.array([[0, 1, 0, 0],
-               [-config['k'], 0, config['k'], 0],
-               [0, 0, 0, 1],
-               [config['k'], 0, -config['k'], 0]])
-b = jnp.array([[0], [-config['k'] * config['y']], [0], [config['k'] * config['y']]])
+    def get_dynamics(m, k, y):
+        f = jnp.array([[0, 1, 0, 0],
+                    [-k[0] / m[0], 0, k[0] / m[0], 0],
+                    [0, 0, 0, 1],
+                    [k[0] / m[1], 0, -k[0] / m[1], 0]])
+        b = jnp.array([0, -k[0] * y[0], 0, k[0] * y[0]])
+        return f, b
 
-control = lambda x, t : jnp.zeros((2*N, 1))
+    def control_policy(x, t, aux_data):
+        if args.control == 'passive':
+            return jnp.zeros((2*N))
+        elif args.control == 'all_random_continuous':
+            coefficients, scales, offsets = aux_data
+            f = lambda k : jnp.sum(coefficients * jnp.cos(scales * k + offsets), axis=1)
+            control = [0] * (2 * N)
+            control[1::2] = f(t).squeeze()
+            return jnp.array(control)
+        else:
+            raise NotImplementedError(f'Invalid control {args.control}')
 
-dynamics = lambda x, t : f @ x + b + control(x, t)
+    integrator = integrator_factory('rk4')
+    timesteps = jnp.arange(args.trajectory_num_steps) * default_config['dt']
 
-dynamics = jax.jit(dynamics)
-
-@jax.jit
-def step(x, t):
-    u_next = control(x, t)
-    x_next = integrator(dynamics, x, timesteps, config['dt'])
+    def generate_random_trajectory(jax_key, num_trajectories, config):
+        trajectory = []
+        control_inputs = []
     
-    return x_next, u_next
+        masses = []
+        ks = []
+        bs = []
+        ys = []
+        for i in tqdm(range(num_trajectories), desc='Generating data'): 
+            # Generate random key
+            jax_key, rng_key = jax.random.split(jax_key)
+            # Set random initial condition
+            x0 = jax.random.uniform(rng_key, 
+                                    shape=x0_lb.shape, 
+                                    minval=x0_lb, 
+                                    maxval=x0_ub)
+            x_prev = x0
+            states = [x_prev]
+            controls = []
 
-integrator = integrator_factory('rk4')
+            # Randomize system parameters - in or out of distribution depending on if training or testing dataset
+            if args.type == 'train':
+                m = get_train_param(rng, config['m'], train_scales['m'])
+                k = get_train_param(rng, config['k'], train_scales['k'])
+                b = get_train_param(rng, config['b'], train_scales['b'])
+                y = get_train_param(rng, config['y'], 0)
+                coefficients = get_train_param(rng, jnp.zeros((N,1)), train_scales['control_coef'], (3,))
+                scales       = get_train_param(rng, jnp.zeros((N,1)), train_scales['control_scale'], (3,))
+                offsets      = get_train_param(rng, jnp.zeros((N,1)), train_scales['control_offset'], (3,))
+            elif args.type == 'val':
+                m = get_validation_param(rng, config['m'], train_scales['m'], val_scales['m'])
+                k = get_validation_param(rng, config['k'], train_scales['k'], val_scales['k'])
+                b = get_validation_param(rng, config['b'], train_scales['b'], val_scales['b'])
+                y = get_validation_param(rng, config['y'], 0, 0)
+                coefficients = get_validation_param(rng, jnp.zeros((N,1)), train_scales['control_coef'], val_scales['control_coef'], (3,))
+                scales       = get_validation_param(rng, jnp.zeros((N,1)), train_scales['control_scale'], val_scales['control_scale'], (3,))
+                offsets      = get_validation_param(rng, jnp.zeros((N,1)), train_scales['control_offset'], val_scales['control_offset'], (3,))
 
-trajectory = []
-control_inputs = []
+            masses.append(m)
+            ks.append(k)
+            bs.append(b)
+            ys.append(y)
 
-key = jax.random.key(0)
-for i in tqdm(range(num_trajectories), desc='Generating data'): 
-    states = []
-    controls = []
-    key, rng_key = jax.random.split(key)
-    x0 = jax.random.uniform(rng_key, 
-                            shape=x0_lb.shape, 
-                            minval=x0_lb, 
-                            maxval=x0_ub)
-    x_prev = x0
-    for t in timesteps:
-        x_next, u_next = step(x_prev, t)
-        states.append(x_next)
-        controls.append(u_next)
+            aux_data = (jnp.array(coefficients), jnp.array(scales), jnp.array(offsets))
 
-    trajectory.append(states)
-    control_inputs.append(controls)
-    
-print(jnp.array(trajectory)[0])
-print(jnp.array(trajectory).shape) # TODO: why is this shape weird?
+            f, b = get_dynamics(m, k, y)
+            # dynamics to integrate
+            dynamics = lambda x, t, f, b : jnp.matmul(f, x) + b + control_policy(x, t, aux_data)
+            dynamics = jax.jit(dynamics)
 
-print(jnp.array(control_inputs))
-print(jnp.array(control_inputs).shape)
+            @jax.jit 
+            def step(x, t):
+                u_next = control_policy(x, t, aux_data)
+                x_next = integrator(partial(dynamics, f=f, b=b), x, t, config['dt'])
+                
+                return x_next, (x_next, u_next)
+            
+            x_last, (states, controls) = jax.lax.scan(step, x_prev, timesteps)
+            
+            trajectory.append(states)
+            control_inputs.append(controls)
 
-print(jnp.array(timesteps))
-print(jnp.array(timesteps).shape)
+        params = deepcopy(config)
+        # Save parameters to config
+        params['m'] = jnp.array(masses)
+        params['k'] = jnp.array(ks)
+        params['b'] = jnp.array(bs)
+        params['y'] = jnp.array(ys)
 
+        # Save to pkl file
+        dataset = {}
+        dataset['config'] = params
+        dataset['state_trajectories'] = jnp.array(trajectory)
+        dataset['control_inputs'] = jnp.array(control_inputs)
+        dataset['timesteps'] = jnp.array(timesteps)
 
-dataset['state_trajectories'] = jnp.array(trajectory)
-dataset['control_inputs'] = jnp.array(control_inputs)
-dataset['timesteps'] = jnp.array(timesteps)
+        return dataset
 
-print(dataset['state_trajectories'])
-print(dataset['state_trajectories'].shape)
+    train_scales = {
+        'm': 0.1,
+        'k': 0.1,
+        'b': 0.0,
+        'control_coef': 0.5,
+        'control_scale': 0.5,
+        'control_offset': 0.5,
+    }
+    val_scales = {
+        'm': 0.1,
+        'k': 0.1,
+        'b': 0.0,
+        'control_coef': 0.5,
+        'control_scale': 0.5,
+        'control_offset': 0.5,
+    }
 
-with open(save_path, 'wb') as f:
-    pickle.dump(dataset, f)
+    jax_key = jax.random.key(seed)
+
+    num_trajectories = args.n_train if args.type == 'train' else args.n_val
+    dataset = {}
+    bins = 10
+    num_trajectories_per_bin = num_trajectories // bins
+
+    for i in tqdm(range(bins), desc=''):
+        key, jax_key = jax.random.split(jax_key)
+        new_dataset = generate_random_trajectory(key, num_trajectories_per_bin, default_config)
+        if i == 0:
+            dataset = new_dataset
+        else:
+            dataset = merge_datasets(dataset, new_dataset, ('m', 'k', 'b'))
+
+    # Save dataset
+    save_path = os.path.join(save_dir, f"{args.type}_{num_trajectories}_{train_scales['m']}_{train_scales['control_coef']}.pkl")
+
+    with open(save_path, 'wb') as f:
+        pickle.dump(dataset, f)
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('--type', type=str, default='train')
+    parser.add_argument('--n_train', type=int, default=1500)
+    parser.add_argument('--n_val', type=int, default=20)
+    parser.add_argument('--trajectory_num_steps', type=int, default=1500)
+    parser.add_argument('--control', type=str, required=True)
+    args = parser.parse_args()
+
+    generate_trajectory(args)

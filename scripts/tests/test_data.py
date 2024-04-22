@@ -4,8 +4,6 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 from argparse import ArgumentParser
 
-
-
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--dir', type=str, required=True)
@@ -19,7 +17,7 @@ if __name__ == '__main__':
 
     def mass_spring_damper_plotter(traj_idx=0):
         fig, ax = plt.subplots()
-        ax.set_xlim(-0.5,5)
+        ax.set_xlim(-2, np.max(trajs[0,:,::2]) + 2)
         ax.set_ylim(-0.5,0.5)
         ax.grid()
         traj = trajs[traj_idx]
@@ -42,10 +40,10 @@ if __name__ == '__main__':
     # print(f'Mass of trajectory 0 to 5: {params["m"][0:5]}')
 
     print(f'Control input of trajectory zero: {control[0]}')
-    print(control.shape)
-    # print(f'Mass max {np.max(params["m"])} and min {np.min(params["m"])}')
-    # print(f'Spring max {np.max(params["k"])} and min {np.min(params["k"])}')
-    # print(f'Damper max {np.max(params["b"])} and min {np.min(params["b"])}')
+    print(f'Masses: {params["m"]}')
+    print(f'Mass max {np.max(params["m"])} and min {np.min(params["m"])}')
+    print(f'Spring max {np.max(params["k"])} and min {np.min(params["k"])}')
+    print(f'Damper max {np.max(params["b"])} and min {np.min(params["b"])}')
     print(f'Control max {np.max(control)} and min {np.min(control)} and mean {np.mean(control)}')
     print(f'Position initial conditions max {np.max(trajs[:,0,::2])} and min {np.min(trajs[:,0,::2])}')
     print(f'Momenta initial conditions max {np.max(trajs[:,0,1::2])} and min {np.min(trajs[:,0,1::2])}')

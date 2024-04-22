@@ -2,15 +2,18 @@ import optax
 import ml_collections
 
 def create_gnn_config(args) -> ml_collections.ConfigDict:
-    config = ml_collections.ConfigDict()
+    config = ml_collections.ConfigDict({
+        'system_name': 'n_free_spring', # Change this
+    })
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': 'results/2_mass_spring_data/train_3000_0.1_0.5_passive.pkl',
-        'evaluation_data_path': 'results/2_mass_spring_data/val_20_0.1_0.5_passive.pkl',
+        'training_data_path': f'results/{config.system_name}_data/train_10000_0.1_0.5_all_random_continuous.pkl',
+        'evaluation_data_path': f'results/{config.system_name}_data/val_20_0.1_0.5_all_random_continuous.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
+        'seed': 0,
         'net_name': 'GNS',
-        'trial_name': '2_msd_no_globals_3000_passive',
+        'trial_name': '10000_32',
         'loss_function': 'acceleration',
         'num_epochs': int(5e2),
         'min_epochs': int(30),
@@ -22,7 +25,6 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
         'clear_cache_every_steps': 1,
         'add_undirected_edges': True,
         'add_self_loops': True,
-        'train_multi_trajectories': True,
     })
     config.optimizer_params = ml_collections.ConfigDict({
         'learning_rate': optax.exponential_decay(init_value=1e-3, transition_steps=5e2, decay_rate=0.1, end_value=1e-5),
@@ -33,9 +35,9 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
         # 'horizon': 5, # for gnode only
         'vel_history': 5,
         'control_history': 5,
-        'num_mp_steps': 1, # too big causes oversmoothing
+        'num_mp_steps': 1, # too big causes over-smoothing
         'noise_std': 0.0003,
-        'latent_size': 16, # use 32 for quintuple mass spring damper, other <5 use 16
+        'latent_size': 32, # use 32 for 4>= mass spring damper, other <4 use 16
         'hidden_layers': 2,
         'activation': 'relu',
         'use_edge_model': True,

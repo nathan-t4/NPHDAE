@@ -25,6 +25,8 @@ from utils.gnn_utils import *
 
 from config import create_gnn_config
 
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
+
 def eval(config: ml_collections.ConfigDict):
     training_params = config.training_params
     net_params = config.net_params
@@ -109,17 +111,17 @@ def eval(config: ml_collections.ConfigDict):
 
     print(f"Number of parameters {num_parameters(params)}")
     rollout_error_sum = 0
-    for i in range(len(eval_gb._data)):
+    for i in range(eval_gb._num_trajectories):
         ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
         writer.write_scalars(i, add_prefix_to_keys(eval_metrics.compute(), f'eval {paths["evaluation_data_path"]}'))
         rollout_error_sum += eval_metrics.compute()['loss']
         plot_evaluation_curves(ts, pred_data, exp_data, aux_data, plot_dir=plot_dir, prefix=f'eval_traj_{i}')
 
-    print('Mean rollout error: ', rollout_error_sum / len(eval_gb._data))
+    print('Mean rollout error: ', rollout_error_sum / eval_gb._num_trajectories)
 
     # Save evaluation metrics to json
     eval_metrics = {
-        'mean_rollout_error': (rollout_error_sum / len(eval_gb._data)).tolist()
+        'mean_rollout_error': (rollout_error_sum / eval_gb._num_trajectories).tolist()
     }
     eval_metrics_file = os.path.join(plot_dir, 'eval_metrics.js')
     with open(eval_metrics_file, "w") as outfile:
@@ -140,14 +142,14 @@ def train(config: ml_collections.ConfigDict):
                 raise RuntimeError('Invalid net name')
     
     if paths.dir == None:
-        config.paths.dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_test_gnn/{training_params.trial_name}_{strftime("%H%M%S")}')
+        config.paths.dir = os.path.join(os.curdir, f'results/{training_params.net_name}/{config.system_name}/{strftime("%m%d-%H%M")}_{training_params.trial_name}')
         paths.dir = config.paths.dir
             
     log_dir = os.path.join(paths.dir, 'log')
     checkpoint_dir = os.path.join(paths.dir, 'checkpoint')
     plot_dir = os.path.join(paths.dir, 'plots')
 
-    rng = jax.random.key(0)
+    rng = jax.random.key(training_params.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
     # Create writer for logs
@@ -187,8 +189,8 @@ def train(config: ml_collections.ConfigDict):
     
     def train_epoch(state: TrainState, batch_size: int, rng: jax.Array):
         ''' Train one epoch using all trajectories '''     
-        traj_perms = random_batch(batch_size, 0, train_gb._data.shape[0], rng)
-        t0_perms = random_batch(batch_size, net_params.vel_history, train_gb._data.shape[1]-time_offset, rng)
+        traj_perms = random_batch(batch_size, 0, train_gb._num_trajectories, rng)
+        t0_perms = random_batch(batch_size, net_params.vel_history, train_gb._num_timesteps-time_offset, rng) 
         dropout_rng = jax.random.split(rng, batch_size)
         rng, net_rng = jax.random.split(rng)
 
@@ -228,38 +230,6 @@ def train(config: ml_collections.ConfigDict):
         
         state, epoch_loss = double_scan(train_batch, state, traj_perms, t0_perms)
 
-        train_loss = jnp.asarray(epoch_loss).mean()
-
-        return state, TrainMetrics.single_from_model_output(loss=train_loss)
-
-    def train_epoch_1_traj(state: TrainState, batch_size: int, rng: jax.Array):
-        ''' Train one epoch using just one trajectory (traj_idx = 0) '''     
-        traj_idx = 0
-        t0_perms = random_batch(batch_size, net_params.vel_history, train_gb._data.shape[1]-time_offset, rng)
-
-        dropout_rng = jax.random.split(rng, batch_size)
-        rng, net_rng = jax.random.split(rng)
-        def loss_fn(params, batch_graphs, batch_data):
-            batch_targets, batch_control = batch_data
-            pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
-            predictions = pred_graphs.nodes[:,:,-1]
-            loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
-            return loss
-        
-        def train_batch(state, t0s):
-            tfs = t0s + time_offset
-            batch_accs = train_gb._accs[traj_idx, tfs]
-            batch_control = train_gb._control[traj_idx, tfs]
-            batch_data = (batch_accs, batch_control)
-            traj_idxs = traj_idx * jnp.ones(jnp.shape(t0s), dtype=jnp.int32)
-            graphs = train_gb.get_graph_batch(traj_idxs, t0s)
-            loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data)
-
-            state = state.apply_gradients(grads=grads)
-
-            return state, loss
-        
-        state, epoch_loss = jax.lax.scan(train_batch, state, t0_perms)
         train_loss = jnp.asarray(epoch_loss).mean()
 
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
@@ -314,18 +284,13 @@ def train(config: ml_collections.ConfigDict):
     # Load previous checkpoint (if applicable)
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
     best_model_ckpt = checkpoint.Checkpoint(os.path.join(checkpoint_dir, 'best_model'))
-    state = best_model_ckpt.restore_or_initialize(state)
+    state = ckpt.restore_or_initialize(state)
 
-    trajs_size = len(train_gb._data)
-    ts_size = len(train_gb._data[0]) - train_gb._vel_history
-    steps_per_epoch = ts_size // training_params.batch_size
-    # Setup train_fn (use train_epoch or train_epoch_1_traj)
-    if training_params.train_multi_trajectories:
-        steps_per_epoch *= trajs_size // training_params.batch_size
-        train_fn = train_epoch
-    else:
-        eval_gb = train_gb
-        train_fn = train_epoch_1_traj
+    trajs_size = train_gb._num_trajectories
+    ts_size = train_gb._num_timesteps - train_gb._vel_history
+    steps_per_epoch = (ts_size * trajs_size) // training_params.batch_size
+    train_fn = train_epoch
+
     # Setup training epochs
     init_epoch = int(state.step) // steps_per_epoch + 1
     final_epoch = init_epoch + training_params.num_epochs
@@ -354,14 +319,14 @@ def train(config: ml_collections.ConfigDict):
             with report_progress.timed('eval'):
                 # eval_state = eval_state.replace(params=state.params)
                 rollout_error_sum = 0
-                for i in range(len(eval_gb._data)):
+                for i in range(eval_gb._num_trajectories):
                     ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
                     rollout_error_sum += eval_metrics.compute()['loss']
                     plot_evaluation_curves(ts, pred_data, exp_data, aux_data,
                                            plot_dir=os.path.join(plot_dir, f'traj_{i}'),
                                            prefix=f'Epoch {epoch}: eval_traj_{i}')
                 
-                rollout_mean_pos_loss = rollout_error_sum / len(eval_gb._data)
+                rollout_mean_pos_loss = rollout_error_sum / eval_gb._num_trajectories
                 writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_mean_pos_loss}, 'eval'))
                 print(f'Epoch {epoch}: rollout mean position loss = {jnp.round(rollout_mean_pos_loss, 4)}')
 

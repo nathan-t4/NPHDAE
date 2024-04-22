@@ -18,42 +18,33 @@ from utils.data_utils import *
 from utils.jax_utils import *
 from config import *
 
-def decompose_graph_example(
+def dejoin_graph_example(
         composed_graph: jraph.GraphsTuple,
-        new_receivers: jnp.array,
-        new_senders: jnp.array,
-        add_undirected_edges: bool=True,
-        add_self_loops: bool=True,
+        merged_nodes: jnp.array,
     ) -> tuple[jraph.GraphsTuple, jraph.GraphsTuple]:
     """ 
-        For (5 = 2+3) mass spring damper example
+        For (4 = 2+2) mass spring example
 
-        1 --- 2   o---o   3 --- 4 --- 5
+        || --- 0 --- 1   (+)   1 --- 2   (=)  || --- 0 --- 1 --- 2
         
         Indices are hard-coded
     """    
     # number of vertices and edges of subsystem 1
     NV1 = 2
     NE1 = 1
-    indices_1 = jnp.array([0,4,8,9])
+    indices_1 = jnp.array([0,2,4,5])
     # number of vertices and edges of subsystem 2
-    NV2 = 3
-    NE2 = 2
-    indices_2 = jnp.array([2,3,6,7,10,11,12])
-    # number of vertices and edges of subsystem c
-    NVC = 0
-    NEC = 1
-    indices_c = jnp.array([1,5])
-    
-    jax.debug.print('composed graph senders shape {}', composed_graph.senders.shape)
+    NV2 = 2
+    NE2 = 1
+    indices_2 = jnp.array([1,3,5,6])
 
-    nodes_one = composed_graph.nodes[:NV1,:]
-    edges_one = composed_graph.edges[indices_1,:]
+    nodes_one = composed_graph.nodes[jnp.array([0, 1]),:]
+    edges_one = composed_graph.edges[jnp.array([0]),:]
     receivers_one = composed_graph.receivers[indices_1]
     senders_one = composed_graph.senders[indices_1]
 
-    nodes_two = composed_graph.nodes[NV1:,:]
-    edges_two = composed_graph.edges[indices_2,:]
+    nodes_two = composed_graph.nodes[jnp.array([1, 2]),:]
+    edges_two = composed_graph.edges[jnp.array([1]),:]
     receivers_two = composed_graph.receivers[indices_2]
     senders_two = composed_graph.senders[indices_2]
 
@@ -67,16 +58,6 @@ def decompose_graph_example(
         n_edge=jnp.array([NE1]),
     )
 
-    graph_c = jraph.GraphsTuple(
-        nodes=jnp.array([]),
-        edges=composed_graph.edges[indices_c,:],
-        globals=jnp.array([]),
-        receivers=composed_graph.receivers[indices_c],
-        senders=composed_graph.senders[indices_c],
-        n_node=jnp.array([NVC]),
-        n_edge=jnp.array([NEC])
-    )
-
     graph_two = jraph.GraphsTuple(
         nodes=nodes_two,
         edges=edges_two,
@@ -87,21 +68,22 @@ def decompose_graph_example(
         n_edge=jnp.array([NE2]),
     )
 
-    return graph_one, graph_c, graph_two
+    return graph_one, graph_two
 
-def compose_graph(
+def join_graph_example(
         graph_one: jraph.GraphsTuple, 
-        graph_c: jraph.GraphsTuple,
         graph_two: jraph.GraphsTuple,
-        new_receivers: jnp.array,
-        new_senders: jnp.array
+        merged_nodes: jnp.array,
     ) -> jraph.GraphsTuple:
-    nodes = jnp.concatenate((graph_one.nodes, graph_two.nodes)) # add graph_c.nodes?
-    edges = jnp.concatenate((graph_one.edges, graph_c.edges, graph_two.edges))
-    receivers = jnp.concatenate((graph_one.receivers, graph_c.receivers, graph_two.receivers))
-    senders = jnp.concatenate((graph_one.senders, graph_c.senders, graph_two.senders))
+    nodes_two_indices_without_overlap = jnp.array([1])
+    two_indices_without_overlap = jnp.array([0, 1, 3])
+    # The next line chooses to use GNS results from GNS_1 for overlapping node 1
+    nodes = jnp.concatenate((graph_one.nodes, graph_two.nodes[nodes_two_indices_without_overlap, :]))
+    edges = jnp.concatenate((graph_one.edges, graph_two.edges)) # edge sets are disjoint
+    receivers = jnp.concatenate((graph_one.receivers, graph_two.receivers[two_indices_without_overlap]))
+    senders = jnp.concatenate((graph_one.senders, graph_two.senders[two_indices_without_overlap]))
     # globals = jnp.concatenate((graph_one.globals, graph_two.globals)) # since globals is None for both
-    n_node = graph_one.n_node + graph_two.n_node
+    n_node = graph_one.n_node + graph_two.n_node - 1 # one merged node
     n_edge = graph_one.n_edge + graph_two.n_edge
 
     composed_graph = jraph.GraphsTuple(
@@ -116,19 +98,6 @@ def compose_graph(
 
     return composed_graph
 
-def get_A_cpl(new_receivers: jnp.array, new_senders: jnp.array, NV: int):
-    """
-        receivers: 
-        senders:
-        NV: number of vertices of composed system
-    """
-    assert len(new_receivers) == len(new_senders), 'Length of receivers and senders must be the same'
-    A_cpl = np.zeros((NV,NV))
-    for (r, s) in zip(new_receivers, new_senders):
-        A_cpl[r, s] = 1
-    
-    return A_cpl
-
 def eval_composite_GNS(config: ml_collections.ConfigDict):
     # load gns1 from checkpoint
     # load gns2 from checkpoint
@@ -139,7 +108,7 @@ def eval_composite_GNS(config: ml_collections.ConfigDict):
     net_params_one = config.net_params_one
     net_params_two = config.net_params_two
 
-    dir = os.path.join(os.curdir, f'results/test_models/{strftime("%m%d")}_compose_gnn/{eval_params.trial_name}_{strftime("%H%M%S")}')
+    dir = os.path.join(os.curdir, f'results/GNS/compose_gnn/{strftime("%m%d-%H%M%S")}_{eval_params.trial_name}')
 
     assert (net_params_one.prediction == net_params_two.prediction), \
         'Prediction modes should be the same for both GNS'
@@ -253,20 +222,15 @@ def eval_composite_GNS(config: ml_collections.ConfigDict):
     ckpt_two = checkpoint.Checkpoint(checkpoint_dir_two)
     state_two = ckpt_two.restore_or_initialize(state_two)
 
-    # hard-coded coupling adjacency matrix
-    new_receivers = jnp.array([1, 2])
-    new_senders = jnp.array([2, 1])
-    num_masses = len(gb_composed._m[0])
-    A_cpl = get_A_cpl(new_receivers, new_senders, num_masses)
+    # hard-coded nodes to merge
+    merged_nodes = jnp.array([1, 0])
 
     # Initialized composite GNS
-    eval_net_composed = CoupledGraphNetworkSimulator(compose_graph=compose_graph,
-                                                     decompose_graph=decompose_graph_example,
+    eval_net_composed = CoupledGraphNetworkSimulator(join_graph=join_graph_example,
+                                                     dejoin_graph=dejoin_graph_example,
                                                      GNS_one=eval_net_one,
                                                      GNS_two=eval_net_two,
-                                                     new_receivers=new_receivers,
-                                                     new_senders=new_senders,
-                                                     A_cpl=A_cpl)
+                                                     merged_nodes=merged_nodes)
     init_graph = gb_composed.get_graph(traj_idx=0, t=vel_history+1)
     init_control = gb_composed._control[0, 0]
     init_mass = gb_composed._m[0]

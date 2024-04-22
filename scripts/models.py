@@ -292,42 +292,44 @@ class CoupledGraphNetworkSimulator(nn.Module):
     """ 
         Model-based composition of Graph Network Simulators
     """
-    compose_graph: Callable[[jraph.GraphsTuple, jraph.GraphsTuple, jraph.GraphsTuple, jnp.array, jnp.array], jraph.GraphsTuple]
-    decompose_graph: Callable[[jraph.GraphsTuple, jnp.array, jnp.array], tuple[jraph.GraphsTuple, jraph.GraphsTuple, jraph.GraphsTuple]]
+    join_graph: Callable[[jraph.GraphsTuple, jraph.GraphsTuple, jnp.array], jraph.GraphsTuple]
+    dejoin_graph: Callable[[jraph.GraphsTuple, jnp.array], tuple[jraph.GraphsTuple, jraph.GraphsTuple]]
     GNS_one: GraphNetworkSimulator
     GNS_two: GraphNetworkSimulator
-    new_receivers: jnp.array
-    new_senders: jnp.array
-    A_cpl: jnp.array
+    merged_nodes: jnp.array # shape = [#, 2]
 
     @nn.compact
     def __call__(
         self, composed_graph: jraph.GraphsTuple, composed_next_u: jnp.array, composed_mass: jnp.array, rng
         ) -> jraph.GraphsTuple:
         """
-            TODO:
-            - should graphs be merged? or graph_one and graph_two
-            - get A_cpl from senders and receivers of graph
-            - get graph -> add extra inputs u_c -> past each graph through its corresponding GNS -> get accelerations
+            || --- 0 --- 1   (+)   1 --- 2   (=)  || --- 0 --- 1 --- 2
+
+            Steps
+            1. dejoin input composed_graph into graph_one, graph_two
+            2. pass respective GNS on graph_one and graph_two. get acceleration
+            3. add new inputs
+            4. pass graph_one and graph_two through GNS again with new_inputs 
+            5. join graph and return
+
+            # Problem: 
+            - graph_one from decomposition of 5-msd does not have the same behavior as graph from 2-msd!
+
 
                        delta y
                       <-------> 
-            ||---0---1  o---o  2---3---4
+            ||---0---1  o---o  1---2
+
+            TODO
+            - add delta y (maybe just when plotting simulation)
+            - learn u_c?
         """
-        graph_one, graph_c, graph_two = self.decompose_graph(composed_graph, self.new_receivers, self.new_senders)
-        N1 = len(graph_one.nodes)
-        N2 = len(graph_two.nodes)
+        graph_one, graph_two = self.dejoin_graph(composed_graph, self.merged_nodes)
 
-        jax.debug.print('senders composed {}', composed_graph.senders)
-
-        jax.debug.print('receivers composed {}', composed_graph.receivers)
-
-        jax.debug.print('senders: 1 {} and c {} and 2 {}', graph_one.senders, graph_c.senders, graph_two.senders)
-
-        jax.debug.print('receivers: 1 {} and c {} and 2 {}', graph_one.receivers, graph_c.receivers, graph_two.receivers)
-
-        next_u_1 = composed_next_u[:2*N1]
-        next_u_2 = composed_next_u[2*N1:]
+        idx_1 = jnp.array([0, 1]) # TODO: given merged nodes, original nodes of 1 (first N1) and 2 (next N2)
+        idx_2 = jnp.array([1, 2])
+        next_u_1 = composed_next_u[idx_1]
+        next_u_2 = composed_next_u[idx_2]
 
         jax.debug.print('u_1 {} u_2 {}', next_u_1, next_u_2)
 
@@ -341,26 +343,18 @@ class CoupledGraphNetworkSimulator(nn.Module):
         # rescale accelerations
         acc_one = nominal_acc_one * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
         acc_two = nominal_acc_two * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
-        combined_acc = jnp.concatenate((acc_one, acc_two), axis=0).T
 
-        jax.debug.print('combined acc {}', combined_acc)
+        jax.debug.print('acc one {} and acc two {}', acc_one, acc_two)
 
-        jax.debug.print('A_cpl {}', self.A_cpl)
-
-        # calculate u_c (TODO: predict u_c! is the new edge a spring? what is the spring constant?)
-        M = jnp.diag(composed_mass) # assume masses are known
-        u_add = self.A_cpl @ M @ combined_acc
-
-        # get control inputs for composed system
-        u_c = [0] * (2 * (N1+N2))
-        u_c[1::2] = u_add
-        u_c = jnp.array(u_c)
-
-        jax.debug.print('u_c {}', u_c)
-
-
-        F_1 = next_u_1 - u_c[:2*N1]
-        F_2 = next_u_2 - u_c[2*N1:]
+        # Assume masses are known. TODO: remove assumption
+        M1 = jnp.diag(composed_mass[idx_1]) 
+        M2 = jnp.diag(composed_mass[idx_2])
+        # Calculate new forces due to joining
+        u_c_1 = jnp.array([0, M1 @ acc_two[0]])
+        u_c_2 = jnp.array([M2 @ acc_one[1], 0])
+        # Get control inputs for composed system # TODO: use self.merged_nodes
+        F_1 = next_u_1 + u_c_1
+        F_2 = next_u_2 + u_c_2
 
         jax.debug.print('F_1 {} F_2 {}', F_1, F_2)
 
@@ -368,7 +362,14 @@ class CoupledGraphNetworkSimulator(nn.Module):
         next_graph_one = self.GNS_one(graph_one, F_1, rng)
         next_graph_two = self.GNS_two(graph_two, F_2, rng)
 
-        next_graph = self.compose_graph(next_graph_one, graph_c, next_graph_two, self.new_receivers, self.new_senders)
+        # transform features of next_graph_two (merging flows) - adding position!
+        next_graph_two_transformed_position = next_graph_two.nodes[:,0] + next_graph_one[-1,0] # pos of merged node
+        next_graph_two._replace(nodes=jnp.concatenate((next_graph_two_transformed_position,
+                                                       next_graph_two.nodes[:,1])),
+                                                       axis=1)
+
+        next_graph = self.join_graph(next_graph_one, next_graph_two, self.merged_nodes)
+        
         return next_graph
 
 class GNODE(nn.Module):

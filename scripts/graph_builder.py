@@ -44,7 +44,7 @@ class GraphBuilder():
 @register_pytree_node_class
 class MSDGraphBuilder(GraphBuilder):
     """ 
-        Double Mass Spring Damper (DMSD) 
+        N-Mass Spring Damper (DMSD) 
     """
     def __init__(self, path, add_undirected_edges, add_self_loops, mode, vel_history, control_history):
         super().__init__(path, add_undirected_edges, add_self_loops)
@@ -61,6 +61,10 @@ class MSDGraphBuilder(GraphBuilder):
         state = data['state_trajectories']
         config = data['config']
         control = data['control_inputs']
+        # Number of trajectories in dataset
+        self._num_trajectories = state.shape[0]
+        # Number of timesteps per trajectory
+        self._num_timesteps = state.shape[1]
         self._dt = config['dt']
         # Control
         # self._control = jnp.concatenate((jnp.zeros(control.shape), control), axis=-1)
@@ -77,20 +81,19 @@ class MSDGraphBuilder(GraphBuilder):
         # Absolute position
         self._qs = jnp.array(state[:,:,::2])
         # Relative positions
-        # self._dqs = jnp.expand_dims(self._qs[:,:,1] - self._qs[:,:,0], axis=-1)
+        # self._dqs = jnp.array([]) # TODO: for when N = 1
         self._dqs = jnp.diff(self._qs, axis=-1)
         # Conjugate momenta
-        self._ps = jnp.array(state[:,:,1::2])
+        # self._ps = jnp.array(state[:,:,1::2])
         # Velocities
-        self._vs = self._ps / jnp.expand_dims(self._m, 1)  # reshape m to fit shape of velocity
+        self._vs = jnp.array(state[:,:,1::2]) / jnp.expand_dims(self._m, 1)  # reshape m to fit shape of velocity
         # Accelerations
         self._accs = jnp.diff(self._vs, axis=1) / self._dt
         final_acc = jnp.expand_dims(self._accs[:,-1,:], axis=1) # duplicate final acceleration
         self._accs = jnp.concatenate((self._accs, final_acc), axis=1) # add copy of final acceleration to end of accs
-        data = jnp.concatenate((self._qs, self._dqs,self._ps, self._accs), axis=-1)
-        data = jax.lax.stop_gradient(data)
-
-        self._data = data
+        # data = jnp.concatenate((self._qs, self._dqs, self._ps, self._accs), axis=-1)
+        # data = jax.lax.stop_gradient(data)
+        # self._data = data
     
     def _get_norm_stats(self):
         norm_stats = ml_collections.ConfigDict()
@@ -167,7 +170,7 @@ class MSDGraphBuilder(GraphBuilder):
 
     def tree_flatten(self):
         children = () # dynamic
-        aux_data = (self._path, self._add_undirected_edges, self._add_self_loops, self._mode, self._vel_history, self._control_history, self._data, self._norm_stats, self._qs, self._dqs, self._ps, self._vs, self._accs, self._control, self._m, self._k, self._b, self._dt) # static
+        aux_data = (self._path, self._add_undirected_edges, self._add_self_loops, self._mode, self._vel_history, self._control_history, self._norm_stats, self._qs, self._dqs, self._vs, self._accs, self._control, self._m, self._k, self._b, self._dt, self._num_trajectories, self._num_timesteps) # static
         return (children, aux_data)
 
     @classmethod
@@ -180,18 +183,19 @@ class MSDGraphBuilder(GraphBuilder):
         obj._mode                   = aux_data[3]
         obj._vel_history            = aux_data[4]
         obj._control_history        = aux_data[5]
-        obj._data                   = aux_data[6]
-        obj._norm_stats             = aux_data[7]
-        obj._qs                     = aux_data[8]
-        obj._dqs                    = aux_data[9]
-        obj._ps                     = aux_data[10]
-        obj._vs                     = aux_data[11]
-        obj._accs                   = aux_data[12]
-        obj._control                = aux_data[13]
-        obj._m                      = aux_data[14]
-        obj._k                      = aux_data[15]
-        obj._b                      = aux_data[16]
-        obj._dt                     = aux_data[17]
+        obj._norm_stats             = aux_data[6]
+        obj._qs                     = aux_data[7]
+        obj._dqs                    = aux_data[8]
+        obj._vs                     = aux_data[9]
+        obj._accs                   = aux_data[10]
+        obj._control                = aux_data[11]
+        obj._m                      = aux_data[12]
+        obj._k                      = aux_data[13]
+        obj._b                      = aux_data[14]
+        obj._dt                     = aux_data[15]
+        obj._num_trajectories       = aux_data[16]
+        obj._num_timesteps          = aux_data[17]
+
         obj._setup_graph_params()
         return obj
     
