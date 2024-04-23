@@ -9,7 +9,7 @@ import ml_collections
 from argparse import ArgumentParser
 from typing import Tuple
 
-def load_spring_mass_damper_data(path: str | os.PathLike) -> Tuple[jnp.ndarray, ml_collections.ConfigDict]:
+def load_spring_mass_damper_data(path: os.PathLike) -> Tuple[jnp.ndarray, ml_collections.ConfigDict]:
     """
         Load experimental data to tensorflow dataset
     """
@@ -56,7 +56,7 @@ def load_spring_mass_damper_data(path: str | os.PathLike) -> Tuple[jnp.ndarray, 
 
     return data, normalization_stats
 
-def load_data_tf(data: str | dict) -> tf.data.Dataset:
+def load_data_tf(data: str) -> tf.data.Dataset:
     """
         Load experimental data to tensorflow dataset
     """    

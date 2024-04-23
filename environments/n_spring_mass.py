@@ -10,6 +10,7 @@ import pickle
 import os
 from functools import partial
 from copy import deepcopy
+from tqdm import tqdm
 
 import jax
 import jax.numpy as jnp
@@ -346,6 +347,7 @@ def generate_dataset(args, env_seed: int = 501):
         'm': jnp.array(m),
         'k': jnp.array(k),
         'b': jnp.array(b),
+        'y': jnp.ones(N),
         'state_measure_spring_elongation': False,
         'nonlinear_damping': False, # True
         'nonlinear_spring': False,
@@ -398,6 +400,7 @@ def generate_dataset(args, env_seed: int = 501):
         'control_coef': 0.5,
         'control_scale': 0.5,
         'control_offset': 0.5,
+        'q0': 0.5,
     }
     val_scales = {
         'm': 0.1,
@@ -407,27 +410,27 @@ def generate_dataset(args, env_seed: int = 501):
         'control_coef': 0.5,
         'control_scale': 0.5,
         'control_offset': 0.5,
+        'q0': 0.1,
     }
 
     key = jax.random.key(env_seed)
 
+    means['q0'] = jnp.array([0])
+    y = sum([jnp.concatenate((jnp.zeros((i)), params["y"][i:])) for i in range(len(params["y"]))])
+
+    x0_init_lb = [0] * 2 * N
+    x0_init_lb[::2] = 0.5 * y
+    x0_init_lb = jnp.array(x0_init_lb)
+
+    x0_init_ub = [0] * 2 * N
+    x0_init_ub[::2] = 1.5 * y
+    x0_init_ub = jnp.array(x0_init_ub)
+
     env = None
     if args.type == 'training':
         env = NMassSpring(**params, random_seed=501)
-    
-        y = sum([jnp.concatenate((jnp.zeros((i)), jnp.array(env.y[i:]))) for i in range(len(env.y))])
-
-        x0_init_lb = [0] * 2 * N
-        x0_init_lb[::2] = 0.5 * y
-        x0_init_lb = jnp.array(x0_init_lb)
-
-        x0_init_ub = [0] * 2 * N
-        x0_init_ub[::2] = 1.5 * y
-        x0_init_ub = jnp.array(x0_init_ub)
-
-
         dataset = None
-        for _ in range(args.n_train):
+        for _ in tqdm(range(args.n_train)):
             def rng_param(key, means_key, scales_key, shape=()):
                 N = len(means[means_key])
                 train_range = []
@@ -439,6 +442,14 @@ def generate_dataset(args, env_seed: int = 501):
                 return train_range
                 # return jax.random.uniform(rng_key, shape, minval=mean-scale, maxval=mean+scale)
             
+            # Randomize initial position, m, k, b, and control within train_scales range
+            c = rng_param(key, 'q0', 'q0')
+            q0_noise = np.zeros(2 * N)
+            q0_noise[::2] = c * np.ones(N)
+            q0_noise = jnp.array(q0_noise)
+            x0_init_lb = x0_init_lb + q0_noise
+            x0_init_ub = x0_init_ub + q0_noise
+
             env.m = jnp.array(rng_param(key, 'm', 'm'))
             env.k = jnp.array(rng_param(key, 'k', 'k'))
             env.b = jnp.array(rng_param(key, 'b', 'b'))
@@ -464,25 +475,14 @@ def generate_dataset(args, env_seed: int = 501):
             os.makedirs(save_dir)
         save_path = os.path.join(os.path.abspath(save_dir),  
             datetime.now().strftime(
-                f'train_{args.n_train}_{train_scales["m"]}_{train_scales["control_coef"]}_{args.control.lower()}.pkl'))
+                f'train_{args.n_train}_{train_scales["m"]}_{train_scales["control_coef"]}_{train_scales["q0"]}_{args.control.lower()}.pkl'))
         with open(save_path, 'wb') as f:
             pickle.dump(dataset, f)
 
     elif args.type == 'validation': 
         env = NMassSpring(**params, random_seed=501)
-
-        y = sum([jnp.concatenate((jnp.zeros((i)), env.y[i:])) for i in range(len(env.y))])
-
-        x0_init_lb = [0] * 2 * N
-        x0_init_lb[::2] = 0.5 * y
-        x0_init_lb = jnp.array(x0_init_lb)
-
-        x0_init_ub = [0] * 2 * N
-        x0_init_ub[::2] = 1.5 * y
-        x0_init_ub = jnp.array(x0_init_ub)
-
         dataset = None
-        for i in range(args.n_val):
+        for i in tqdm(range(args.n_val)):
             def get_validation_range(jax_key, means_key, scales_key, shape=()):
                 assert means_key in means.keys()
                 assert scales_key in train_scales.keys() and scales_key in val_scales.keys()
@@ -497,13 +497,23 @@ def generate_dataset(args, env_seed: int = 501):
                                             means[means_key][i] - train_scales[scales_key])
                     validation_range.append(sampler(range_one, range_two, shape))
                 return validation_range
-            keys = jax.random.split(key, 7)
-            env.m        = jnp.array(get_validation_range(keys[1], 'm', 'm'))
-            env.k        = jnp.array(get_validation_range(keys[2], 'k', 'k'))
-            env.b        = jnp.array(get_validation_range(keys[3], 'b', 'b'))
-            coefficients = jnp.array(get_validation_range(keys[4], 'control_coef', 'control_coef', (3,)))
-            scales       = jnp.array(get_validation_range(keys[5], 'control_scale', 'control_scale', (3,)))
-            offsets      = jnp.array(get_validation_range(keys[6], 'control_offset', 'control_offset', (3,)))
+            # Out-of-distribution randomization of initial position, m, k, b, and control with val_scales magnitude
+            keys = jax.random.split(key, 8)
+            c = get_validation_range(keys[1], 'q0', 'q0')
+            q0_noise = np.zeros(2 * N)
+            q0_noise[::2] = c * np.ones(N)
+            q0_noise = jnp.array(q0_noise)
+            x0_init_lb = x0_init_lb + q0_noise
+            x0_init_ub = x0_init_ub + q0_noise
+
+            x0_init_lb = jnp.clip(x0_init_lb, a_min=jnp.zeros(4))
+
+            env.m        = jnp.array(get_validation_range(keys[2], 'm', 'm'))
+            env.k        = jnp.array(get_validation_range(keys[3], 'k', 'k'))
+            env.b        = jnp.array(get_validation_range(keys[4], 'b', 'b'))
+            coefficients = jnp.array(get_validation_range(keys[5], 'control_coef', 'control_coef', (3,)))
+            scales       = jnp.array(get_validation_range(keys[6], 'control_scale', 'control_scale', (3,)))
+            offsets      = jnp.array(get_validation_range(keys[7], 'control_offset', 'control_offset', (3,)))
             
             env.update_config()
             aux_data = (coefficients, scales, offsets)
@@ -524,7 +534,7 @@ def generate_dataset(args, env_seed: int = 501):
         save_path = os.path.join(
             os.path.abspath(save_dir),  
             datetime.now().strftime(
-                f"val_{args.n_val}_{val_scales['m']}_{val_scales['control_coef']}_{args.control.lower()}.pkl")
+                f'val_{args.n_val}_{val_scales["m"]}_{val_scales["control_coef"]}_{val_scales["q0"]}_{args.control.lower()}.pkl')
         )
         with open(save_path, 'wb') as f:
             pickle.dump(dataset, f)
