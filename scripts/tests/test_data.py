@@ -41,6 +41,7 @@ if __name__ == '__main__':
 
     print(f'Control input of trajectory zero: {control[0]}')
     print(f'Masses: {params["m"]}')
+    print(f'q0 max {np.max(trajs[:,0,::2])} and min {np.min(trajs[:,0,::2])}')
     print(f'Mass max {np.max(params["m"])} and min {np.min(params["m"])}')
     print(f'Spring max {np.max(params["k"])} and min {np.min(params["k"])}')
     print(f'Damper max {np.max(params["b"])} and min {np.min(params["b"])}')

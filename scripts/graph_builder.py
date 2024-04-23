@@ -125,26 +125,25 @@ class MSDGraphBuilder(GraphBuilder):
     @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         """ Need to make sure t > self._vel_history! """
-        match self._mode:
-            case 'acceleration':
-                vs_history = []                
-                [vs_history.append(self._vs[traj_idx, t-k]) for k in reversed(range(self._vel_history))]
-                vs_history = jnp.asarray(vs_history).T
+        if self._mode == 'acceleration':
+            vs_history = []                
+            [vs_history.append(self._vs[traj_idx, t-k]) for k in reversed(range(self._vel_history))]
+            vs_history = jnp.asarray(vs_history).T
 
-                control_history = []
-                [control_history.append(self._control[traj_idx, t-k, 1::2]) for k in reversed(range(self._control_history))]
-                control_history = jnp.asarray(control_history).T
-                # Node features are current position, velocity history, current velocity
-                nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history, control_history))
-                # Edge features are relative positions
-                edges = self._dqs[traj_idx, t].reshape((-1,1))
-                # Global features are time, q0, v0, a0
-                # global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
-            
-                # Global features are None
-                global_context = None
-            case 'position':
-                raise NotImplementedError
+            control_history = []
+            [control_history.append(self._control[traj_idx, t-k, 1::2]) for k in reversed(range(self._control_history))]
+            control_history = jnp.asarray(control_history).T
+            # Node features are current position, velocity history, current velocity
+            nodes = jnp.column_stack((self._qs[traj_idx, t], vs_history, control_history))
+            # Edge features are relative positions
+            edges = self._dqs[traj_idx, t].reshape((-1,1))
+            # Global features are time, q0, v0, a0
+            # global_context = jnp.concatenate((jnp.array([t]), self._qs[traj_idx, 0], self._vs[traj_idx, 0], self._accs[traj_idx, 0])).reshape(-1,1)
+        
+            # Global features are None
+            global_context = None
+        elif self._mode == 'position':
+            raise NotImplementedError
             
         graph =  jraph.GraphsTuple(
                     nodes=nodes,

@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "GNODE"
 readme = "README.md"
 # license = {file = "LICENSE.txt"}
-requires-python=">=3.11"
+requires-python=">=3.9"
 
 [tool.setuptools.packages.find]
 exclude = ["results*"]

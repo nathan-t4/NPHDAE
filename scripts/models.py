@@ -220,24 +220,23 @@ class GraphNetworkSimulator(nn.Module):
                 t0 = 0
                 t1 = self.num_mp_steps * self.dt
                 dt0 = self.dt
-                match self.integration_method:
-                    case 'Euler':
-                        term = diffrax.ODETerm(newtons_equation_of_motion)
-                        solver = diffrax.Euler()
-                        sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
-                        next_pos = sol.ys[-1, 0:2]
-                        next_vel = sol.ys[-1, 2:4]
-                    case 'Tsit5':
-                        term = diffrax.ODETerm(newtons_equation_of_motion)
-                        solver = diffrax.Tsit5()
-                        sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
-                        next_vel = sol.ys[-1, 2:4]
-                    case 'SemiImplicitEuler':
-                        pred_acc = force(t0, args).squeeze()
-                        next_vel = cur_vel + pred_acc * (dt0 * self.num_mp_steps)
-                        next_pos = cur_pos + next_vel * (dt0 * self.num_mp_steps)
-                    case _:
-                        raise NotImplementedError('Invalid integration method')    
+                if self.integration_method == 'Euler':
+                    term = diffrax.ODETerm(newtons_equation_of_motion)
+                    solver = diffrax.Euler()
+                    sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
+                    next_pos = sol.ys[-1, 0:2]
+                    next_vel = sol.ys[-1, 2:4]
+                elif self.integration_method == 'Tsit5':
+                    term = diffrax.ODETerm(newtons_equation_of_motion)
+                    solver = diffrax.Tsit5()
+                    sol = diffrax.diffeqsolve(term, solver, t0, t1, dt0, y0, args=args)
+                    next_vel = sol.ys[-1, 2:4]
+                elif self.integration_method == 'SemiImplicitEuler':
+                    pred_acc = force(t0, args).squeeze()
+                    next_vel = cur_vel + pred_acc * (dt0 * self.num_mp_steps)
+                    next_pos = cur_pos + next_vel * (dt0 * self.num_mp_steps)
+                else:
+                    raise NotImplementedError('Invalid integration method')    
                 return next_pos, next_vel
             
             y0 = jnp.concatenate((cur_pos, cur_vel), axis=0).reshape(-1, 1)

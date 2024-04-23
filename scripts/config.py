@@ -3,13 +3,13 @@ import ml_collections
 
 def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict({
-        'system_name': 'n_free_spring', # Change this
+        'system_name': '2_mass_spring', # Change this
     })
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
         'training_data_path': f'results/{config.system_name}_data/train_10000_0.1_0.5_all_random_continuous.pkl',
         'evaluation_data_path': f'results/{config.system_name}_data/val_20_0.1_0.5_all_random_continuous.pkl',
-    })
+    }) 
     config.training_params = ml_collections.ConfigDict({
         'seed': 0,
         'net_name': 'GNS',

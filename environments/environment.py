@@ -278,7 +278,7 @@ class Environment(object):
             dataset['pixel_trajectories'].append(pixel_trajectory)
 
         # training_dataset = jnp.array([jnp.stack((state, next_state), axis=0)])
-        for traj_ind in tqdm(range(1, num_trajectories), desc='Generating data'):
+        for traj_ind in range(1, num_trajectories):
             self._rng_key, subkey = jax.random.split(self._rng_key)
             trajectory, timesteps, control_inputs = self.gen_random_trajectory(subkey, 
                                                         x0_init_lb, 

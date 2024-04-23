@@ -33,25 +33,30 @@ def eval(config: ml_collections.ConfigDict):
     paths = config.paths
 
     def create_net():
-        match training_params.net_name:
-            case 'GNS':
-                return GraphNetworkSimulator(**net_params)
-            case 'GNODE':
-                return GNODE(**net_params)
-            case _:
-                raise RuntimeError('Invalid net name')
+        if training_params.net_name == 'GNS':
+            return GraphNetworkSimulator(**net_params)
+        elif training_params.net_name == 'GNODE':
+            return GNODE(**net_params)
+        else:
+            raise RuntimeError('Invalid net name')
             
     log_dir = os.path.join(paths.dir, 'log')
     checkpoint_dir = os.path.join(paths.dir, 'checkpoint')
     plot_dir = os.path.join(paths.dir, 'eval_plots')
 
-    rng = jax.random.key(0)
+    rng = jax.random.key(training_params.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
     # Create writer for logs
     writer = metric_writers.create_default_writer(logdir=log_dir)
 
     tx = optax.adam(**config.optimizer_params)
+    train_gb = MSDGraphBuilder(paths.training_data_path, 
+                               training_params.add_undirected_edges, 
+                               training_params.add_self_loops, 
+                               net_params.prediction, 
+                               net_params.vel_history,
+                               net_params.control_history)
     eval_gb = MSDGraphBuilder(paths.evaluation_data_path, 
                               training_params.add_undirected_edges, 
                               training_params.add_self_loops, 
@@ -59,7 +64,7 @@ def eval(config: ml_collections.ConfigDict):
                               net_params.vel_history,
                               net_params.control_history)
     
-    net_params.norm_stats = eval_gb._norm_stats
+    net_params.norm_stats = train_gb._norm_stats
     eval_net = create_net()
     eval_net.training = False
     init_control = eval_gb._control[0, 0]
@@ -108,8 +113,13 @@ def eval(config: ml_collections.ConfigDict):
             return ts, np.array(pred_data), np.array((exp_qs_buffer, exp_as_buffer)), aux_data, EvalMetrics.single_from_model_output(loss=eval_pos_loss)
         elif net_params.prediction == 'position':
             return ts, np.array(pred_data), np.array(exp_qs_buffer)  
-
+        
+    trajs_size = train_gb._num_timesteps
+    ts_size = (train_gb._num_timesteps - train_gb._vel_history) // train_gb._dt
+    steps_per_epoch = (ts_size * trajs_size) // (training_params.batch_size ** 2)
+    init_epoch = int(state.step) // steps_per_epoch + 1
     print(f"Number of parameters {num_parameters(params)}")
+    print(f"Number of epochs {init_epoch}")
     rollout_error_sum = 0
     for i in range(eval_gb._num_trajectories):
         ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
@@ -121,7 +131,8 @@ def eval(config: ml_collections.ConfigDict):
 
     # Save evaluation metrics to json
     eval_metrics = {
-        'mean_rollout_error': (rollout_error_sum / eval_gb._num_trajectories).tolist()
+        'mean_rollout_error': (rollout_error_sum / eval_gb._num_trajectories).tolist(),
+        'evaluation_data_path': paths.evaluation_data_path,
     }
     eval_metrics_file = os.path.join(plot_dir, 'eval_metrics.js')
     with open(eval_metrics_file, "w") as outfile:
@@ -133,13 +144,12 @@ def train(config: ml_collections.ConfigDict):
     paths = config.paths
 
     def create_net():
-        match training_params.net_name:
-            case 'GNS':
-                return GraphNetworkSimulator(**net_params)
-            case 'GNODE':
-                return GNODE(**net_params)
-            case _:
-                raise RuntimeError('Invalid net name')
+        if training_params.net_name == 'GNS':
+            return GraphNetworkSimulator(**net_params)
+        elif training_params.net_name == 'GNODE':
+            return GNODE(**net_params)
+        else:
+            raise RuntimeError('Invalid net name')
     
     if paths.dir == None:
         config.paths.dir = os.path.join(os.curdir, f'results/{training_params.net_name}/{config.system_name}/{strftime("%m%d-%H%M")}_{training_params.trial_name}')
@@ -272,9 +282,11 @@ def train(config: ml_collections.ConfigDict):
     # Create evaluation network
     eval_net = create_net()
     eval_net.training = False
-    eval_net.norm_stats = eval_gb._norm_stats
-    if training_params.net_name == 'GNODE': eval_net.horizon = 1 
-    eval_state = state.replace(apply_fn=eval_net.apply)
+    # Use same normalization stats as training set
+    eval_net.norm_stats = train_gb._norm_stats 
+    # if training_params.net_name == 'GNODE': eval_net.horizon = 1 
+    batched_eval_apply = jax.vmap(eval_net.apply, in_axes=(None, 0, 0, None))
+    eval_state = state.replace(apply_fn=batched_eval_apply)
 
     # Create logger to report training progress
     report_progress = periodic_actions.ReportProgress(
@@ -284,11 +296,11 @@ def train(config: ml_collections.ConfigDict):
     # Load previous checkpoint (if applicable)
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
     best_model_ckpt = checkpoint.Checkpoint(os.path.join(checkpoint_dir, 'best_model'))
-    state = ckpt.restore_or_initialize(state)
+    state = best_model_ckpt.restore_or_initialize(state)
 
     trajs_size = train_gb._num_trajectories
-    ts_size = train_gb._num_timesteps - train_gb._vel_history
-    steps_per_epoch = (ts_size * trajs_size) // training_params.batch_size
+    ts_size = (train_gb._num_timesteps - train_gb._vel_history) // train_gb._dt
+    steps_per_epoch = (ts_size * trajs_size) // (training_params.batch_size ** 2)
     train_fn = train_epoch
 
     # Setup training epochs
@@ -300,8 +312,9 @@ def train(config: ml_collections.ConfigDict):
 
     train_metrics = None
     min_error = jnp.inf
-    print("Start training")
+    print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
+        print(f'State step on epoch {epoch}: {state.step}')
         rng, train_rng = jax.random.split(rng)
         state, metrics_update = train_fn(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
@@ -315,12 +328,12 @@ def train(config: ml_collections.ConfigDict):
 
         if epoch % training_params.eval_every_steps == 0 or is_last_step:
             eval_metrics = None
-            net.training = False
+            eval_state = eval_state.replace(params=state.params)
+
             with report_progress.timed('eval'):
-                # eval_state = eval_state.replace(params=state.params)
                 rollout_error_sum = 0
                 for i in range(eval_gb._num_trajectories):
-                    ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
+                    ts, pred_data, exp_data, aux_data, eval_metrics = rollout(eval_state, traj_idx=i)
                     rollout_error_sum += eval_metrics.compute()['loss']
                     plot_evaluation_curves(ts, pred_data, exp_data, aux_data,
                                            plot_dir=os.path.join(plot_dir, f'traj_{i}'),
@@ -333,6 +346,7 @@ def train(config: ml_collections.ConfigDict):
                 if rollout_mean_pos_loss < min_error: 
                     # Save best model
                     min_error = rollout_mean_pos_loss
+                    print(f'Saving best model at epoch {epoch}')
                     with report_progress.timed('checkpoint'):
                         best_model_ckpt.save(state)
                 if epoch > training_params['min_epochs']: # train at least for 'min_epochs' epochs
@@ -341,7 +355,6 @@ def train(config: ml_collections.ConfigDict):
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')
                         training_params.num_epochs = epoch - init_epoch
                         is_last_step = True
-            net.training = True
 
         if epoch % training_params.log_every_steps == 0 or is_last_step:
             writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))

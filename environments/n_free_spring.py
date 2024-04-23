@@ -12,7 +12,7 @@ from environments.utils import *
 def generate_trajectory(args, seed=0):
     rng = np.random.default_rng(seed)
 
-    save_dir = os.path.join(os.curdir, 'results/free_spring/')
+    save_dir = os.path.join(os.curdir, 'results/free_spring_data/')
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
 
@@ -165,7 +165,7 @@ def generate_trajectory(args, seed=0):
             dataset = merge_datasets(dataset, new_dataset, ('m', 'k', 'b'))
 
     # Save dataset
-    save_path = os.path.join(save_dir, f"{args.type}_{num_trajectories}_{train_scales['m']}_{train_scales['control_coef']}.pkl")
+    save_path = os.path.join(save_dir, f"{args.type}_{num_trajectories}_{train_scales['m']}_{train_scales['control_coef']}_{args.control}.pkl")
 
     with open(save_path, 'wb') as f:
         pickle.dump(dataset, f)
