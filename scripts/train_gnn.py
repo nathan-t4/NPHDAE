@@ -83,7 +83,7 @@ def eval(config: ml_collections.ConfigDict):
     def rollout(eval_state: TrainState, traj_idx: int = 0, t0: int = 0):
         tf_idxs = (t0 + jnp.arange(training_params.rollout_timesteps // eval_net.num_mp_steps)) * eval_net.num_mp_steps
         t0 = round(eval_net.vel_history /  eval_net.num_mp_steps) * eval_net.num_mp_steps
-        tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + eval_net.num_mp_steps, max=1500))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + eval_net.num_mp_steps, max=eval_gb._num_timesteps))
         ts = tf_idxs * eval_net.dt
 
         controls = eval_gb._control[traj_idx, tf_idxs]
@@ -247,7 +247,7 @@ def train(config: ml_collections.ConfigDict):
     def rollout(eval_state: TrainState, traj_idx: int = 0, t0: int = 0):
         tf_idxs = (t0 + jnp.arange(training_params.rollout_timesteps // net.num_mp_steps)) * net.num_mp_steps
         t0 = round(net.vel_history /  net.num_mp_steps) * net.num_mp_steps
-        tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + net.num_mp_steps, max=1500))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + net.num_mp_steps, max=eval_gb._num_timesteps))
         ts = tf_idxs * net.dt
         controls = eval_gb._control[traj_idx, tf_idxs]
         exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
@@ -314,7 +314,7 @@ def train(config: ml_collections.ConfigDict):
     min_error = jnp.inf
     print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
-        print(f'State step on epoch {epoch}: {state.step}')
+        print(f'State step on epoch {epoch}: {state.step}, {state.step // steps_per_epoch + 1}')
         rng, train_rng = jax.random.split(rng)
         state, metrics_update = train_fn(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
@@ -349,7 +349,7 @@ def train(config: ml_collections.ConfigDict):
                     print(f'Saving best model at epoch {epoch}')
                     with report_progress.timed('checkpoint'):
                         best_model_ckpt.save(state)
-                if epoch > training_params['min_epochs']: # train at least for 'min_epochs' epochs
+                if epoch > training_params.min_epochs: # train at least for 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_mean_pos_loss)
                     if early_stop.should_stop:
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')
@@ -360,7 +360,7 @@ def train(config: ml_collections.ConfigDict):
             writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))
             train_metrics = None
 
-        if epoch % training_params.checkpoint_every_steps == 0 or is_last_step:
+        if epoch % training_params.ckpt_every_steps == 0 or is_last_step:
             with report_progress.timed('checkpoint'):
                 ckpt.save(state)
 

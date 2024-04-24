@@ -400,7 +400,7 @@ def generate_dataset(args, env_seed: int = 501):
         'control_coef': 0.5,
         'control_scale': 0.5,
         'control_offset': 0.5,
-        'q0': 0.5,
+        'q0': 0,
     }
     val_scales = {
         'm': 0.1,
@@ -410,7 +410,7 @@ def generate_dataset(args, env_seed: int = 501):
         'control_coef': 0.5,
         'control_scale': 0.5,
         'control_offset': 0.5,
-        'q0': 0.1,
+        'q0': 0,
     }
 
     key = jax.random.key(env_seed)
@@ -506,7 +506,7 @@ def generate_dataset(args, env_seed: int = 501):
             x0_init_lb = x0_init_lb + q0_noise
             x0_init_ub = x0_init_ub + q0_noise
 
-            x0_init_lb = jnp.clip(x0_init_lb, a_min=jnp.zeros(4))
+            x0_init_lb = jnp.clip(x0_init_lb, a_min=jnp.zeros(2 * N))
 
             env.m        = jnp.array(get_validation_range(keys[2], 'm', 'm'))
             env.k        = jnp.array(get_validation_range(keys[3], 'k', 'k'))

@@ -100,7 +100,7 @@ class GraphNetworkSimulator(nn.Module):
     add_self_loops: bool = False
     add_undirected_edges: bool = False
 
-    dt: float = 0.01
+    dt: float = 0.01 # TODO: set from graphbuilder?
 
     @nn.compact
     def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
@@ -205,12 +205,15 @@ class GraphNetworkSimulator(nn.Module):
             
             def newtons_equation_of_motion(t, y, args):
                 """
-                    TODO: generalize to n-dim systems
-                    y = = [pos, vel] = [x0, x1, v0, v1] 
+                    TODO: generalize to n-dim systems 
+                    y = [x0, v0, x1, v1] 
+
+                    A = np.zeros((2*N, 2*N))
+                    ...
                 """
-                A = jnp.array([[0, 0, 1, 0], 
-                               [0, 0, 0, 1], 
+                A = jnp.array([[0, 1, 0, 0], 
                                [0, 0, 0, 0], 
+                               [0, 0, 0, 1], 
                                [0, 0, 0, 0]])
                 F = jnp.concatenate((jnp.array([[0], [0]]), force(t, args)))
                 return A @ y + F
@@ -287,89 +290,81 @@ class GraphNetworkSimulator(nn.Module):
 
         return processed_graph
     
-class CoupledGraphNetworkSimulator(nn.Module):
+class CompGraphNetworkSimulator(nn.Module):
     """ 
         Model-based composition of Graph Network Simulators
     """
+    latent_size: int
+    hidden_layers: int
+    activation: str
+
+    I: jnp.array # interconnection structure
+
+    split_u: Callable[[jnp.array, jnp.array], tuple[jnp.array, jnp.array]]
+    split_graph: Callable[[jraph.GraphsTuple, jnp.array], tuple[jraph.GraphsTuple, jraph.GraphsTuple]]
+    join_acc: Callable[[jnp.array, jnp.array, jnp.array], jnp.array]
     join_graph: Callable[[jraph.GraphsTuple, jraph.GraphsTuple, jnp.array], jraph.GraphsTuple]
-    dejoin_graph: Callable[[jraph.GraphsTuple, jnp.array], tuple[jraph.GraphsTuple, jraph.GraphsTuple]]
+
     GNS_one: GraphNetworkSimulator
     GNS_two: GraphNetworkSimulator
-    merged_nodes: jnp.array # shape = [#, 2]
-
+    
     @nn.compact
     def __call__(
-        self, composed_graph: jraph.GraphsTuple, composed_next_u: jnp.array, composed_mass: jnp.array, rng
+        self, composed_graph: jraph.GraphsTuple, u_c: jnp.array, rng: jax.Array,
         ) -> jraph.GraphsTuple:
         """
             || --- 0 --- 1   (+)   1 --- 2   (=)  || --- 0 --- 1 --- 2
 
-            Steps
-            1. dejoin input composed_graph into graph_one, graph_two
-            2. pass respective GNS on graph_one and graph_two. get acceleration
-            3. add new inputs
-            4. pass graph_one and graph_two through GNS again with new_inputs 
-            5. join graph and return
-
-            # Problem: 
-            - graph_one from decomposition of 5-msd does not have the same behavior as graph from 2-msd!
-
+            # graph_one, graph_two = split(composed_graph, I)
+            # F = f(composed_graph)
+            # u = u_c + F
+            # u_1, u_2 = split(u, I)
+            # next_graph_one = self.GNS_one(graph_one, u_1, rng)
+            # next_graph_two = self.GNS_two(graph_two, u_2, rng)
+            # acc_one = next_graph_one.nodes[:,-1]
+            # acc_two = next_graph_two.nodes[:,-1]
+            # acc_est = join(acc_one, acc_two, I)
+            # next_graph = join(graph_one, graph_two, I)
 
                        delta y
                       <-------> 
             ||---0---1  o---o  1---2
 
-            TODO
-            - add delta y (maybe just when plotting simulation)
-            - learn u_c?
         """
-        graph_one, graph_two = self.dejoin_graph(composed_graph, self.merged_nodes)
-
-        idx_1 = jnp.array([0, 1]) # TODO: given merged nodes, original nodes of 1 (first N1) and 2 (next N2)
-        idx_2 = jnp.array([1, 2])
-        next_u_1 = composed_next_u[idx_1]
-        next_u_2 = composed_next_u[idx_2]
-
-        jax.debug.print('u_1 {} u_2 {}', next_u_1, next_u_2)
-
-        next_graph_one = self.GNS_one(graph_one, next_u_1, rng)
-        next_graph_two = self.GNS_two(graph_two, next_u_2, rng)
-
-        # nominal normalized accelerations
-        nominal_acc_one = next_graph_one.nodes[:,-1]
-        nominal_acc_two = next_graph_two.nodes[:,-1]
-
-        # rescale accelerations
-        acc_one = nominal_acc_one * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
-        acc_two = nominal_acc_two * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
-
-        jax.debug.print('acc one {} and acc two {}', acc_one, acc_two)
-
-        # Assume masses are known. TODO: remove assumption
-        M1 = jnp.diag(composed_mass[idx_1]) 
-        M2 = jnp.diag(composed_mass[idx_2])
-        # Calculate new forces due to joining
-        u_c_1 = jnp.array([0, M1 @ acc_two[0]])
-        u_c_2 = jnp.array([M2 @ acc_one[1], 0])
-        # Get control inputs for composed system # TODO: use self.merged_nodes
-        F_1 = next_u_1 + u_c_1
-        F_2 = next_u_2 + u_c_2
-
-        jax.debug.print('F_1 {} F_2 {}', F_1, F_2)
-
-        # predict composed system dynamics
-        next_graph_one = self.GNS_one(graph_one, F_1, rng)
-        next_graph_two = self.GNS_two(graph_two, F_2, rng)
-
-        # transform features of next_graph_two (merging flows) - adding position!
-        next_graph_two_transformed_position = next_graph_two.nodes[:,0] + next_graph_one[-1,0] # pos of merged node
-        next_graph_two._replace(nodes=jnp.concatenate((next_graph_two_transformed_position,
-                                                       next_graph_two.nodes[:,1])),
-                                                       axis=1)
-
-        next_graph = self.join_graph(next_graph_one, next_graph_two, self.merged_nodes)
+        N = len(composed_graph.nodes)
+        # TODO: generalize f to be a GraphNetwork?
+        f = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [N], activation=self.activation)
         
-        return next_graph
+        graph_one, graph_two = self.split_graph(composed_graph, self.I)
+        # Forces from joining systems
+        # F = f(composed_graph) # TODO: when GraphNetwork
+        inputs = jnp.concatenate((graph_one.nodes, graph_two.nodes), axis=0)
+        F = f(inputs)
+        # Updated control input for composed system
+        u = u_c + F
+        u_1, u_2 = self.split_u(u, self.I)
+        # Get next state
+        next_graph_one = self.GNS_one(graph_one, u_1, rng)
+        next_graph_two = self.GNS_two(graph_two, u_2, rng)
+        # Normalized accelerations from GNS
+        acc_one = next_graph_one.nodes[:,-1]
+        acc_two = next_graph_two.nodes[:,-1]
+        # Rescale accelerations 
+        acc_one = acc_one * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
+        acc_two = acc_two * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
+        # Acceleration of composed system
+        acc_est = self.join_acc(acc_one, acc_two)
+        # Add position offset to next_graph_two (TODO: remove)
+        next_graph_two_nodes = next_graph_two.nodes[:,0] + next_graph_one.nodes[-1,0] # plus delta_y
+        next_graph_two = next_graph_two._replace(nodes=next_graph_two_nodes)
+        # Join graphs
+        next_composed_graph = self.join_graph(next_graph_one, next_graph_two, self.I)
+        # Add acc_est to nodes of next_composed_graph 
+        nodes = jnp.column_stack((next_composed_graph.nodes, acc_est))
+
+        next_composed_graph = next_composed_graph._replace(nodes=nodes)
+
+        return next_composed_graph
 
 class GNODE(nn.Module):
     """ 
