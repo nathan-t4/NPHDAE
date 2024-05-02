@@ -6,8 +6,10 @@ import flax.linen as nn
 import jax.numpy as jnp
 
 from typing import Sequence, Callable
+from flax.training.train_state import TrainState
 from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
+from utils.jax_utils import *
 
 class MLP(nn.Module):
     feature_sizes: Sequence[int]
@@ -103,23 +105,28 @@ class GraphNetworkSimulator(nn.Module):
     dt: float = 0.01 # TODO: set from graphbuilder?
 
     @nn.compact
-    def __call__(self, graph: jraph.GraphsTuple, next_u, rng) -> jraph.GraphsTuple:
-        next_u = next_u[1::2] # get nonzero elements (even indices) corresponding to control input
+    def __call__(self, graph: jraph.GraphsTuple, control, rng) -> jraph.GraphsTuple:
+        # TODO: change next_u to cur_u (control)
+        num_nodes = len(graph.nodes)
+        position = graph.nodes[:,0]
+        control = control[1::2] # get nonzero elements (even indices) corresponding to control input
         if self.training: 
             # Add noise to current position (first node feature)
             rng, pos_rng, u_rng = jax.random.split(rng, 3)
-            pos_noise = self.noise_std * jax.random.normal(pos_rng, (len(graph.nodes),))
-            new_nodes = jnp.column_stack((graph.nodes[:,0].T + pos_noise, graph.nodes[:,1:]))
-            graph = graph._replace(nodes=new_nodes)
+            pos_noise = self.noise_std * jax.random.normal(pos_rng, (num_nodes,))
+            position = position + pos_noise
             # Add noise to control input at current time-step (next_u)
-            next_u_noise = self.noise_std * jax.random.normal(u_rng, (len(next_u),))
-            next_u = next_u + next_u_noise
-    
+            control_noise = self.noise_std * jax.random.normal(u_rng, (num_nodes,))
+            control = control + control_noise
+
+        new_nodes = jnp.column_stack((position, graph.nodes[:,1:], control))
+        graph = graph._replace(nodes=new_nodes)
+
         cur_pos = graph.nodes[:,0]
         if self.prediction == 'acceleration':
             cur_vel = graph.nodes[:,self.vel_history]
             prev_vel = graph.nodes[:,1:self.vel_history+1] # includes current velocity
-            prev_u = graph.nodes[:,self.vel_history+1:] # includes current u
+            prev_control = graph.nodes[:,self.vel_history+1:] # includes current u
         elif self.prediction == 'position':
             prev_pos = graph.nodes[:,1:self.vel_history+1]
 
@@ -208,14 +215,16 @@ class GraphNetworkSimulator(nn.Module):
                     TODO: generalize to n-dim systems 
                     y = [x0, v0, x1, v1] 
 
-                    A = np.zeros((2*N, 2*N))
+                    A = np.zeros((2*N, 2*N)) 
                     ...
                 """
                 A = jnp.array([[0, 1, 0, 0], 
                                [0, 0, 0, 0], 
                                [0, 0, 0, 1], 
                                [0, 0, 0, 0]])
-                F = jnp.concatenate((jnp.array([[0], [0]]), force(t, args)))
+                F_ext = force(t, args)
+                # TODO: check if there is bug here!
+                F = jnp.concatenate((jnp.array([0]), F_ext[0], jnp.zeros(1), F_ext[1])) 
                 return A @ y + F
             
             @jax.jit
@@ -247,7 +256,7 @@ class GraphNetworkSimulator(nn.Module):
             next_pos, next_vel = solve(y0, args)  
             next_nodes = jnp.column_stack((next_pos, 
                                            prev_vel[:,1:], next_vel, 
-                                           prev_u[:,1:], next_u, 
+                                           prev_control[:,1:], 
                                            force(None, args))) # TODO: pass time into force?
             next_edges = jnp.diff(next_pos.squeeze()).reshape(-1,1)
             # else:
@@ -257,8 +266,7 @@ class GraphNetworkSimulator(nn.Module):
                 next_edges = jnp.concatenate((next_edges, next_edges), axis=0)
             
             if self.add_self_loops:
-                N = len(next_u) # num of masses
-                next_edges = jnp.concatenate((next_edges, jnp.zeros((N, 1))), axis=0)
+                next_edges = jnp.concatenate((next_edges, jnp.zeros((num_nodes, 1))), axis=0)
             
             if self.use_edge_model:
                 graph = graph._replace(nodes=next_nodes, edges=next_edges)
@@ -305,8 +313,8 @@ class CompGraphNetworkSimulator(nn.Module):
     join_acc: Callable[[jnp.array, jnp.array, jnp.array], jnp.array]
     join_graph: Callable[[jraph.GraphsTuple, jraph.GraphsTuple, jnp.array], jraph.GraphsTuple]
 
-    GNS_one: GraphNetworkSimulator
-    GNS_two: GraphNetworkSimulator
+    state_one: TrainState
+    state_two: TrainState
     
     @nn.compact
     def __call__(
@@ -334,28 +342,50 @@ class CompGraphNetworkSimulator(nn.Module):
         N = len(composed_graph.nodes)
         # TODO: generalize f to be a GraphNetwork?
         f = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [N], activation=self.activation)
-        
+        # jax.debug.print('graph c nodes {} edges {} globals {} receivers {} senders {} n_node {} n_edge {}', composed_graph.nodes.shape, composed_graph.edges.shape, composed_graph.globals, composed_graph.receivers, composed_graph.senders, composed_graph.n_node, composed_graph.n_edge)
         graph_one, graph_two = self.split_graph(composed_graph, self.I)
+        # jax.debug.print('graph two nodes {} edges {} globals {} receivers {} senders {} n_node {} n_edge {}', graph_two.nodes.shape, graph_two.edges.shape, graph_two.globals, graph_two.receivers, graph_two.senders, graph_two.n_node, graph_two.n_edge)
         # Forces from joining systems
         # F = f(composed_graph) # TODO: when GraphNetwork
-        inputs = jnp.concatenate((graph_one.nodes, graph_two.nodes), axis=0)
-        F = f(inputs)
+        inputs = jnp.concatenate((graph_one.nodes, graph_two.nodes), axis=0).flatten()
+        F = [0] * (2*N)
+        F[1::2] = f(inputs)
+        F = jnp.array(F)
         # Updated control input for composed system
-        u = u_c + F
-        u_1, u_2 = self.split_u(u, self.I)
-        # Get next state
-        next_graph_one = self.GNS_one(graph_one, u_1, rng)
-        next_graph_two = self.GNS_two(graph_two, u_2, rng)
-        # Normalized accelerations from GNS
+        u = u_c + F # TODO: this is not correct. should add F on nodes depending on I
+        u_1, u_2 = self.split_u(u, self.I) # TODO: should take u_c and F as input?
+
+        # Get next state - need to stack then unstack because state apply_fn uses vmap
+        graph_one = pytrees_stack([graph_one])
+        graph_two = pytrees_stack([graph_two])
+
+        next_graph_one = self.state_one.apply_fn(self.state_one.params, graph_one, jnp.array([u_1]), rng)
+        next_graph_two = self.state_two.apply_fn(self.state_two.params, graph_two, jnp.array([u_2]), rng)
+
+        next_graph_one = pytrees_unstack(graph_one)
+        next_graph_two = pytrees_unstack(graph_two)
+
+        # jax.debug.print('next graph one nodes shape {}', next_graph_one.nodes.shape)
+
+        # Predicted accelerations from GNS
         acc_one = next_graph_one.nodes[:,-1]
         acc_two = next_graph_two.nodes[:,-1]
-        # Rescale accelerations 
-        acc_one = acc_one * self.GNS_one.norm_stats.acceleration.std + self.GNS_one.norm_stats.acceleration.mean
-        acc_two = acc_two * self.GNS_two.norm_stats.acceleration.std + self.GNS_two.norm_stats.acceleration.mean
+        
         # Acceleration of composed system
-        acc_est = self.join_acc(acc_one, acc_two)
+        # jax.debug.print('acc one {} acc two {}', acc_one, acc_two)
+        acc_est = self.join_acc(acc_one, acc_two, self.I)
+        # jax.debug.print('acc est {}', acc_est)
+        # jax.debug.print('next graph two nodes {}', next_graph_two.nodes)
+
         # Add position offset to next_graph_two (TODO: remove)
-        next_graph_two_nodes = next_graph_two.nodes[:,0] + next_graph_one.nodes[-1,0] # plus delta_y
+        next_graph_two_pos = next_graph_two.nodes[:,0] + next_graph_one.nodes[-1, 0]
+        next_graph_two_nodes = jnp.concatenate((
+            next_graph_two_pos.reshape((-1,1)),
+            next_graph_two.nodes[:,1:]
+        ), axis=1) # plus delta_y
+
+        # jax.debug.print('next graph two nodes {}', next_graph_two_nodes)
+
         next_graph_two = next_graph_two._replace(nodes=next_graph_two_nodes)
         # Join graphs
         next_composed_graph = self.join_graph(next_graph_one, next_graph_two, self.I)
@@ -364,8 +394,62 @@ class CompGraphNetworkSimulator(nn.Module):
 
         next_composed_graph = next_composed_graph._replace(nodes=nodes)
 
+        # jax.debug.print('next graph nodes {} edges {} receivers {} senders {}', next_composed_graph.nodes, next_composed_graph.edges, next_composed_graph.receivers, next_composed_graph.senders)
+
         return next_composed_graph
 
+class CompGNS(nn.Module):
+    state_one: TrainState
+    state_two: TrainState
+    I: jnp.array # interconnection structure
+
+    @nn.compact
+    def __call__(self, graph_one, graph_two, u_one, u_two, rng):
+        """
+            Given any initial composite graph (outside of this method) that is split into two subsystem graphs (also outside of this method), predict the next-state of the composite system.
+
+            The initial composite graph is split to get the correct initial conditions...
+
+            Input: G1, G2
+            Input: u_1, u_2 (if input on same node, then what to do?)
+            Input: state_one, state_two (GNS)
+
+            TODO: need to make sure GNS is position invariant
+            TODO: recreate composition idea on mass springs?
+        """
+        graph_one_acc = self.state_one.apply_fn(self.state_one.params, graph_one, u_one, rng)
+        graph_two_acc = self.state_two.apply_fn(self.state_two.params, graph_two, u_two, rng)
+
+        acc_one = graph_one_acc.nodes[:,-1]
+        acc_two = graph_two_acc.nodes[:,-1]
+
+        N_c = len(graph_one.nodes) + len(graph_two.nodes) - len(self.I)
+        """
+            i=0,1,2
+
+            V_1 = {0,1}
+            V_2 = {1,2}
+
+            0 \in V_1 / V_m
+            1 \in V_m
+            2 \in V_2 / V_m
+
+            I = 
+            {
+                1: [1, 0],
+            }
+        """
+        F_ext = np.zeros((N_c, 2))
+        for k, v in self.I.values():
+            F_ext[k] = [acc_one[v[0]], acc_two[v[1]]]
+        
+        next_graph_one = self.state_one.apply_fn(self.state_one.params, graph_one, u_one + F_ext[:,0])
+        next_graph_two = self.state_two.apply_fn(self.state_two.params, graph_two, u_two + F_ext[:,1])
+
+        next_x_c = get_state(next_graph_one, next_graph_two) # TODO: because the state at the merged nodes needs to be dealt with special care
+
+        return next_graph_one, next_graph_two, next_x_c
+    
 class GNODE(nn.Module):
     """ 
         EncodeProcessDecode GNODE

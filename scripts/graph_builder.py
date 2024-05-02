@@ -44,7 +44,7 @@ class GraphBuilder():
 @register_pytree_node_class
 class MSDGraphBuilder(GraphBuilder):
     """ 
-        N-Mass Spring Damper (DMSD) 
+        N-Mass Spring Damper (DMSD) from dataset
     """
     def __init__(self, path, add_undirected_edges, add_self_loops, mode, vel_history, control_history):
         super().__init__(path, add_undirected_edges, add_self_loops)
@@ -121,6 +121,11 @@ class MSDGraphBuilder(GraphBuilder):
         self.n_edge = jnp.array([jnp.shape(self._dqs)[-1]])
         self.senders = jnp.arange(0, jnp.shape(self._qs)[-1]-1)
         self.receivers = jnp.arange(1, jnp.shape(self._qs)[-1])
+
+    def get_graph_from_state(self, x) -> jraph.GraphsTuple:
+        q = x[::2]
+        qdot = x[1::2]
+        nodes = jnp.column_stack((q, qdot))
     
     @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:

@@ -5,3 +5,4 @@ py311/
 __pycache__
 log/
 results/
+*.png

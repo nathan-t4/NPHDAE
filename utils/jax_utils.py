@@ -11,6 +11,12 @@ def pytrees_stack(pytrees, axis=0):
         lambda *values: jnp.stack(values, axis=axis), *pytrees)
     return results
 
+def pytrees_unstack(pytree, axis=0):
+    results = jax.tree_map(
+        lambda value : jnp.squeeze(value, axis=axis), pytree
+    )
+    return results
+
 def pytrees_vmap(fn):
     def g(pytrees):
         stacked = pytrees_stack(pytrees)

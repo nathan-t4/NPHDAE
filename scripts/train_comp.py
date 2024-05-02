@@ -23,7 +23,7 @@ from config import *
 
 def split_u_ex(u, I):
     """ TODO - generalize with I """
-    return u[:2], u[1:]
+    return u[:4], u[2:]
 
 def split_graph_ex(Gc, I):
     """ TODO - generalize with I """
@@ -31,12 +31,12 @@ def split_graph_ex(Gc, I):
     indices_2 = jnp.array([1,3,5,6])
 
     n1 = Gc.nodes[jnp.array([0, 1]),:]
-    e1 = Gc.edges[jnp.array([0]),:]
+    e1 = Gc.edges[indices_1,:]
     r1 = Gc.receivers[indices_1]
     s1 = Gc.senders[indices_1]
 
     n2 = Gc.nodes[jnp.array([1, 2]),:]
-    e2 = Gc.edges[jnp.array([1]),:]
+    e2 = Gc.edges[indices_2,:]
     r2 = Gc.receivers[indices_2]
     s2 = Gc.senders[indices_2]
 
@@ -58,13 +58,13 @@ def split_graph_ex(Gc, I):
 
 def join_acc_ex(a1, a2, I):
     """ TODO - generalize with I """
-    return jnp.array([a1, a2[1]]) # TODO: this is a choice, could also be jnp.array([a1[0], a2])
+    return jnp.concatenate((a1, jnp.array([a2[1]])))# TODO: this is a choice, could also be jnp.concatenate(jnp.array([a1[0]]), a2))
 
 def join_graph_ex(G1, G2, I):
     """ TODO - generalize with I """
     overlap_ind = jnp.array([0, 1, 3])
-    n = jnp.concatenate((G1.nodes, G2.nodes[1]), axis=0)
-    e = jnp.concatenate((G1.edges, G2.edges), axis=0)
+    n = jnp.concatenate((G1.nodes, G2.nodes[1].reshape((1,-1))), axis=0)
+    e = jnp.concatenate((G1.edges, G2.edges), axis=0) # TODO: remove overlap edge - identity on 1.
     r = jnp.concatenate((G1.receivers, G2.receivers[overlap_ind]), axis=0) # TODO: check
     s = jnp.concatenate((G1.senders, G2.senders[overlap_ind]), axis=0) # TODO: check
     Gc = jraph.GraphsTuple(nodes=n,
@@ -157,10 +157,13 @@ def join_graph_example(
     return composed_graph
 
 def train_comp(config: ml_collections.ConfigDict):
-    # load gns1 from checkpoint
-    # load gns2 from checkpoint
-    # compare with actual (gt acceleration)
-    # compare with expected data AND one-shot GNS
+    # Inputs: GraphBuilder1, GraphBuilder2
+    # Inputs: GNS1, GNS2
+    # Inputs: control inputs of the composed system
+    # Inputs: state of composed system at time-step k
+    # Output: state of composed system at time-step k+1
+
+
     paths = config.paths
     training_params = config.training_params
     net_params_one = config.net_params_one
@@ -181,31 +184,33 @@ def train_comp(config: ml_collections.ConfigDict):
     checkpoint_dir = os.path.join(paths.dir, 'checkpoint')
     plot_dir = os.path.join(paths.dir, 'plots')
 
-    # TODO: this is not technically necessary...if these params are inputs to the join and split functions
-    assert (net_params_one.prediction == net_params_two.prediction), \
-        'Prediction modes should be the same for both GNS'
+    def assertions():
+        assert (net_params_one.prediction == net_params_two.prediction), \
+            'Prediction modes should be the same for both GNS'
+        
+        assert (net_params_one.add_undirected_edges == net_params_two.add_undirected_edges), \
+            'Undirected edges should be the same for both GNS'
+
+        assert (net_params_one.add_self_loops == net_params_two.add_self_loops), \
+            'Self loops should be the same for both GNS'
+
+        assert (net_params_one.vel_history == net_params_two.vel_history), \
+            'Velocity history should be the same for both GNS'
+
+        assert (net_params_one.control_history == net_params_two.control_history), \
+            'Control history should be the same for both GNS'
+
+        assert (net_params_one.num_mp_steps == net_params_two.num_mp_steps), \
+            'Number of message passing steps should be the same for both GNS'
+        
+    assertions()
+
     prediction = net_params_one.prediction
-
-    assert (net_params_one.add_undirected_edges == net_params_two.add_undirected_edges), \
-        'Undirected edges should be the same for both GNS'
     undirected_edges = net_params_one.add_undirected_edges
-
-    assert (net_params_one.add_self_loops == net_params_two.add_self_loops), \
-        'Self loops should be the same for both GNS'
     self_loops = net_params_one.add_self_loops
-
-    assert (net_params_one.vel_history == net_params_two.vel_history), \
-        'Velocity history should be the same for both GNS'
     vel_history = net_params_one.vel_history
-
-    assert (net_params_one.control_history == net_params_two.control_history), \
-        'Control history should be the same for both GNS'
     control_history = net_params_one.control_history
-
-    assert (net_params_one.num_mp_steps == net_params_two.num_mp_steps), \
-        'Number of message passing steps should be the same for both GNS'
     num_mp_steps = net_params_one.num_mp_steps
-
 
     def create_net(net_params):
         return GraphNetworkSimulator(**net_params)
@@ -218,9 +223,6 @@ def train_comp(config: ml_collections.ConfigDict):
 
     # Create writer for logs
     writer = metric_writers.create_default_writer(logdir=log_dir)
-
-    # Create optimizers
-    tx = optax.adam(**config.optimizer_params)
 
     # Create graph builders for subsystems 1, 2 (needed to initialize subsystem GNSs)
     gb_one = MSDGraphBuilder(paths.evaluation_data_path_one, 
@@ -236,22 +238,15 @@ def train_comp(config: ml_collections.ConfigDict):
                              prediction, 
                              vel_history,
                              control_history)
-
-    gb_c = MSDGraphBuilder(paths.training_data_path_comp,
-                           undirected_edges,
-                           self_loops,
-                           prediction,
-                           vel_history,
-                           control_history)
     
-    gb_c_eval = MSDGraphBuilder(paths.evaluation_data_path_comp,
+    gb_c = MSDGraphBuilder(paths.evaluation_data_path_comp,
                                 undirected_edges,
                                 self_loops,
                                 prediction,
                                 vel_history,
                                 control_history)
     
-    assert (gb_one._dt == gb_two._dt == gb_c._dt == gb_c_eval._dt), \
+    assert (gb_one._dt == gb_two._dt == gb_c._dt), \
         'dt should be the same for all GNS'
     dt = gb_one._dt
             
@@ -260,14 +255,14 @@ def train_comp(config: ml_collections.ConfigDict):
     net_one = create_net(net_params_one)
     net_one.training = False
 
-    init_graph = gb_one.get_graph(traj_idx=0, t=vel_history+1)
-    init_control = gb_one._control[0, 0]
+    init_graph_one = gb_one.get_graph(traj_idx=0, t=vel_history+1)
+    init_control_one = gb_one._control[0, vel_history+1]
     params_one = net_one.init(init_rng, 
-                                   init_graph,
-                                   init_control, 
-                                   net_rng)
+                              init_graph_one,
+                              init_control_one, 
+                              net_rng)
     tx_one = optax.adam(**config.optimizer_params)
-    batched_apply_one = jax.vmap(net_one.apply, in_axes=(None,0,0,None))
+    batched_apply_one = jax.vmap(net_one.apply, in_axes=(None,0,0,None)) # TODO: remove batch
     state_one = TrainState.create(
         apply_fn=batched_apply_one,
         params=params_one,
@@ -284,14 +279,14 @@ def train_comp(config: ml_collections.ConfigDict):
     net_two = create_net(net_params_two)
     net_two.training = False
 
-    init_graph = gb_two.get_graph(traj_idx=0, t=vel_history+1)
-    init_control = gb_two._control[0, 0]
+    init_graph_two = gb_two.get_graph(traj_idx=0, t=vel_history+1)
+    init_control_two = gb_two._control[0, vel_history+1]
     params_two = net_two.init(init_rng, 
-                              init_graph,
-                              init_control, 
+                              init_graph_two,
+                              init_control_two, 
                               net_rng)
     tx_two = optax.adam(**config.optimizer_params)
-    batched_apply_two = jax.vmap(net_two.apply, in_axes=(None,0,0,None))
+    batched_apply_two = jax.vmap(net_two.apply, in_axes=(None,0,0,None)) # TODO: remove batch
     state_two = TrainState.create(
         apply_fn=batched_apply_two,
         params=params_two,
@@ -303,17 +298,19 @@ def train_comp(config: ml_collections.ConfigDict):
     ckpt_two = checkpoint.Checkpoint(checkpoint_dir_two)
     state_two = ckpt_two.restore_or_initialize(state_two)
 
-    # Add GNSs to net_params_c
-    net_params_c.GNS_one = net_one
-    net_params_c.GNS_two = net_two
+    # Add GNS states to net_params_c
+    net_params_c.state_one = state_one 
+    net_params_c.state_two = state_two
+
     # Initialize composite GNS
     comp_net = CompGraphNetworkSimulator(**net_params_c)
-    init_graph = gb_c.get_graph(traj_idx=0, t=vel_history+1)
-    init_control = gb_c._control[0, 0]
+    init_graph_c = gb_c.get_graph(traj_idx=0, t=vel_history+1)
+    init_control_c = gb_c._control[0, vel_history+1]
     params = comp_net.init(init_rng, 
-                           init_graph,
-                           init_control, 
+                           init_graph_c,
+                           init_control_c, 
                            net_rng)
+    tx = optax.adam(**config.optimizer_params)
     batched_apply = jax.vmap(comp_net.apply, in_axes=(None,0,0,None))
 
     state_c = TrainState.create(
@@ -321,8 +318,6 @@ def train_comp(config: ml_collections.ConfigDict):
         params=params,
         tx=tx,
     )
-
-    print('CompGraphNetworkSimulator parameters', params)
 
     # Create evaluation composite GNS
     eval_comp_net = CompGraphNetworkSimulator(**net_params_c)
@@ -349,6 +344,7 @@ def train_comp(config: ml_collections.ConfigDict):
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 predictions = pred_graphs.nodes[:,:,-1] 
                 loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
+            return loss
 
         def train_batch(state, trajs, t0s):
             tfs = t0s + num_mp_steps
@@ -373,8 +369,7 @@ def train_comp(config: ml_collections.ConfigDict):
         t0 = round(vel_history /  num_mp_steps) * num_mp_steps
         tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + num_mp_steps, max=gb_c._num_timesteps))
         ts = tf_idxs * dt # 
-        # Get ground truth mass, control, qs, accs
-        masses = jnp.tile(gb_c._m[traj_idx], (len(tf_idxs),1))
+        # Get ground truth control, qs, accs
         controls = gb_c._control[traj_idx, tf_idxs]
         exp_qs_buffer = gb_c._qs[traj_idx, tf_idxs]
         exp_as_buffer = gb_c._accs[traj_idx, tf_idxs]
@@ -383,23 +378,23 @@ def train_comp(config: ml_collections.ConfigDict):
         batched_graphs = pytrees_stack([graphs])
 
         def forward_pass(graph, aux_data):
-            control, mass = aux_data
+            control = aux_data
             graph = state.apply_fn(
-                state.params, graph, jnp.array([control]), jnp.array([mass]), jax.random.key(0)
+                state.params, graph, jnp.array([control]), jax.random.key(0)
             )
             pred_qs = graph.nodes[:,:,0]
 
             if prediction == 'acceleration': # change to config 
-                pred_accs = graph.nodes[:,:,-1]
+                pred_accs = graph.nodes[:, :,-1]
                 # remove acceleration  
                 graph = graph._replace(nodes=graph.nodes[:,:,:-1])
                 
                 return graph, (pred_qs.squeeze(), pred_accs.squeeze())
 
         start = default_timer()
-        final_batched_graph, pred_data = jax.lax.scan(forward_pass, batched_graphs, (controls, masses))
+        final_batched_graph, pred_data = jax.lax.scan(forward_pass, batched_graphs, controls)
         end = default_timer()
-        jax.debug.print('Inference time {} [sec] for {} passes', end - start, len(ts))
+        # jax.debug.print('Inference time {} [sec] for {} passes', end - start, len(ts))
 
         eval_pos_loss = optax.l2_loss(predictions=pred_data[0], targets=exp_qs_buffer).mean()
 
@@ -415,7 +410,7 @@ def train_comp(config: ml_collections.ConfigDict):
     # Load previous checkpoint (if applicable)
     ckpt = checkpoint.Checkpoint(checkpoint_dir)
     best_model_ckpt = checkpoint.Checkpoint(os.path.join(checkpoint_dir, 'best_model'))
-    state = best_model_ckpt.restore_or_initialize(state)
+    state_c = best_model_ckpt.restore_or_initialize(state_c)
 
     trajs_size = gb_c._num_trajectories
     ts_size = (gb_c._num_timesteps - gb_c._vel_history) // gb_c._dt
@@ -423,7 +418,7 @@ def train_comp(config: ml_collections.ConfigDict):
     train_fn = train_epoch
 
     # Setup training epochs
-    init_epoch = int(state.step) // steps_per_epoch + 1
+    init_epoch = int(state_c.step // steps_per_epoch) + 1
     final_epoch = init_epoch + training_params.num_epochs
     training_params.num_epochs = final_epoch
 
@@ -434,9 +429,9 @@ def train_comp(config: ml_collections.ConfigDict):
     print(f"Number of parameters {num_parameters(params)}")
     print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
-        print(f'State step on epoch {epoch}: {state.step}')
+        print(f'State step on epoch {epoch}: {state_c.step}')
         rng, train_rng = jax.random.split(rng)
-        state, metrics_update = train_fn(state, training_params.batch_size, train_rng) 
+        state_c, metrics_update = train_fn(state_c, training_params.batch_size, train_rng) 
         if train_metrics is None:
             train_metrics = metrics_update
         else:
@@ -468,7 +463,7 @@ def train_comp(config: ml_collections.ConfigDict):
                     min_error = rollout_mean_pos_loss
                     print(f'Saving best model at epoch {epoch}')
                     with report_progress.timed('checkpoint'):
-                        best_model_ckpt.save(state)
+                        best_model_ckpt.save(state_c)
                 if epoch > training_params.min_epochs: # train at least for 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_mean_pos_loss)
                     if early_stop.should_stop:
@@ -482,7 +477,7 @@ def train_comp(config: ml_collections.ConfigDict):
 
         if epoch % training_params.ckpt_every_steps == 0 or is_last_step:
             with report_progress.timed('checkpoint'):
-                ckpt.save(state)
+                ckpt.save(state_c)
 
         if epoch % training_params.clear_cache_every_steps == 0 or is_last_step: 
             jax.clear_caches()

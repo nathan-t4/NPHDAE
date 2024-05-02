@@ -3,24 +3,24 @@ import ml_collections
 
 def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict({
-        'system_name': 'free_spring', # Change this
+        'system_name': '2_mass_spring', # Change this
     })
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': f'results/{config.system_name}_data/train_10000_0.1_0.5_all_random_continuous.pkl',
+        'training_data_path': f'results/{config.system_name}_data/train_100_0.1_0.5_0_all_random_continuous.pkl',
         'evaluation_data_path': f'results/{config.system_name}_data/val_20_0.1_0.5_passive.pkl',
     }) 
     config.training_params = ml_collections.ConfigDict({
         'seed': 0,
         'net_name': 'GNS',
-        'trial_name': '10000_32',
+        'trial_name': 'test',
         'loss_function': 'acceleration',
         'num_epochs': int(5e2),
         'min_epochs': int(30),
         'batch_size': 2,
         'rollout_timesteps': 1500,
         'log_every_steps': 1,
-        'eval_every_steps': 5,
+        'eval_every_steps': 1,
         'ckpt_every_steps': 5,
         'clear_cache_every_steps': 1,
         'add_undirected_edges': True,
@@ -58,12 +58,12 @@ def create_comp_gnn_config(args):
 
     config.paths = ml_collections.ConfigDict({
         'dir_one': 'results/GNS/2_mass_spring/0421-1637_2_mass_spring_10000_32',
-        'evaluation_data_path_one': 'results/2_mass_spring_data/val_20_0.1_0.5_all_random_continuous.pkl',
+        'evaluation_data_path_one': 'results/2_mass_spring_data/val_20_0.1_0.5_0_all_random_continuous.pkl',
         'dir_two': 'results/GNS/free_spring/0422-1134_10000_32',
         'evaluation_data_path_two': 'results/free_spring_data/val_20_0.1_0.5_all_random_continuous.pkl',
 
         'dir': args.dir,
-        'training_data_path_comp': 'results/3_mass_spring_data/train_10000_0.1_0.5_0_passive.pkl', # TODO
+        'training_data_path_comp': 'results/3_mass_spring_data/train_10000_0.1_0.5_0_passive.pkl',
         'evaluation_data_path_comp': 'results/3_mass_spring_data/val_20_0.1_0.5_0_passive.pkl',
     })
 
@@ -94,7 +94,7 @@ def create_comp_gnn_config(args):
         'control_history': 5,
         'num_mp_steps': 1, # too big causes oversmoothing
         'noise_std': 0.0003,
-        'latent_size': 16, # use 32 for quintuple mass spring damper, other <5 use 16
+        'latent_size': 32,
         'hidden_layers': 2,
         'activation': 'relu',
         'use_edge_model': True,
@@ -113,7 +113,7 @@ def create_comp_gnn_config(args):
         'control_history': 5,
         'num_mp_steps': 1, # too big causes oversmoothing
         'noise_std': 0.0003,
-        'latent_size': 16, # use 32 for quintuple mass spring damper, other <5 use 16
+        'latent_size': 32,
         'hidden_layers': 2,
         'activation': 'relu',
         'use_edge_model': True,

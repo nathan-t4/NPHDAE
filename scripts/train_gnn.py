@@ -70,9 +70,8 @@ def eval(config: ml_collections.ConfigDict):
     init_control = eval_gb._control[0, 0]
     init_graph = eval_gb.get_graph(traj_idx=0, t=net_params.vel_history+1)
     params = eval_net.init(init_rng, init_graph, init_control, net_rng)
-    batched_apply = jax.vmap(eval_net.apply, in_axes=(None,0,0,None))
     state = TrainState.create(
-        apply_fn=batched_apply,
+        apply_fn=eval_net.apply,
         params=params,
         tx=tx,
     )
@@ -86,23 +85,22 @@ def eval(config: ml_collections.ConfigDict):
         tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + eval_net.num_mp_steps, max=eval_gb._num_timesteps))
         ts = tf_idxs * eval_net.dt
 
-        controls = eval_gb._control[traj_idx, tf_idxs]
+        controls = eval_gb._control[traj_idx, t0]
         exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
         exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
-        graphs = eval_gb.get_graph(traj_idx, t0)
-        batched_graph = pytrees_stack([graphs])
+        graph = eval_gb.get_graph(traj_idx, t0)
         def forward_pass(graph, control):
-            graph = eval_state.apply_fn(state.params, graph, jnp.array([control]), jax.random.key(0))
-            pred_qs = graph.nodes[:,:,0]
+            graph = eval_state.apply_fn(state.params, graph, control, jax.random.key(0))
+            pred_qs = graph.nodes[:,0]
             if net_params.prediction == 'acceleration':
-                pred_accs = graph.nodes[:,:,-1]
-                graph = graph._replace(nodes=graph.nodes[:,:,:-1]) # remove acceleration  
+                pred_accs = graph.nodes[:,-1]
+                graph = graph._replace(nodes=graph.nodes[:,:-1]) # remove acceleration  
                 return graph, (pred_qs.squeeze(), pred_accs.squeeze())
             elif net_params.prediction == 'position':
                 return graph, pred_qs.squeeze()
             
         start = default_timer()
-        final_batched_graph, pred_data = jax.lax.scan(forward_pass, batched_graph, controls)
+        final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
         end = default_timer()
         jax.debug.print('Inference time {} [sec] for {} passes', end - start, len(ts))
 
@@ -224,7 +222,7 @@ def train(config: ml_collections.ConfigDict):
 
         def train_batch(state, trajs, t0s):
             tfs = t0s + time_offset
-            batch_control = train_gb._control[trajs, tfs]
+            batch_control = train_gb._control[trajs, t0s]
             if training_params.loss_function == 'acceleration':
                 batch_accs = train_gb._accs[trajs, tfs]
                 batch_data = (batch_accs, batch_control)
@@ -233,7 +231,6 @@ def train(config: ml_collections.ConfigDict):
                 batch_vel = train_gb._vs[trajs, tfs]
                 batch_data = (batch_pos, batch_vel, batch_control)
             graphs = train_gb.get_graph_batch(trajs, t0s)
-            # batch_graph = pytrees_stack(graphs) # explicitly batch graphs
             loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data)
             state = state.apply_gradients(grads=grads)
             return state, loss
@@ -249,21 +246,20 @@ def train(config: ml_collections.ConfigDict):
         t0 = round(net.vel_history /  net.num_mp_steps) * net.num_mp_steps
         tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + net.num_mp_steps, max=eval_gb._num_timesteps))
         ts = tf_idxs * net.dt
-        controls = eval_gb._control[traj_idx, tf_idxs]
+        controls = eval_gb._control[traj_idx, t0]
         exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
         exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
-        graphs = eval_gb.get_graph(traj_idx, t0)
-        batched_graph = pytrees_stack([graphs])
+        graph = eval_gb.get_graph(traj_idx, t0)
         def forward_pass(graph, control):
-            graph = eval_state.apply_fn(state.params, graph, jnp.array([control]), jax.random.key(0))
-            pred_qs = graph.nodes[:,:,0]
+            graph = eval_state.apply_fn(state.params, graph, control, jax.random.key(0))
+            pred_qs = graph.nodes[:,0]
             if net_params.prediction == 'acceleration':
-                pred_accs = graph.nodes[:,:,-1]
-                graph = graph._replace(nodes=graph.nodes[:,:,:-1]) # remove acceleration  
+                pred_accs = graph.nodes[:,-1]
+                graph = graph._replace(nodes=graph.nodes[:,:-1]) # remove acceleration  
                 return graph, (pred_qs.squeeze(), pred_accs.squeeze())
             elif net_params.prediction == 'position':
                 return graph, pred_qs.squeeze()
-        final_batched_graph, pred_data = jax.lax.scan(forward_pass, batched_graph, controls)
+        final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
 
         eval_pos_loss = optax.l2_loss(predictions=pred_data[0], targets=exp_qs_buffer).mean()
 
@@ -284,9 +280,7 @@ def train(config: ml_collections.ConfigDict):
     eval_net.training = False
     # Use same normalization stats as training set
     eval_net.norm_stats = train_gb._norm_stats 
-    # if training_params.net_name == 'GNODE': eval_net.horizon = 1 
-    batched_eval_apply = jax.vmap(eval_net.apply, in_axes=(None, 0, 0, None))
-    eval_state = state.replace(apply_fn=batched_eval_apply)
+    eval_state = state.replace(apply_fn=eval_net.apply)
 
     # Create logger to report training progress
     report_progress = periodic_actions.ReportProgress(
@@ -300,11 +294,11 @@ def train(config: ml_collections.ConfigDict):
 
     trajs_size = train_gb._num_trajectories
     ts_size = (train_gb._num_timesteps - train_gb._vel_history) // train_gb._dt
-    steps_per_epoch = (ts_size * trajs_size) // (training_params.batch_size ** 2)
+    steps_per_epoch = int((ts_size * trajs_size) // (training_params.batch_size ** 2))
     train_fn = train_epoch
 
     # Setup training epochs
-    init_epoch = int(state.step) // steps_per_epoch + 1
+    init_epoch = state.step // steps_per_epoch + 1
     final_epoch = init_epoch + training_params.num_epochs
     training_params.num_epochs = final_epoch
 
@@ -314,7 +308,7 @@ def train(config: ml_collections.ConfigDict):
     min_error = jnp.inf
     print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
-        print(f'State step on epoch {epoch}: {state.step}, {state.step // steps_per_epoch + 1}')
+        # print(f'State step on epoch {epoch}: {state.step}, {state.step // steps_per_epoch + 1}')
         rng, train_rng = jax.random.split(rng)
         state, metrics_update = train_fn(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
@@ -375,7 +369,6 @@ def train(config: ml_collections.ConfigDict):
     run_params_file = os.path.join(paths.dir, 'run_params.js')
     with open(run_params_file, "w") as outfile:
         json.dump(config_js, outfile)
-
 
 def test_graph_net(config: ml_collections.ConfigDict):
     """ For testing """
