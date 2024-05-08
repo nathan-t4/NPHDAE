@@ -85,7 +85,7 @@ def eval(config: ml_collections.ConfigDict):
         tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + eval_net.num_mp_steps, max=eval_gb._num_timesteps))
         ts = tf_idxs * eval_net.dt
 
-        controls = eval_gb._control[traj_idx, t0]
+        controls = eval_gb._control[traj_idx, tf_idxs - eval_net.num_mp_steps]
         exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
         exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
         graph = eval_gb.get_graph(traj_idx, t0)
@@ -246,7 +246,7 @@ def train(config: ml_collections.ConfigDict):
         t0 = round(net.vel_history /  net.num_mp_steps) * net.num_mp_steps
         tf_idxs = jnp.unique(tf_idxs.clip(min=t0 + net.num_mp_steps, max=eval_gb._num_timesteps))
         ts = tf_idxs * net.dt
-        controls = eval_gb._control[traj_idx, t0]
+        controls = eval_gb._control[traj_idx, tf_idxs - net.num_mp_steps]
         exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
         exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
         graph = eval_gb.get_graph(traj_idx, t0)
