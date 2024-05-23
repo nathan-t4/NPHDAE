@@ -3,18 +3,22 @@ import ml_collections
 
 def create_gnn_config(args) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict({
-        'system_name': '2_mass_spring', # Change this
+        'system_name': 'LC',
+        'n_train': 1500,
+        'n_val': 20,
     })
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'training_data_path': f'results/{config.system_name}_data/train_100_0.1_0.5_0_all_random_continuous.pkl',
-        'evaluation_data_path': f'results/{config.system_name}_data/val_20_0.1_0.5_passive.pkl',
+        # 'training_data_path': f'results/{config.system_name}_data/train_{config.n_train}_0.1_0.5_all_random_continuous.pkl',
+        # 'evaluation_data_path': f'results/{config.system_name}_data/val_{config.n_val}_0.1_0.5_passive.pkl',
+        'training_data_path': f'results/{config.system_name}_data/train_{config.n_train}.pkl',
+        'evaluation_data_path': f'results/{config.system_name}_data/val_{config.n_val}.pkl',
     }) 
     config.training_params = ml_collections.ConfigDict({
         'seed': 0,
         'net_name': 'GNS',
-        'trial_name': 'test',
-        'loss_function': 'acceleration',
+        'trial_name': f'{config.n_train}',
+        'loss_function': 'lc_state',
         'num_epochs': int(5e2),
         'min_epochs': int(30),
         'batch_size': 2,
@@ -31,8 +35,7 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
     })
     config.net_params = ml_collections.ConfigDict({
         'prediction': 'acceleration',
-        'integration_method': 'SemiImplicitEuler', 
-        # 'horizon': 5, # for gnode only
+        'integration_method': 'rk4', 
         'vel_history': 5,
         'control_history': 5,
         'num_mp_steps': 1, # too big causes over-smoothing

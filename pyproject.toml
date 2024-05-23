@@ -1,7 +1,7 @@
 [project]
-name = "gnode"
+name = "compgnn"
 version = "0.0.1"
-description = "GNODE"
+description = "compgnn"
 readme = "README.md"
 # license = {file = "LICENSE.txt"}
 requires-python=">=3.9"

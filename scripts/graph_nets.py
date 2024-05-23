@@ -1,0 +1,416 @@
+import jraph
+import jax
+import flax.linen as nn
+import jax.numpy as jnp
+
+from ml_collections import FrozenConfigDict
+from utils.graph_utils import *
+from utils.jax_utils import *
+from utils.models_utils import *
+from scripts.models import MLP, GraphNetworkSimulator
+
+class MassSpringGNS(nn.Module):
+    # Decoder post-processor parameters
+    norm_stats: FrozenConfigDict
+    integration_method: str = 'SemiImplicitEuler'
+    dt: float = 0.01 # TODO: set from graphbuilder?
+
+    # Graph Network parameters
+    num_mp_steps: int = 1
+    use_edge_model: bool = False
+    shared_params: bool = False
+    globals_output_size: int = 0
+    edge_output_size: int = 1
+    node_output_size: int = 1
+    
+    # Encoder/Decoder MLP parameters
+    layer_norm: bool = False
+    latent_size: int = 16
+    hidden_layers: int = 2
+    activation: str = 'relu'
+    dropout_rate: float = 0
+    training: bool = True
+
+    # Graph parameters
+    add_self_loops: bool = False
+    add_undirected_edges: bool = False
+    vel_history: int = 1
+    control_history: int = 1
+    noise_std: float = 0.0003
+
+    def setup(self):
+        encoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation)
+        encoder_edge_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation)
+
+        decoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
+                              activation=self.activation)
+        decoder_edge_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+                              activation=self.activation)
+
+        def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
+            cur_pos, cur_vel, prev_vel, prev_control, num_nodes = aux_data
+            next_nodes = None
+            next_edges = None
+
+            integrator = MassSpringIntegrator(self.dt, self.num_mp_steps, self.norm_stats, self.integration_method)
+            cur_state = jnp.concatenate((cur_pos, cur_vel))
+            next_pos, next_vel, prediction = integrator.dynamics_function(cur_state, 0.0, graph)
+            next_nodes = jnp.column_stack((next_pos, 
+                                        prev_vel[:,1:], next_vel, 
+                                        prev_control[:,1:], 
+                                        prediction))
+            next_edges = jnp.diff(next_pos.squeeze()).reshape(-1,1)
+            
+            if self.add_undirected_edges:
+                next_edges = jnp.concatenate((next_edges, next_edges), axis=0)
+            
+            if self.add_self_loops:
+                next_edges = jnp.concatenate((next_edges, jnp.zeros((num_nodes, 1))), axis=0)
+            
+            if self.use_edge_model:
+                graph = graph._replace(nodes=next_nodes, edges=next_edges)
+            else:
+                graph = graph._replace(nodes=next_nodes)   
+
+            return graph
+
+        self.net = GraphNetworkSimulator(
+            encoder_node_fn=encoder_node_fn,
+            encoder_edge_fn=encoder_edge_fn,
+            decoder_node_fn=decoder_node_fn,
+            decoder_edge_fn=decoder_edge_fn,
+            decoder_postprocessor=decoder_postprocessor,
+            num_mp_steps=self.num_mp_steps,
+            shared_params=self.shared_params,
+            use_edge_model=self.use_edge_model,
+            latent_size=self.latent_size,
+            hidden_layers=self.hidden_layers,
+            activation=self.activation,
+            dropout_rate=self.dropout_rate,
+            training=self.training,
+            layer_norm=self.layer_norm,
+        )
+    
+    def __call__(self, graph, control, rng):
+        num_nodes = len(graph.nodes)
+        pos = graph.nodes[:,0]
+        control = control[1::2] # get nonzero elements (even indices) corresponding to control input
+        if self.training: 
+            # Add noise to current position (first node feature)
+            rng, pos_rng, u_rng = jax.random.split(rng, 3)
+            pos_noise = self.noise_std * jax.random.normal(pos_rng, (num_nodes,))
+            pos = pos + pos_noise
+            # Add noise to control input at current time-step (next_u) TODO: was commented out
+            control_noise = self.noise_std * jax.random.normal(u_rng, (num_nodes,))
+            control = control + control_noise
+
+        new_nodes = jnp.column_stack((pos, graph.nodes[:,1:], control))
+        graph = graph._replace(nodes=new_nodes)
+
+        cur_pos = graph.nodes[:,0]
+        cur_vel = graph.nodes[:,self.vel_history]
+        prev_vel = graph.nodes[:,1:self.vel_history+1] # includes current velocity
+        prev_control = graph.nodes[:,self.vel_history+1:] # includes current u
+
+        aux_data = (cur_pos, cur_vel, prev_vel, prev_control, num_nodes)
+
+        return self.net(graph, aux_data, rng)
+    
+class LCGNS(nn.Module):
+    # Decoder post-processor parameters
+    system_params: dict
+    norm_stats: FrozenConfigDict
+    prediction: str = 'acceleration'
+    integration_method: str = 'SemiImplicitEuler'
+    dt: float = 0.01 # TODO: set from graphbuilder?
+
+    # Graph Network parameters
+    num_mp_steps: int = 1
+    use_edge_model: bool = False
+    shared_params: bool = False
+    globals_output_size: int = 0
+    edge_output_size: int = 1
+    node_output_size: int = 1
+    
+    # Encoder/Decoder MLP parameters
+    layer_norm: bool = False
+    latent_size: int = 16
+    hidden_layers: int = 2
+    activation: str = 'relu'
+    dropout_rate: float = 0
+    training: bool = True
+
+    # Graph parameters
+    add_self_loops: bool = False
+    add_undirected_edges: bool = False
+    vel_history: int = 5
+    control_history: int = 1
+    noise_std: float = 0.0003
+
+    def setup(self):
+        encoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation)
+        encoder_edge_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation)
+
+        decoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
+                              activation=self.activation)
+        decoder_edge_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+                              activation=self.activation)
+
+        self.net = GraphNetworkSimulator(
+            encoder_node_fn=encoder_node_fn,
+            encoder_edge_fn=encoder_edge_fn,
+            decoder_node_fn=decoder_node_fn,
+            decoder_edge_fn=decoder_edge_fn,
+            decoder_postprocessor=lambda x, _: x, # identity decoder postprocessor
+            num_mp_steps=self.num_mp_steps,
+            shared_params=self.shared_params,
+            use_edge_model=self.use_edge_model,
+            latent_size=self.latent_size,
+            hidden_layers=self.hidden_layers,
+            activation=self.activation,
+            dropout_rate=self.dropout_rate,
+            training=self.training,
+            layer_norm=self.layer_norm,
+        )
+    
+    def __call__(self, graph, control, rng):
+        num_nodes = len(graph.nodes)
+        cur_v = graph.nodes[:,0]
+        cur_state = graph.edges[:,0]
+        cur_Q, cur_Phi = cur_state
+        if self.training: 
+            rng, state_rng, voltage_rng = jax.random.split(rng, 3)
+            state_noise = self.noise_std * jax.random.normal(state_rng, (num_nodes,))
+            noisy_state = cur_state + state_noise
+            # TODO: add noise to voltage (nodes?)
+
+            new_edges = jnp.array(noisy_state).reshape(-1, 1)
+            graph = graph._replace(edges=new_edges)
+
+        def H_from_state(Q, Phi):
+            '''
+                1. state to graph
+                2. processed_graph = self.net(graph, aux_data, rng)
+                3. return Hamiltonian (processed_graph.globals?)
+            '''
+            n_node = jnp.array([2])
+            n_edge = jnp.array([2])
+            senders = jnp.array([0, 1])
+            receivers = jnp.array([1, 0])
+
+            # From LCGraphBuilder
+            V = Q / self.system_params['C']
+            nodes = jnp.array([[0], [V]])
+            edges = jnp.array([[Q], [Phi]])
+            global_context = None
+
+            graph = jraph.GraphsTuple(
+                nodes=nodes,
+                edges=edges,
+                globals=global_context,
+                n_node=n_node,
+                n_edge=n_edge,
+                senders=senders,
+                receivers=receivers,
+            )
+            aux_data = None
+            processed_graph = self.net(graph, aux_data, rng)
+            return jnp.sum(processed_graph.edges), processed_graph
+        
+        H_grads, processed_graph = jax.grad(H_from_state, argnums=[0,1], has_aux=True)(cur_Q, cur_Phi)
+        H_grads = jnp.array(H_grads)
+
+        def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
+            H_grad, cur_state, cur_V = aux_data
+            integrator = LCIntegrator(self.dt, self.num_mp_steps, self.norm_stats, self.integration_method)
+            next_state = integrator.dynamics_function(H_grad, 0.0, graph)
+            next_V = next_state[0] / self.system_params['C']
+            next_nodes = jnp.array([[0], [next_V]])
+            next_edges = jnp.array(next_state).reshape(-1,1)
+
+            graph = graph._replace(nodes=next_nodes,
+                                   edges=next_edges)
+
+            return graph
+
+        aux_data = (H_grads, cur_state, cur_v)
+        processed_graph = decoder_postprocessor(processed_graph, aux_data)
+        
+        return processed_graph
+
+class OldGraphNetworkSimulator(nn.Module):
+    """ 
+        EncodeProcessDecode GN 
+    """
+    norm_stats: FrozenConfigDict
+    system: FrozenConfigDict
+
+    num_mp_steps: int = 1
+    layer_norm: bool = False
+    use_edge_model: bool = False
+    shared_params: bool = False
+    vel_history: int = 5
+    control_history: int = 1
+    noise_std: float = 0.0003
+
+    globals_output_size: int = 0
+    edge_output_size: int = 1
+    node_output_size: int = 1
+    prediction: str = 'acceleration'
+    integration_method: str = 'SemiImplicitEuler'
+    
+    # MLP parameters
+    latent_size: int = 16
+    hidden_layers: int = 2
+    activation: str = 'relu'
+    dropout_rate: float = 0
+    training: bool = True
+
+    add_self_loops: bool = False
+    add_undirected_edges: bool = False
+
+    dt: float = 0.01 # TODO: set from graphbuilder?
+
+    @nn.compact
+    def __call__(self, graph: jraph.GraphsTuple, control, rng) -> jraph.GraphsTuple:
+        # TODO: change next_u to cur_u (control)
+        num_nodes = len(graph.nodes)
+        position = graph.nodes[:,0]
+        control = control[1::2] # get nonzero elements (even indices) corresponding to control input
+        if self.training: 
+            # Add noise to current position (first node feature)
+            rng, pos_rng, u_rng = jax.random.split(rng, 3)
+            pos_noise = self.noise_std * jax.random.normal(pos_rng, (num_nodes,))
+            position = position + pos_noise
+            # Add noise to control input at current time-step (next_u)
+            # control_noise = self.noise_std * jax.random.normal(u_rng, (num_nodes,))
+            # control = control + control_noise
+
+        new_nodes = jnp.column_stack((position, graph.nodes[:,1:], control))
+        graph = graph._replace(nodes=new_nodes)
+
+        if self.system.name == 'MassSpring':
+            cur_pos = graph.nodes[:,0]
+            cur_vel = graph.nodes[:,self.vel_history]
+            prev_vel = graph.nodes[:,1:self.vel_history+1] # includes current velocity
+            prev_control = graph.nodes[:,self.vel_history+1:] # includes current u
+
+        def update_node_fn(nodes, senders, receivers, globals_):
+            node_feature_sizes = [self.latent_size] * self.hidden_layers
+            # input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((nodes, senders, receivers), axis=1)
+            model = MLP(feature_sizes=node_feature_sizes, 
+                        activation=self.activation, 
+                        dropout_rate=self.dropout_rate, 
+                        deterministic=not self.training,
+                        with_layer_norm=self.layer_norm)
+            return model(input)
+
+        def update_edge_fn(edges, senders, receivers, globals_):
+            edge_feature_sizes = [self.latent_size] * self.hidden_layers
+            # input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((edges, senders, receivers), axis=1)
+            model = MLP(feature_sizes=edge_feature_sizes,
+                        activation=self.activation,
+                        dropout_rate=self.dropout_rate, 
+                        deterministic=not self.training,
+                        with_layer_norm=self.layer_norm)
+            return model(input)
+            
+        def update_global_fn(nodes, edges, globals_):
+            del nodes, edges
+            time = globals_[0]
+            static_params = globals_[1:]
+            globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
+            return globals_ 
+        
+        # Encoder
+        encoder = jraph.GraphMapFeatures(
+            embed_edge_fn=MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation),
+            embed_node_fn=MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation),
+        )
+        
+        # Processor
+        if not self.use_edge_model:
+            update_edge_fn = None
+
+        if graph.globals is None:
+            update_global_fn = None
+
+        num_nets = self.num_mp_steps if not self.shared_params else 1
+        processor_nets = []
+        for _ in range(num_nets): # TODO replace with scan
+            net = jraph.GraphNetwork(
+                update_node_fn=update_node_fn,
+                update_edge_fn=update_edge_fn,
+                update_global_fn=update_global_fn,
+            )
+            processor_nets.append(net)
+
+        # Decoder
+        # TODO: custom GraphMapFeatures to differentiate between different edges (e.g. capacitor vs inductor)?
+        decoder = jraph.GraphMapFeatures(
+            embed_node_fn=MLP(
+                feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
+                activation=self.activation),
+            embed_edge_fn=MLP(
+                feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+                activation=self.activation),
+        )
+
+        def decoder_postprocessor(graph: jraph.GraphsTuple):
+            next_nodes = None
+            next_edges = None
+
+            if self.system.name == 'MassSpring':
+                integrator = MassSpringIntegrator(self.dt, self.num_mp_steps, self.norm_stats, self.integration_method)
+                cur_state = jnp.concatenate((cur_pos, cur_vel))
+                next_pos, next_vel, prediction = integrator.dynamics_function(cur_state, 0.0, graph)
+                next_nodes = jnp.column_stack((next_pos, 
+                                            prev_vel[:,1:], next_vel, 
+                                            prev_control[:,1:], 
+                                            prediction))
+                next_edges = jnp.diff(next_pos.squeeze()).reshape(-1,1)
+            
+            if self.add_undirected_edges:
+                next_edges = jnp.concatenate((next_edges, next_edges), axis=0)
+            
+            if self.add_self_loops:
+                next_edges = jnp.concatenate((next_edges, jnp.zeros((num_nodes, 1))), axis=0)
+            
+            if self.use_edge_model:
+                graph = graph._replace(nodes=next_nodes, edges=next_edges)
+            else:
+                graph = graph._replace(nodes=next_nodes)   
+
+            return graph
+
+        # Encode features to latent space
+        processed_graph = encoder(graph)
+        prev_graph = processed_graph
+        # Message passing
+        for i in range(num_nets): 
+            processed_graph = processor_nets[i](processed_graph)
+            processed_graph = processed_graph._replace(nodes=processed_graph.nodes + prev_graph.nodes,
+                                                       edges=processed_graph.edges + prev_graph.edges)
+            prev_graph = processed_graph
+
+        # Decode latent space features back to node features
+        processed_graph = decoder(processed_graph)
+
+        # Decoder post-processor
+        processed_graph = decoder_postprocessor(processed_graph)
+
+        return processed_graph
