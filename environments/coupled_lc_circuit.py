@@ -139,7 +139,7 @@ def generate_dataset(args, env_seed: int = 501):
     dataset = None
 
     for _ in tqdm(range(args.n)):
-        new_dataset = env.gen_dataset(trajectory_num_steps=1500,
+        new_dataset = env.gen_dataset(trajectory_num_steps=args.steps,
                                         num_trajectories=1,
                                         x0_init_lb=x0_init_lb,
                                         x0_init_ub=x0_init_ub)
@@ -166,6 +166,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--type', type=str, default='train')
     parser.add_argument('--n', type=int, required=True)
+    parser.add_argument('--steps', type=int, required=True)
 
     args = parser.parse_args()
 

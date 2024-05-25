@@ -2,7 +2,7 @@ import abc
 import jax
 import diffrax
 import jax.numpy as jnp
-from integrators.euler_variants import semi_implicit_euler
+from integrators.euler_variants import euler, semi_implicit_euler
 from integrators.rk4 import rk4
 
 class System(abc.ABC):
@@ -82,18 +82,17 @@ class LCIntegrator(System):
     def __init__(self, dt, num_mp_steps, norm_stats, integration_method='rk4'):
         super().__init__(dt, num_mp_steps, norm_stats, integration_method)
 
-    def dynamics_function(self, H_grad, t, graph):
-        Ec = graph.edges[0] 
-        El = graph.edges[1]
-
-        def port_hamiltonian_dynamics(H_grad, t):
+    def dynamics_function(self, state, H_grad, t):
+        def port_hamiltonian_dynamics(state, t):
             J = jnp.array([[0, 1],
                            [-1, 0]])
             return jnp.matmul(J, H_grad)
         
         # integrate dynamics
         if self.integration_method == 'rk4':
-            next_state = rk4(port_hamiltonian_dynamics, H_grad, t, self.dt)
+            next_state = rk4(port_hamiltonian_dynamics, state, t, self.dt)
+        elif self.integration_method == 'euler':
+            next_state = euler(port_hamiltonian_dynamics, state, t, self.dt)
         else:
             raise NotImplementedError('Unsupported integration method for LC circuit dynamics')
         

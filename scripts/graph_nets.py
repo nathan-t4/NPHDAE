@@ -4,10 +4,12 @@ import flax.linen as nn
 import jax.numpy as jnp
 
 from ml_collections import FrozenConfigDict
+from integrators.rk4 import rk4
+from integrators.euler_variants import euler, semi_implicit_euler
 from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
-from scripts.models import MLP, GraphNetworkSimulator
+from scripts.models import MLP, GraphNetworkSimulator, CustomEdgeGraphNetworkSimulator
 
 class MassSpringGNS(nn.Module):
     # Decoder post-processor parameters
@@ -124,7 +126,6 @@ class LCGNS(nn.Module):
     # Decoder post-processor parameters
     system_params: dict
     norm_stats: FrozenConfigDict
-    prediction: str = 'acceleration'
     integration_method: str = 'SemiImplicitEuler'
     dt: float = 0.01 # TODO: set from graphbuilder?
 
@@ -145,10 +146,6 @@ class LCGNS(nn.Module):
     training: bool = True
 
     # Graph parameters
-    add_self_loops: bool = False
-    add_undirected_edges: bool = False
-    vel_history: int = 5
-    control_history: int = 1
     noise_std: float = 0.0003
 
     def setup(self):
@@ -161,14 +158,17 @@ class LCGNS(nn.Module):
 
         decoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
                               activation=self.activation)
-        decoder_edge_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+        decoder_edgeC_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+                              activation=self.activation)
+        decoder_edgeL_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
                               activation=self.activation)
 
-        self.net = GraphNetworkSimulator(
+        self.net = CustomEdgeGraphNetworkSimulator(
             encoder_node_fn=encoder_node_fn,
             encoder_edge_fn=encoder_edge_fn,
             decoder_node_fn=decoder_node_fn,
-            decoder_edge_fn=decoder_edge_fn,
+            decoder_edge_fn_1=decoder_edgeC_fn,
+            decoder_edge_fn_2=decoder_edgeL_fn,
             decoder_postprocessor=lambda x, _: x, # identity decoder postprocessor
             num_mp_steps=self.num_mp_steps,
             shared_params=self.shared_params,
@@ -225,23 +225,200 @@ class LCGNS(nn.Module):
             processed_graph = self.net(graph, aux_data, rng)
             return jnp.sum(processed_graph.edges), processed_graph
         
+        H, _ = H_from_state(cur_Q, cur_Phi)
         H_grads, processed_graph = jax.grad(H_from_state, argnums=[0,1], has_aux=True)(cur_Q, cur_Phi)
         H_grads = jnp.array(H_grads)
 
         def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
-            H_grad, cur_state, cur_V = aux_data
-            integrator = LCIntegrator(self.dt, self.num_mp_steps, self.norm_stats, self.integration_method)
-            next_state = integrator.dynamics_function(H_grad, 0.0, graph)
-            next_V = next_state[0] / self.system_params['C']
-            next_nodes = jnp.array([[0], [next_V]])
-            next_edges = jnp.array(next_state).reshape(-1,1)
+            H, cur_state = aux_data
+            # integrator = LCIntegrator(self.dt, self.num_mp_steps, self.norm_stats, self.integration_method)
 
-            graph = graph._replace(nodes=next_nodes,
-                                   edges=next_edges)
+            def dynamics_function(state, t):
+                """ 
+                    TODO: move to LCIntegrator.dynamics_function?
+                """
+                state = jnp.array(state)
+                dH, _ = jax.grad(H_from_state, argnums=[0,1], has_aux=True)(state[0], state[1])
+                dH = jnp.array(dH).reshape(-1,1)
+                J = jnp.array([[0, 1],
+                               [-1, 0]])
+                return jnp.matmul(J, dH).squeeze()
+            
+            if self.integration_method == 'rk4':
+                next_state = rk4(dynamics_function, cur_state, 0.0, self.dt)
+            elif self.integration_method == 'euler':
+                next_state = euler(dynamics_function, cur_state, 0.0, self.dt)
+            else:
+                raise NotImplementedError()
+            
+            # next_state = integrator.dynamics_function(cur_state, H_grad, 0.0)
+            # next_V = next_state[0] / self.system_params['C']
+            # next_nodes = jnp.array([[0], [next_V]])
+            next_edges = jnp.array(next_state).reshape(-1,1)
+            next_globals = jnp.array(H)
+            graph = graph._replace(edges=next_edges,
+                                   globals=next_globals)
 
             return graph
 
-        aux_data = (H_grads, cur_state, cur_v)
+        aux_data = (H, cur_state)
+        processed_graph = decoder_postprocessor(processed_graph, aux_data)
+        
+        return processed_graph
+
+class CoupledLCGNS(nn.Module):
+    """
+        Graph Network Simulator (with separate decoder for different edges) for the coupled LC circuit
+    """
+    # Decoder post-processor parameters
+    system_params: dict
+    norm_stats: FrozenConfigDict
+    integration_method: str = 'SemiImplicitEuler'
+    dt: float = 0.01 # TODO: set from graphbuilder?
+
+    # Graph Network parameters
+    num_mp_steps: int = 1
+    use_edge_model: bool = False
+    shared_params: bool = False
+    globals_output_size: int = 0
+    edge_output_size: int = 1
+    node_output_size: int = 1
+    
+    # Encoder/Decoder MLP parameters
+    layer_norm: bool = False
+    latent_size: int = 16
+    hidden_layers: int = 2
+    activation: str = 'relu'
+    dropout_rate: float = 0
+    training: bool = True
+
+    # Graph parameters
+    noise_std: float = 0.0003
+
+    def setup(self):
+        encoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation)
+        encoder_edge_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                              with_layer_norm=self.layer_norm, 
+                              activation=self.activation)
+
+        decoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
+                              activation=self.activation)
+        decoder_edgeC_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+                              activation=self.activation)
+        decoder_edgeL_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
+                              activation=self.activation)
+
+        self.net = CustomEdgeGraphNetworkSimulator(
+            encoder_node_fn=encoder_node_fn,
+            encoder_edge_fn=encoder_edge_fn,
+            decoder_node_fn=decoder_node_fn,
+            decoder_edge_fn_1=decoder_edgeC_fn,
+            decoder_edge_fn_2=decoder_edgeL_fn,
+            decoder_postprocessor=lambda x, _: x, # identity decoder postprocessor
+            num_mp_steps=self.num_mp_steps,
+            shared_params=self.shared_params,
+            use_edge_model=self.use_edge_model,
+            latent_size=self.latent_size,
+            hidden_layers=self.hidden_layers,
+            activation=self.activation,
+            dropout_rate=self.dropout_rate,
+            training=self.training,
+            layer_norm=self.layer_norm,
+        )
+    
+    def __call__(self, graph, control, rng):
+        num_edges = len(graph.edges)
+        cur_v = graph.nodes[:,0]
+        cur_state = graph.edges[:,0]
+        cur_Q1, cur_Phi1, cur_Q3, cur_Phi2, cur_Q2 = cur_state
+        if self.training: 
+            rng, state_rng, voltage_rng = jax.random.split(rng, 3)
+            state_noise = self.noise_std * jax.random.normal(state_rng, (num_edges,))
+            noisy_state = cur_state + state_noise
+            # TODO: add noise to voltage (nodes?)
+
+            new_edges = jnp.array(noisy_state).reshape(-1, 1)
+            graph = graph._replace(edges=new_edges)
+
+        def H_from_state(Q1, Phi1, Q2, Phi2):
+            '''
+                1. state to graph
+                2. processed_graph = self.net(graph, aux_data, rng)
+                3. return Hamiltonian (processed_graph.globals?)
+            '''
+            n_node = jnp.array([4])
+            n_edge = jnp.array([5])
+            senders = jnp.array([0, 1, 0, 3, 0])
+            receivers = jnp.array([1, 2, 2, 2, 3])
+
+            # From LCGraphBuilder
+            # Q3 = -(Q1 + Q2) # TODO: explicitly add KCL?
+            V2 = Q1 / self.system_params['C']
+            V4 = Q2 / self.system_params['C']
+            Q3 = -(Q1 + Q2)
+            V3 = Q3 / self.system_params['C_prime']
+
+            nodes = jnp.array([[0], [V2], [V3], [V4]])
+            edges = jnp.array([[Q1], [Phi1], [Q3], [Phi2], [Q2]])
+            global_context = None
+
+            graph = jraph.GraphsTuple(
+                nodes=nodes,
+                edges=edges,
+                globals=global_context,
+                n_node=n_node,
+                n_edge=n_edge,
+                senders=senders,
+                receivers=receivers,
+            )
+            aux_data = None
+            processed_graph = self.net(graph, aux_data, rng)
+            return jnp.sum(processed_graph.edges), processed_graph
+        
+        H, _ = H_from_state(cur_Q1, cur_Phi1, cur_Q2, cur_Phi2)
+        H_grads, processed_graph = jax.grad(H_from_state, argnums=[0,1,2,3], has_aux=True)(cur_Q1, cur_Phi1, cur_Q2, cur_Phi2)
+        H_grads = jnp.array(H_grads)
+
+        def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
+            H, cur_state = aux_data
+
+            def dynamics_function(state, t):
+                """ 
+                    TODO: move to CoupledLCIntegrator.dynamics_function?
+                    TODO: change here!
+                """
+                state = jnp.array(state)
+                dH, _ = jax.grad(H_from_state, argnums=[0,1,2,3], has_aux=True)(state[0], state[1], state[2], state[3])
+                dH = jnp.array(dH).reshape(-1,1)
+                J = jnp.array([[0, 1, 0, 0],
+                               [-1, 0, 0, 0],
+                               [0, 0, 0, 1],
+                               [0, 0, -1, 0]])
+                return jnp.matmul(J, dH).squeeze()
+            
+            if self.integration_method == 'rk4':
+                next_state = rk4(dynamics_function, cur_state, 0.0, self.dt)
+            elif self.integration_method == 'euler':
+                state = jnp.array([cur_Q1, cur_Phi1, cur_Q2, cur_Phi2])
+                next_state = euler(dynamics_function, state, 0.0, self.dt)
+            else:
+                raise NotImplementedError()
+
+            next_Q1 = next_state[0]
+            next_Phi1 = next_state[1]
+            next_Q2 = next_state[2]
+            next_Phi2 = next_state[3]
+            next_Q3 = -(next_Q1 + next_Q2)
+            next_edges = jnp.array([next_Q1, next_Phi1, next_Q3, next_Phi2, next_Q2]).reshape(-1,1)
+            next_globals = jnp.array(H)
+            graph = graph._replace(edges=next_edges,
+                                   globals=next_globals)
+
+            return graph
+
+        aux_data = (H, cur_state)
         processed_graph = decoder_postprocessor(processed_graph, aux_data)
         
         return processed_graph

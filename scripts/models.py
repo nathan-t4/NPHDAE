@@ -10,6 +10,7 @@ from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
+from utils.jraph_utils import *
 
 class MLP(nn.Module):
     feature_sizes: Sequence[int]
@@ -125,12 +126,12 @@ class GraphNetworkSimulator(nn.Module):
                         with_layer_norm=self.layer_norm)
             return model(input)
             
-        def update_global_fn(nodes, edges, globals_):
-            del nodes, edges
-            time = globals_[0]
-            static_params = globals_[1:]
-            globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
-            return globals_ 
+        # def update_global_fn(nodes, edges, globals_):
+        #     del nodes, edges
+        #     time = globals_[0]
+        #     static_params = globals_[1:]
+        #     globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
+        #     return globals_ 
         
         if not self.use_edge_model:
             update_edge_fn = None
@@ -168,6 +169,104 @@ class GraphNetworkSimulator(nn.Module):
 
         return processed_graph
     
+class CustomEdgeGraphNetworkSimulator(nn.Module):
+    encoder_node_fn: Callable
+    encoder_edge_fn: Callable
+    decoder_node_fn: Callable
+    decoder_edge_fn_1: Callable
+    decoder_edge_fn_2: Callable
+    decoder_postprocessor: Callable
+
+    num_mp_steps: int
+    shared_params: bool
+
+    use_edge_model: bool
+    
+    layer_norm: bool = False
+    latent_size: int = 16
+    hidden_layers: int = 2
+    activation: str = 'relu'
+    dropout_rate: float = 0
+    training: bool = True
+
+    @nn.compact    
+    def __call__(self, graph, aux_data, rng):   
+        encoder = jraph.GraphMapFeatures(
+            embed_edge_fn=self.encoder_node_fn,
+            embed_node_fn=self.encoder_edge_fn,
+        )  
+
+        decoder = CustomEdgeGraphMapFeatures(
+            embed_node_fn=self.decoder_node_fn,
+            embed_edge_fn_1=self.decoder_edge_fn_1,
+            embed_edge_fn_2=self.decoder_edge_fn_2,
+        )
+
+        def update_node_fn(nodes, senders, receivers, globals_):
+            node_feature_sizes = [self.latent_size] * self.hidden_layers
+            # input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((nodes, senders, receivers), axis=1)
+            model = MLP(feature_sizes=node_feature_sizes, 
+                        activation=self.activation, 
+                        dropout_rate=self.dropout_rate, 
+                        deterministic=not self.training,
+                        with_layer_norm=self.layer_norm)
+            return model(input)
+
+        def update_edge_fn(edges, senders, receivers, globals_):
+            edge_feature_sizes = [self.latent_size] * self.hidden_layers
+            # input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            input = jnp.concatenate((edges, senders, receivers), axis=1)
+            model = MLP(feature_sizes=edge_feature_sizes,
+                        activation=self.activation,
+                        dropout_rate=self.dropout_rate, 
+                        deterministic=not self.training,
+                        with_layer_norm=self.layer_norm)
+            return model(input)
+            
+        # def update_global_fn(nodes, edges, globals_):
+        #     del nodes, edges
+        #     time = globals_[0]
+        #     static_params = globals_[1:]
+        #     globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
+        #     return globals_ 
+        
+        if not self.use_edge_model:
+            update_edge_fn = None
+
+        # TODO: was graph.globals is None
+        update_global_fn = None
+
+        graph_net = jraph.GraphNetwork(
+                update_node_fn=update_node_fn,
+                update_edge_fn=update_edge_fn,
+                update_global_fn=update_global_fn,
+            )
+        
+        num_nets = self.num_mp_steps if not self.shared_params else 1
+        graph_nets = []
+        for _ in range(num_nets):
+            graph_nets.append(graph_net)
+        
+        # Encode features to latent space
+        processed_graph = encoder(graph)
+        prev_graph = processed_graph
+
+        # Message passing
+        for i in range(num_nets): 
+            processed_graph = graph_nets[i](processed_graph)
+            processed_graph = processed_graph._replace(nodes=processed_graph.nodes + prev_graph.nodes,
+                                                       edges=processed_graph.edges + prev_graph.edges)
+            prev_graph = processed_graph
+
+        # Decode latent space features back to node features
+        processed_graph = decoder(processed_graph)
+
+        # Decoder post-processor
+        processed_graph = self.decoder_postprocessor(processed_graph, aux_data)
+
+        return processed_graph
+        
 class CompGraphNetworkSimulator(nn.Module):
     """ 
         Model-based composition of Graph Network Simulators
