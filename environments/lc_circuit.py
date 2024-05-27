@@ -68,14 +68,12 @@ class LC(Environment):
         ax.set_ylabel('$Q$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
-        ax.legend()
 
         ax = fig.add_subplot(212)
         ax.plot(T, Phi)
         ax.set_ylabel('Flux', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
-        ax.legend()
 
         plt.show()
 
@@ -93,9 +91,7 @@ class LC(Environment):
 
         ax.plot(T, CapacitorPE, color='red', label='Capacitor PE')
         ax.plot(T, InductorPE, color='blue', label='Inductor PE')
-
         ax.plot(T, H, color='green', label='Total Energy')
-
         ax.set_ylabel('$Energy$ $[J]$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
@@ -103,10 +99,9 @@ class LC(Environment):
 
         plt.show()
 
-class CLC(Environment):
-    def __init__(self, dt=0.01, random_seed=42, C=1, C_prime=1, L=1, name: str = 'LC'):
+class LC1(Environment):
+    def __init__(self, dt=0.01, random_seed=42, C=1, C_prime=1, L=1, name: str = 'LC1'):
         super().__init__(dt=dt, random_seed=random_seed, name=name)
-
         self.C = C
         self.C_prime = C_prime
         self.L = L
@@ -114,10 +109,12 @@ class CLC(Environment):
         self.config = {
             'dt': dt,
             'C': C,
+            'C_prime': C_prime,
             'L': L,
         }
 
         self.omega = np.sqrt((L * C) ** (-1))
+        self.alpha = C / C_prime
 
     def _define_dynamics(self):
         def CapacitorPE(state):
@@ -163,14 +160,12 @@ class CLC(Environment):
         ax.set_ylabel('$Q$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
-        ax.legend()
 
         ax = fig.add_subplot(212)
         ax.plot(T, Phi)
         ax.set_ylabel('Flux', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
-        ax.legend()
 
         plt.show()
 
@@ -188,9 +183,7 @@ class CLC(Environment):
 
         ax.plot(T, CapacitorPE, color='red', label='Capacitor PE')
         ax.plot(T, InductorPE, color='blue', label='Inductor PE')
-
         ax.plot(T, H, color='green', label='Total Energy')
-
         ax.set_ylabel('$Energy$ $[J]$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
@@ -198,11 +191,101 @@ class CLC(Environment):
 
         plt.show()
 
-def generate_dataset(args, env_seed: int = 501):
-    save_dir = os.path.join(os.curdir, 'results/LC_data')
+class LC2(Environment):
+    def __init__(self, dt=0.01, random_seed=42, C=1, L=1, name: str = 'LC2'):
+        super().__init__(dt=dt, random_seed=random_seed, name=name)
+        self.C = C
+        self.L = L
+
+        self.config = {
+            'dt': dt,
+            'C': C,
+            'L': L,
+        }
+
+        self.omega = np.sqrt((L * C) ** (-1))
+
+    def _define_dynamics(self):
+        def CapacitorPE(state):
+            Q = state[0]
+            return 0.5 * (Q**2 / self.C)
+        
+        def InductorPE(state):
+            flux = state[1]
+            return 0.5 * (flux**2 / self.L)
+        
+        def H(state):
+            return CapacitorPE(state) + InductorPE(state)
+        
+        def dynamics_function(state, t, control_input, jax_key):
+            dH = jax.grad(H)(state)
+
+            J = jnp.array([[0, 1],
+                           [-1, 0]])
+            
+            R = jnp.zeros((2,2))
+
+            g = jnp.array([[0],
+                           [-1]])
+            return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
+        
+        def get_power(state, control_input):
+            pass
+        
+        self.CapacitorPE = jax.jit(CapacitorPE)
+        self.InductorPE = jax.jit(InductorPE)
+        self.H = jax.jit(H)
+
+        self.dynamics_function = jax.jit(dynamics_function)
+        self.get_power = jax.jit(get_power)
     
+    def plot_trajectory(self, trajectory, fontsize=15, linewidth=3):
+        fig = plt.figure(figsize=(5,5))
+
+        T = np.arange(trajectory.shape[0]) * self._dt
+        Q = trajectory[:, 0]
+        Phi = trajectory[:, 1]
+
+        ax = fig.add_subplot(211)
+        ax.plot(T, Q)
+        ax.set_ylabel('$Q$', fontsize=fontsize)
+        ax.set_xlabel('Time $[s]$', fontsize=fontsize)
+        ax.grid()
+
+        ax = fig.add_subplot(212)
+        ax.plot(T, Phi)
+        ax.set_ylabel('Flux', fontsize=fontsize)
+        ax.set_xlabel('Time $[s]$', fontsize=fontsize)
+        ax.grid()
+
+        plt.show()
+
+
+    def plot_energy(self, trajectory, fontsize=15, linewidth=3):
+        fig = plt.figure(figsize=(7,4))
+
+        T = np.arange(trajectory.shape[0]) * self._dt
+
+        CapacitorPE = jax.vmap(self.CapacitorPE, in_axes=(0,))(trajectory)
+        InductorPE = jax.vmap(self.InductorPE, in_axes=(0,))(trajectory)
+        H = jax.vmap(self.H, in_axes=(0,))(trajectory)
+
+        ax = fig.add_subplot(111)
+
+        ax.plot(T, CapacitorPE, color='red', label='Capacitor PE')
+        ax.plot(T, InductorPE, color='blue', label='Inductor PE')
+        ax.plot(T, H, color='green', label='Total Energy')
+        ax.set_ylabel('$Energy$ $[J]$', fontsize=fontsize)
+        ax.set_xlabel('Time $[s]$', fontsize=fontsize)
+        ax.grid()
+        ax.legend()
+
+        plt.show()
+
+def generate_dataset(args, env_seed: int = 501):    
     # state x = [Q, \Phi] (charge, flux)\ TODO: is initial flux = 0?
-    if args.circuit == 'lc':
+    key = None
+    if args.circuit.lower() == 'lc':
         circuit = LC
         params = {
             'dt': 0.01,
@@ -210,34 +293,66 @@ def generate_dataset(args, env_seed: int = 501):
             'L': 1,
         }
     
-    elif args.circuit == 'clc':
-        circuit = CLC
+    elif args.circuit.lower() == 'lc1':
+        circuit = LC1
         params = {
                 'dt': 0.01,
                 'C': 1,
                 'C_prime': 0.5,
                 'L': 1,
         }
+    elif args.circuit.lower() == 'lc2':
+        # varying the voltage source 
+        circuit = LC2
+        params = {
+            'dt': 0.01,
+            'C': 1,
+            'L': 1,
+        }
+    else:
+        raise NotImplementedError()
+
+    save_dir = os.path.join(os.curdir, f'results/{args.circuit.upper()}_data')
 
     if args.type == 'train':
+        seed = env_seed
         x0_init_lb = jnp.array([0.0, 0.0])
         x0_init_ub = jnp.array([2.0, 0.0])
     elif args.type == 'val':
+        seed = env_seed + 1
         x0_init_lb = jnp.array([2.0, 0.0])
         x0_init_ub = jnp.array([2.5, 0.0])
 
-    env = circuit(**params, random_seed=env_seed)
+    key = jax.random.key(seed)
+    env = circuit(**params, random_seed=seed)
     dataset = None
+    key = jax.random.key(seed)
 
     for _ in tqdm(range(args.n)):
+        if args.circuit.lower() == 'lc2':
+            # Train with random (constant) voltages - can be positive and negative
+            key, subkey = jax.random.split(key)
+            voltage_source = 1.0 * jax.random.uniform(subkey, shape=(1,), minval=-1.0, maxval=1.0)
+        
+            def control_policy(state, t, jax_key):
+                return voltage_source
+
+            env.set_control_policy(control_policy)
+        
         new_dataset = env.gen_dataset(trajectory_num_steps=args.steps,
                                         num_trajectories=1,
                                         x0_init_lb=x0_init_lb,
                                         x0_init_ub=x0_init_ub)
+        
         if dataset is not None:
             dataset = merge_datasets(dataset, new_dataset)
+            if args.circuit.lower() == 'lc2':
+                # TODO: move to merge_datasets
+                dataset['V'] = jnp.concatenate((dataset['V'], jnp.array([voltage_source])))
         else:
             dataset = new_dataset
+            if args.circuit.lower() == 'lc2':
+                dataset['V'] = jnp.array([voltage_source])
 
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
@@ -250,7 +365,6 @@ def generate_dataset(args, env_seed: int = 501):
     traj = dataset['state_trajectories'][0, :, :]
     env.plot_trajectory(traj)
     env.plot_energy(traj)
-
 
 if __name__ == '__main__':
     from argparse import ArgumentParser

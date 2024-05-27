@@ -10,7 +10,6 @@ from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
-from utils.jraph_utils import *
 
 class MLP(nn.Module):
     feature_sizes: Sequence[int]
@@ -170,6 +169,13 @@ class GraphNetworkSimulator(nn.Module):
         return processed_graph
     
 class CustomEdgeGraphNetworkSimulator(nn.Module):
+    """
+        Graph Network Simulator with two edge decoders. 
+        
+        Edges with indices "edge_idxs" are processed with the first decoder, 
+        and all other edges are processed with the second decoder
+    """
+    edge_idxs: list
     encoder_node_fn: Callable
     encoder_edge_fn: Callable
     decoder_node_fn: Callable
@@ -191,6 +197,40 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
 
     @nn.compact    
     def __call__(self, graph, aux_data, rng):   
+        def CustomEdgeGraphMapFeatures(embed_edge_fn_1 = None,
+                                       embed_edge_fn_2 = None,
+                                       embed_node_fn = None,
+                                       embed_global_fn = None):
+            identity = lambda x : x
+            embed_edges_fn_1 = embed_edge_fn_1 if embed_edge_fn_1 else identity
+            embed_edges_fn_2 = embed_edge_fn_2 if embed_edge_fn_2 else identity
+            embed_nodes_fn = embed_node_fn if embed_node_fn else identity
+            embed_globals_fn = embed_global_fn if embed_global_fn else identity
+
+            def Embed(graph):
+                """
+                1. differentiate edges_one and edges_two
+                2. apply embed_edge_fn_1 on edges_one and embed_edge_fn_2 on edges_two (in place?)
+                3. replace graph edges with new edges, nodes with new nodes, and globals with new globals
+                4. return graph
+                """
+                new_edges = None
+                for i in range(len(graph.edges)):
+                    if i in self.edge_idxs:
+                        new_edge = embed_edges_fn_1(graph.edges[i])
+                    else:
+                        new_edge = embed_edges_fn_2(graph.edges[i])
+                    
+                    if new_edges is None:
+                        new_edges = new_edge
+                    else:
+                        new_edges = jnp.concatenate((new_edges, new_edge))
+
+                return graph._replace(nodes=embed_nodes_fn(graph.nodes),
+                                      edges=new_edges,
+                                      globals=embed_globals_fn(graph.globals))    
+            return Embed
+        
         encoder = jraph.GraphMapFeatures(
             embed_edge_fn=self.encoder_node_fn,
             embed_node_fn=self.encoder_edge_fn,
@@ -266,7 +306,7 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
         processed_graph = self.decoder_postprocessor(processed_graph, aux_data)
 
         return processed_graph
-        
+
 class CompGraphNetworkSimulator(nn.Module):
     """ 
         Model-based composition of Graph Network Simulators

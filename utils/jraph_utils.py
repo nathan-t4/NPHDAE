@@ -20,11 +20,6 @@ def CustomEdgeGraphMapFeatures(embed_edge_fn_1 = None,
         3. replace graph edges with new edges, nodes with new nodes, and globals with new globals
         4. return graph
         """
-        # mask = np.zeros(len(graph.edges))
-        # mask[edge_idxs] = 1
-        # mask = mask.astype(bool)
-        # edges_one = graph.edges[mask]
-        # edges_two = graph.edges[~mask]
         new_edges = None
 
         # for i in range(len(graph.edges)):

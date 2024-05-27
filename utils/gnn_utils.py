@@ -119,6 +119,114 @@ def plot_evaluation_curves(
         plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
         if show: plt.show()
         plt.close()
+
+    elif system_name == 'LC1':
+        fig = plt.figure(layout="constrained", figsize=(20,10))
+        fig.suptitle(f'{prefix}')
+
+        layout = [['Q1', 'Phi1', 'Q3', 'H'],
+                  ['Q1_error', 'Phi1_error', 'Q3_error', 'H_error']]
+        ax = fig.subplot_mosaic(layout)
+
+        ax['Q1'].set_title('$Q_1$')
+        ax['Q1'].plot(ts, pred_data[0,:], label='predicted')
+        ax['Q1'].plot(ts, exp_data[0,:], label='expected')
+        ax['Q1'].set_xlabel('Time [$s$]')
+        ax['Q1'].set_ylabel('$Q_1$')
+        ax['Q1'].legend()
+
+        ax['Phi1'].set_title('$\Phi_1$')
+        ax['Phi1'].plot(ts, pred_data[1,:], label='predicted')
+        ax['Phi1'].plot(ts, exp_data[1,:], label='expected')
+        ax['Phi1'].set_xlabel('Time [$s$]')
+        ax['Phi1'].set_ylabel('$\Phi_1$')
+        ax['Phi1'].legend()
+
+        ax['Q3'].set_title('$Q_3$')
+        ax['Q3'].plot(ts, pred_data[2,:], label='predicted')
+        ax['Q3'].plot(ts, exp_data[2,:], label='expected')
+        ax['Q3'].set_xlabel('Time [$s$]')
+        ax['Q3'].set_ylabel('$Q_3$')
+        ax['Q3'].legend()
+
+        ax['H'].set_title('Hamiltonian')
+        ax['H'].plot(ts, pred_data[3,:], label='predicted')
+        ax['H'].plot(ts, exp_data[3,:], label='expected')
+        ax['H'].set_xlabel('Time [$s$]')
+        ax['H'].set_ylabel('Hamiltonian')
+        ax['H'].legend()
+    
+        ax['Q1_error'].set_title('$Q_1$ Error')
+        ax['Q1_error'].plot(ts, exp_data[0,:] - pred_data[0,:])
+        ax['Q1_error'].set_xlabel('Time [$s$]')
+        ax['Q1_error'].set_ylabel('$Q_1$')
+
+        ax['Phi1_error'].set_title('$\Phi_1$ Error')
+        ax['Phi1_error'].plot(ts, exp_data[1,:] - pred_data[1,:])
+        ax['Phi1_error'].set_xlabel('Time [$s$]')
+        ax['Phi1_error'].set_ylabel('$\Phi_1$')
+
+        ax['Q3_error'].set_title('$Q_3$ Error')
+        ax['Q3_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
+        ax['Q3_error'].set_xlabel('Time [$s$]')
+        ax['Q3_error'].set_ylabel('$Q_3$')
+
+        ax['H_error'].set_title('Hamiltonian Error')
+        ax['H_error'].plot(ts, exp_data[3,:] - pred_data[3,:])
+        ax['H_error'].set_xlabel('Time [$s$]')
+        ax['H_error'].set_ylabel('Hamiltonian')
+
+        plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
+        if show: plt.show()
+        plt.close()
+
+    elif system_name == 'LC2':
+        fig = plt.figure(layout="constrained", figsize=(20,10))
+        fig.suptitle(f'{prefix}')
+
+        layout = [['Q2', 'Phi2', 'H'],
+                  ['Q2_error', 'Phi2_error', 'H_error']]
+        ax = fig.subplot_mosaic(layout)
+
+        ax['Q2'].set_title('$Q_2$')
+        ax['Q2'].plot(ts, pred_data[1,:], label='predicted')
+        ax['Q2'].plot(ts, exp_data[1,:], label='expected')
+        ax['Q2'].set_xlabel('Time [$s$]')
+        ax['Q2'].set_ylabel('$Q_2$')
+        ax['Q2'].legend()
+
+        ax['Phi2'].set_title('$\Phi_2$')
+        ax['Phi2'].plot(ts, pred_data[0,:], label='predicted')
+        ax['Phi2'].plot(ts, exp_data[0,:], label='expected')
+        ax['Phi2'].set_xlabel('Time [$s$]')
+        ax['Phi2'].set_ylabel('$\Phi_2$')
+        ax['Phi2'].legend()
+
+        ax['H'].set_title('Hamiltonian')
+        ax['H'].plot(ts, pred_data[2,:], label='predicted')
+        ax['H'].plot(ts, exp_data[2,:], label='expected')
+        ax['H'].set_xlabel('Time [$s$]')
+        ax['H'].set_ylabel('Hamiltonian')
+        ax['H'].legend()
+    
+        ax['Q2_error'].set_title('$Q_2$ Error')
+        ax['Q2_error'].plot(ts, exp_data[1,:] - pred_data[1,:])
+        ax['Q2_error'].set_xlabel('Time [$s$]')
+        ax['Q2_error'].set_ylabel('$Q_2$')
+
+        ax['Phi2_error'].set_title('$\Phi_2$ Error')
+        ax['Phi2_error'].plot(ts, exp_data[0,:] - pred_data[0,:])
+        ax['Phi2_error'].set_xlabel('Time [$s$]')
+        ax['Phi2_error'].set_ylabel('$\Phi_2$')
+
+        ax['H_error'].set_title('Hamiltonian Error')
+        ax['H_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
+        ax['H_error'].set_xlabel('Time [$s$]')
+        ax['H_error'].set_ylabel('Hamiltonian')
+
+        plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
+        if show: plt.show()
+        plt.close()
     
     elif system_name == 'CoupledLC':
         fig = plt.figure(layout="constrained", figsize=(20,10))

@@ -4,8 +4,8 @@ import ml_collections
 def create_gnn_config(args) -> ml_collections.ConfigDict:
     if 'lc' in args.system.lower():
         config = ml_collections.ConfigDict({
-            'system_name': 'CoupledLC',
-            'n_train': 200,
+            'system_name': 'LC2',
+            'n_train': 1000,
             'n_val': 20,
         })
         config.paths = ml_collections.ConfigDict({
@@ -23,7 +23,7 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
             'num_epochs': int(5e2),
             'min_epochs': int(30),
             'batch_size': 1,
-            'rollout_timesteps': 10000,
+            'rollout_timesteps': 1500,
             'log_every_steps': 1,
             'eval_every_steps': 2,
             'ckpt_every_steps': 5,
