@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from time import strftime
+from functools import partial
 from environments.utils import *
 from environments.environment import Environment
 
@@ -116,14 +117,21 @@ class LC1(Environment):
         self.omega = np.sqrt((L * C) ** (-1))
         self.alpha = C / C_prime
 
+    def _update_config(self):
+        self.config['C'] = self.C
+        self.config['C_prime'] = self.C_prime
+        self.config['L'] = self.L
+        self.omega = np.sqrt((self.L * self.C) ** (-1))
+        self.alpha = self.C / self.C_prime
+
     def _define_dynamics(self):
         def CapacitorPE(state):
             Q = state[0]
-            return 0.5 * (Q**2 / self.C + Q**2 / self.C_prime)
+            return 0.5 * (Q**2 / self.config['C'] + Q**2 / self.config['C_prime'])
         
         def InductorPE(state):
             flux = state[1]
-            return 0.5 * (flux**2 / self.L)
+            return 0.5 * (flux**2 / self.config['L'])
         
         def H(state):
             return CapacitorPE(state) + InductorPE(state)
@@ -135,8 +143,12 @@ class LC1(Environment):
                            [-1, 0]])
             
             R = jnp.zeros((2,2))
+
+            g = jnp.array([[1, 0], [0, 0]])
+
+            control_input = jnp.array([control_input, 0])
             
-            return jnp.matmul(J - R, dH) # x_dot
+            return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
         
         def get_power(state, control_input):
             pass
@@ -205,6 +217,11 @@ class LC2(Environment):
 
         self.omega = np.sqrt((L * C) ** (-1))
 
+    def _update_config(self):
+        self.config['C'] = self.C
+        self.config['L'] = self.L
+        self.omega = np.sqrt((self.L * self.C) ** (-1))
+    
     def _define_dynamics(self):
         def CapacitorPE(state):
             Q = state[0]
@@ -225,8 +242,8 @@ class LC2(Environment):
             
             R = jnp.zeros((2,2))
 
-            g = jnp.array([[0],
-                           [-1]])
+            g = jnp.array([[1,0],
+                          [0,-1]])
             return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
         
         def get_power(state, control_input):
@@ -283,8 +300,8 @@ class LC2(Environment):
         plt.show()
 
 def generate_dataset(args, env_seed: int = 501):    
-    # state x = [Q, \Phi] (charge, flux)\ TODO: is initial flux = 0?
-    key = None
+    save_dir = os.path.join(os.curdir, f'results/{args.circuit.upper()}_data')
+
     if args.circuit.lower() == 'lc':
         circuit = LC
         params = {
@@ -295,6 +312,7 @@ def generate_dataset(args, env_seed: int = 501):
     
     elif args.circuit.lower() == 'lc1':
         circuit = LC1
+        sys_params = ('C', 'C_prime', 'L')
         params = {
                 'dt': 0.01,
                 'C': 1,
@@ -302,8 +320,8 @@ def generate_dataset(args, env_seed: int = 501):
                 'L': 1,
         }
     elif args.circuit.lower() == 'lc2':
-        # varying the voltage source 
         circuit = LC2
+        sys_params = ('C', 'L')
         params = {
             'dt': 0.01,
             'C': 1,
@@ -312,57 +330,89 @@ def generate_dataset(args, env_seed: int = 501):
     else:
         raise NotImplementedError()
 
-    save_dir = os.path.join(os.curdir, f'results/{args.circuit.upper()}_data')
-
     if args.type == 'train':
         seed = env_seed
         x0_init_lb = jnp.array([0.0, 0.0])
         x0_init_ub = jnp.array([2.0, 0.0])
+        control_mag = 10
+        C_range = (0.5, 1)
+        C_prime_range = (0.5, 1)
+        L_range = (0.5, 1)
+
     elif args.type == 'val':
         seed = env_seed + 1
         x0_init_lb = jnp.array([2.0, 0.0])
         x0_init_ub = jnp.array([2.5, 0.0])
-
+        control_mag = 0.0
+        C_range = (1, 1.5)
+        C_prime_range = (1, 1.5)
+        L_range = (1, 1.5)
+        
+    
     key = jax.random.key(seed)
     env = circuit(**params, random_seed=seed)
     dataset = None
-    key = jax.random.key(seed)
 
-    for _ in tqdm(range(args.n)):
+    if args.circuit == 'lc1':
+        key, cpkey = jax.random.split(key)
+        C_primes = jax.random.uniform(cpkey, shape=(args.n,), minval=C_prime_range[0], maxval=C_prime_range[1])
+
+    key, ckey, lkey = jax.random.split(key, 3)
+    Cs = jax.random.uniform(ckey, shape=(args.n,), minval=C_range[0], maxval=C_range[1])
+    Ls = jax.random.uniform(lkey, shape=(args.n,), minval=L_range[0], maxval=L_range[1])
+
+    for i in tqdm(range(args.n)): 
+        # Update parameters
+        if args.circuit.lower() == 'lc1':
+            env.C_prime = C_primes[i]
+        
+        env.C = Cs[i]
+        env.L = Ls[i]
+        env._update_config()
+        env._define_dynamics()    
+
         if args.circuit.lower() == 'lc2':
             # Train with random (constant) voltages - can be positive and negative
             key, subkey = jax.random.split(key)
-            voltage_source = 1.0 * jax.random.uniform(subkey, shape=(1,), minval=-1.0, maxval=1.0)
+            k = 1.0 * jax.random.uniform(subkey, shape=(6,), minval=-1.0, maxval=1.0)
         
-            def control_policy(state, t, jax_key):
-                return voltage_source
+            def control_policy(state, t, jax_key, aux_data):
+                k = aux_data
+                i = k[0] * jnp.sin(k[1] * t + k[2]) 
+                v = k[3] * jnp.sin(k[4] * t + k[5])
+                return jnp.array([i, v])
 
-            env.set_control_policy(control_policy)
-        
+            env.set_control_policy(partial(control_policy, aux_data=k))
+
+        elif args.circuit.lower() == 'lc1':
+            key, subkey = jax.random.split(key)   
+            k = control_mag * jax.random.uniform(subkey, shape=(3,), minval=-1.0, maxval=1.0)
+
+            def control_policy(state, t, jax_key, aux_data):
+                k = aux_data
+                return k[0] * jnp.sin(k[1] * t + k[2])
+            
+            env.set_control_policy(partial(control_policy, aux_data=k))
+
         new_dataset = env.gen_dataset(trajectory_num_steps=args.steps,
-                                        num_trajectories=1,
-                                        x0_init_lb=x0_init_lb,
-                                        x0_init_ub=x0_init_ub)
+                                      num_trajectories=1,
+                                      x0_init_lb=x0_init_lb,
+                                      x0_init_ub=x0_init_ub)
         
         if dataset is not None:
-            dataset = merge_datasets(dataset, new_dataset)
-            if args.circuit.lower() == 'lc2':
-                # TODO: move to merge_datasets
-                dataset['V'] = jnp.concatenate((dataset['V'], jnp.array([voltage_source])))
+            dataset = merge_datasets(dataset, new_dataset, params=sys_params)            
         else:
             dataset = new_dataset
-            if args.circuit.lower() == 'lc2':
-                dataset['V'] = jnp.array([voltage_source])
-
+                
         if not os.path.isdir(save_dir):
             os.makedirs(save_dir)
 
     save_path = os.path.join(os.path.abspath(save_dir),  
-        strftime(f'{args.type}_{args.n}.pkl'))
+        strftime(f'{args.type}_{args.n}_{args.steps}.pkl'))
     with open(save_path, 'wb') as f:
         pickle.dump(dataset, f)
 
-    traj = dataset['state_trajectories'][0, :, :]
+    traj = dataset['state_trajectories'][-1, :, :]
     env.plot_trajectory(traj)
     env.plot_energy(traj)
 

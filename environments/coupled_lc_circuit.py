@@ -123,10 +123,14 @@ def generate_dataset(args, env_seed: int = 501):
     if args.type == 'train':
         x0_init_lb = jnp.array([0.0, 0.0, 2.0, 0.0])
         x0_init_ub = jnp.array([2.0, 0.0, 4.0, 0.0])
+        C_range = (0.5, 1)
+        C_prime_range = (0.5, 1)
+        L_range = (0.5, 1)
     elif args.type == 'val':
         x0_init_lb = jnp.array([2.0, 0.0, 1.0, 0.0])
         x0_init_ub = jnp.array([3.0, 0.0, 2.0, 0.0])
 
+    # TODO: vary params?
     params = {
         'dt': 0.01,
         'C': 1,
@@ -152,7 +156,7 @@ def generate_dataset(args, env_seed: int = 501):
             os.makedirs(save_dir)
 
     save_path = os.path.join(os.path.abspath(save_dir),  
-        strftime(f'{args.type}_{args.n}.pkl'))
+        strftime(f'{args.type}_{args.n}_{args.steps}.pkl'))
     with open(save_path, 'wb') as f:
         pickle.dump(dataset, f)
 

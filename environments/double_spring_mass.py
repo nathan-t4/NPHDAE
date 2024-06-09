@@ -190,8 +190,6 @@ class DoubleMassSpring(Environment):
 
             g = jnp.array([[0.0, 0.0, 0.0, 1.0]]).transpose()
 
-            jax.debug.print('g u {}', jnp.matmul(g, control_input))
-
             return jnp.matmul(J - R, dh) + jnp.matmul(g, control_input)
 
         def get_power(x, u):

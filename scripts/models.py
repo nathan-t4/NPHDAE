@@ -3,6 +3,7 @@ import jax
 import diffrax
 import flax.linen as nn
 import jax.numpy as jnp
+import numpy as np
 
 from typing import Sequence, Callable
 from flax.training.train_state import TrainState
@@ -177,10 +178,9 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
     """
     edge_idxs: list
     encoder_node_fn: Callable
-    encoder_edge_fn: Callable
+    encoder_edge_fns: Sequence[Callable]
     decoder_node_fn: Callable
-    decoder_edge_fn_1: Callable
-    decoder_edge_fn_2: Callable
+    decoder_edge_fns: Sequence[Callable]
     decoder_postprocessor: Callable
 
     num_mp_steps: int
@@ -200,10 +200,15 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
         def CustomEdgeGraphMapFeatures(embed_edge_fn_1 = None,
                                        embed_edge_fn_2 = None,
                                        embed_node_fn = None,
-                                       embed_global_fn = None):
+                                       embed_global_fn = None,
+                                       embed_edge_fns = Sequence[Callable]):
             identity = lambda x : x
-            embed_edges_fn_1 = embed_edge_fn_1 if embed_edge_fn_1 else identity
-            embed_edges_fn_2 = embed_edge_fn_2 if embed_edge_fn_2 else identity
+            # TODO:
+            # for i in range(len(embed_edge_fns)):
+            #     embed_edge_fns[i] = embed_edge_fns[i] if embed_edge_fns[i] else identity
+
+            # embed_edges_fn_1 = embed_edge_fn_1 if embed_edge_fn_1 else identity
+            # embed_edges_fn_2 = embed_edge_fn_2 if embed_edge_fn_2 else identity
             embed_nodes_fn = embed_node_fn if embed_node_fn else identity
             embed_globals_fn = embed_global_fn if embed_global_fn else identity
 
@@ -216,10 +221,18 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
                 """
                 new_edges = None
                 for i in range(len(graph.edges)):
-                    if i in self.edge_idxs:
-                        new_edge = embed_edges_fn_1(graph.edges[i])
+                    edge_type = np.where(self.edge_idxs == i)
+                    # Check if i is not in self.edge_idxs
+                    edge_type = None if edge_type[0].shape[0] == 0 else edge_type[0]
+                    if edge_type is not None:
+                        new_edge = embed_edge_fns[edge_type.item()](graph.edges[i])
                     else:
-                        new_edge = embed_edges_fn_2(graph.edges[i])
+                        new_edge = embed_edge_fns[-1](graph.edges[i])
+                    
+                    # if i in self.edge_idxs[0]:
+                    #     new_edge = embed_edges_fn_1(graph.edges[i])
+                    # else:
+                    #     new_edge = embed_edges_fn_2(graph.edges[i])
                     
                     if new_edges is None:
                         new_edges = new_edge
@@ -227,19 +240,18 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
                         new_edges = jnp.concatenate((new_edges, new_edge))
 
                 return graph._replace(nodes=embed_nodes_fn(graph.nodes),
-                                      edges=new_edges,
+                                      edges=new_edges.reshape(graph.edges.shape[0], -1  ),
                                       globals=embed_globals_fn(graph.globals))    
             return Embed
         
-        encoder = jraph.GraphMapFeatures(
-            embed_edge_fn=self.encoder_node_fn,
-            embed_node_fn=self.encoder_edge_fn,
+        encoder = CustomEdgeGraphMapFeatures(
+            embed_node_fn=self.encoder_node_fn,
+            embed_edge_fns=self.encoder_edge_fns,
         )  
 
         decoder = CustomEdgeGraphMapFeatures(
             embed_node_fn=self.decoder_node_fn,
-            embed_edge_fn_1=self.decoder_edge_fn_1,
-            embed_edge_fn_2=self.decoder_edge_fn_2,
+            embed_edge_fns=self.decoder_edge_fns,
         )
 
         def update_node_fn(nodes, senders, receivers, globals_):
