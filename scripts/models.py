@@ -7,10 +7,22 @@ import numpy as np
 
 from typing import Sequence, Callable
 from flax.training.train_state import TrainState
+from flax.typing import Array, Dtype
 from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
+
+class SineLayer(nn.Module):
+    # TODO:
+    param_dtype: Dtype = jnp.float32
+    omega_init: float = 30
+
+    @nn.compact
+    def __call__(self, inputs: Array) -> Array:
+        omega = self.param('omega', lambda k : jnp.asarray(self.omega_init, self.param_dtype))
+        layer = nn.Dense(features=inputs.shape[-1], param_dtype=self.param_dtype)
+        return jnp.sin(omega * layer(inputs))
 
 class MLP(nn.Module):
     feature_sizes: Sequence[int]
@@ -26,6 +38,8 @@ class MLP(nn.Module):
             activation_fn = nn.swish
         elif self.activation == 'relu':
             activation_fn = nn.relu
+        elif self.activation == 'sin':
+            activation_fn = SineLayer()
         else:
             activation_fn = nn.softplus
 
@@ -197,18 +211,14 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
 
     @nn.compact    
     def __call__(self, graph, aux_data, rng):   
-        def CustomEdgeGraphMapFeatures(embed_edge_fn_1 = None,
-                                       embed_edge_fn_2 = None,
+        def CustomEdgeGraphMapFeatures(embed_edge_fns = Sequence[Callable],
                                        embed_node_fn = None,
-                                       embed_global_fn = None,
-                                       embed_edge_fns = Sequence[Callable]):
+                                       embed_global_fn = None):
             identity = lambda x : x
             # TODO:
             # for i in range(len(embed_edge_fns)):
             #     embed_edge_fns[i] = embed_edge_fns[i] if embed_edge_fns[i] else identity
 
-            # embed_edges_fn_1 = embed_edge_fn_1 if embed_edge_fn_1 else identity
-            # embed_edges_fn_2 = embed_edge_fn_2 if embed_edge_fn_2 else identity
             embed_nodes_fn = embed_node_fn if embed_node_fn else identity
             embed_globals_fn = embed_global_fn if embed_global_fn else identity
 
@@ -240,7 +250,7 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
                         new_edges = jnp.concatenate((new_edges, new_edge))
 
                 return graph._replace(nodes=embed_nodes_fn(graph.nodes),
-                                      edges=new_edges.reshape(graph.edges.shape[0], -1  ),
+                                      edges=new_edges.reshape(graph.edges.shape[0], -1),
                                       globals=embed_globals_fn(graph.globals))    
             return Embed
         

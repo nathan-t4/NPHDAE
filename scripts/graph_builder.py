@@ -338,14 +338,17 @@ class LC1GraphBuilder(GraphBuilder):
         }
 
         self._Q1 = jnp.array(state[:,:,0])
+        self._dQ1 = jnp.diff(self._Q1, axis=-1) * self._dt
         self._Phi1 = jnp.array(state[:,:,1])
+        self._dPhi1 = jnp.diff(self._Phi1, axis=-1) * self._dt
         self._Q3 = -self._Q1
+        self._dQ3 = jnp.diff(self._Q3, axis=-1) * self._dt
 
         self._V2 = self._Q1 / self.C
         self._V3 = self._Q3 / self.C_prime
         self._H = 0.5 * (self._Q1**2 / self.C + self._Q3**2 / self.C_prime + self._Phi1**2 / self.L)
 
-        self._I_ext = jnp.array(u).squeeze()
+        self._control = jnp.array(u).squeeze()
 
     def _get_norm_stats(self):
         norm_stats = ml_collections.ConfigDict()
@@ -407,10 +410,10 @@ class LC1GraphBuilder(GraphBuilder):
     @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]]])
-        edges = jnp.array([[self._Q1[traj_idx, t]], 
-                           [self._Phi1[traj_idx, t]], 
-                           [self._Q3[traj_idx, t]],
-                           [self._I_ext[traj_idx, t]]])
+        edges = jnp.array([[self._dQ1[traj_idx, t], self._Q1[traj_idx, t]], 
+                           [self._Phi1[traj_idx, t], self._dPhi1[traj_idx, t]], 
+                           [self._dQ3[traj_idx, t], self._Q3[traj_idx, t]],
+                           [self._control[traj_idx, t], 0]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -435,7 +438,7 @@ class LC1GraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.C, self.C_prime, self.L, self.system_params, self._Q1, self._Phi1, self._Q3, self._V2, self._V3, self._H, self._I_ext, self._num_trajectories, self._num_timesteps, self._num_states)
+        aux_data = (self._dt, self.C, self.C_prime, self.L, self.system_params, self._Q1, self._dQ1, self._Phi1, self._dPhi1, self._Q3, self._dQ3, self._V2, self._V3, self._H, self._control, self._num_trajectories, self._num_timesteps, self._num_states)
         return (children, aux_data)
     
     @classmethod
@@ -448,15 +451,18 @@ class LC1GraphBuilder(GraphBuilder):
         obj.L                     = aux_data[3]
         obj.system_params         = aux_data[4]
         obj._Q1                   = aux_data[5]
-        obj._Phi1                 = aux_data[6]
-        obj._Q3                   = aux_data[7]
-        obj._V2                   = aux_data[8]
-        obj._V3                   = aux_data[9]
-        obj._H                    = aux_data[10]
-        obj._I_ext                = aux_data[11]
-        obj._num_trajectories     = aux_data[12]
-        obj._num_timesteps        = aux_data[13]
-        obj._num_states           = aux_data[14]
+        obj._dQ1                  = aux_data[6]
+        obj._Phi1                 = aux_data[7]
+        obj._dPhi1                = aux_data[8]
+        obj._Q3                   = aux_data[9]
+        obj._dQ3                  = aux_data[10]
+        obj._V2                   = aux_data[11]
+        obj._V3                   = aux_data[12]
+        obj._H                    = aux_data[13]
+        obj._control              = aux_data[14]
+        obj._num_trajectories     = aux_data[15]
+        obj._num_timesteps        = aux_data[16]
+        obj._num_states           = aux_data[17]
 
         obj._setup_graph_params()
         return obj
@@ -483,12 +489,12 @@ class LC2GraphBuilder(GraphBuilder):
         }
 
         self._Q = jnp.array(state[:,:,0])
+        self._dQ = jnp.diff(self._Q, axis=-1) * self._dt
         self._Phi = jnp.array(state[:,:,1])
+        self._dPhi = jnp.diff(self._Phi, axis=-1) * self._dt
         self._I = self._Phi / self.L
 
         self._control = jnp.array(u)
-        self._I_ext = jnp.array(u[:,:,0])
-        self._Volt = jnp.array(u[:,:,1])
 
         self._Vc = self._Q / self.C
         self._H = 0.5 * (self._Q**2 / self.C + self._Phi**2 / self.L)
@@ -508,11 +514,6 @@ class LC2GraphBuilder(GraphBuilder):
         norm_stats.Vc = ml_collections.ConfigDict({
             'mean': jnp.mean(self._Vc),
             'std': jnp.std(self._Vc),
-        })
-
-        norm_stats.Volt = ml_collections.ConfigDict({
-            'mean': jnp.mean(self._Volt),
-            'std': jnp.std(self._Volt),
         })
 
         self._norm_stats = norm_stats
@@ -546,11 +547,11 @@ class LC2GraphBuilder(GraphBuilder):
     
     @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
-        nodes = jnp.array([[self._Volt[traj_idx, t]], [self._Vc[traj_idx, t]], [0]])
-        edges = jnp.array([[self._I[traj_idx, t]], 
-                           [self._Phi[traj_idx, t]], 
-                           [self._Q[traj_idx, t]],
-                           [self._I_ext[traj_idx, t]]])
+        nodes = jnp.array([[self._control[traj_idx, t, 1]], [self._Vc[traj_idx, t]], [0]])
+        edges = jnp.array([[self._I[traj_idx, t], self._control[traj_idx, t, 1]], 
+                           [self._Phi[traj_idx, t], self._dPhi[traj_idx, t]], 
+                           [self._dQ[traj_idx, t], self._Q[traj_idx, t]],
+                           [self._control[traj_idx, t, 0], 0]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -575,7 +576,7 @@ class LC2GraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.C, self.L, self.system_params, self._Q, self._Phi, self._I, self._control, self._I_ext, self._Volt, self._Vc, self._H, self._num_trajectories, self._num_timesteps, self._num_states)
+        aux_data = (self._dt, self.C, self.L, self.system_params, self._Q, self._dQ, self._Phi, self._dPhi, self._I, self._control, self._Vc, self._H, self._num_trajectories, self._num_timesteps, self._num_states)
         return (children, aux_data)
     
     @classmethod
@@ -587,11 +588,11 @@ class LC2GraphBuilder(GraphBuilder):
         obj.L                     = aux_data[2]
         obj.system_params         = aux_data[3]
         obj._Q                    = aux_data[4]
-        obj._Phi                  = aux_data[5]
-        obj._I                    = aux_data[6]
-        obj._control              = aux_data[7]
-        obj._I_ext                = aux_data[8]
-        obj._Volt                 = aux_data[9]
+        obj._dQ                   = aux_data[5]
+        obj._Phi                  = aux_data[6]
+        obj._dPhi                 = aux_data[7]
+        obj._I                    = aux_data[8]
+        obj._control              = aux_data[9]
         obj._Vc                   = aux_data[10]
         obj._H                    = aux_data[11]
         obj._num_trajectories     = aux_data[12]
@@ -615,20 +616,26 @@ class CoupledLCGraphBuilder(GraphBuilder):
         self._num_states = 4
         self._dt = config['dt']
         self.system_params = {
-            'C': config['C'][0],
-            'C_prime': config['C_prime'][0],
-            'L': config['L'][0],
+            'C': jnp.array(config['C']).reshape(-1,1),
+            'C_prime': jnp.array(config['C_prime']).reshape(-1,1),
+            'L': jnp.array(config['L']).reshape(-1,1),
         }
+        self._control = jnp.array(data['control_inputs'])
 
         self._Q1 = jnp.array(state[:,:,0])
+        self._dQ1 = jnp.diff(self._Q1, axis=-1) * self._dt
         self._Phi1 = jnp.array(state[:,:,1])
+        self._dPhi1 = jnp.diff(self._Phi1, axis=-1) * self._dt
         self._V2 = self._Q1 / self.system_params['C']
 
         self._Q2 = jnp.array(state[:,:,2])
+        self._dQ2 = jnp.diff(self._Q2, axis=-1) * self._dt
         self._Phi2 = jnp.array(state[:,:,3])
+        self._dPhi2 = jnp.diff(self._Phi2, axis=-1) * self._dt
         self._V4 = self._Q2 / self.system_params['C']
 
         self._Q3 = -(self._Q1 + self._Q2)
+        self._dQ3 = jnp.diff(self._Q3, axis=-1) * self._dt
         self._V3 = self._Q3 / self.system_params['C_prime']
 
         self._H = 0.5 * (self._Q1 ** 2 / self.system_params['C'] + self._Q2 ** 2 / self.system_params['C'] + self._Q3 ** 2 / self.system_params['C_prime'] + self._Phi1 ** 2 / self.system_params['L'] + self._Phi2 ** 2 / self.system_params['L'])
@@ -686,7 +693,11 @@ class CoupledLCGraphBuilder(GraphBuilder):
     @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]], [self._V4[traj_idx, t]]])
-        edges = jnp.array([[self._Q1[traj_idx, t]], [self._Phi1[traj_idx, t]], [self._Q3[traj_idx, t]], [self._Phi2[traj_idx, t]], [self._Q2[traj_idx, t]]])
+        edges = jnp.array([[self._dQ1[traj_idx, t], self._Q1[traj_idx, t]], 
+                           [self._Phi1[traj_idx, t], self._dPhi1[traj_idx, t]], 
+                           [self._dQ3[traj_idx, t], self._Q3[traj_idx, t]], 
+                           [self._Phi2[traj_idx, t], self._dPhi2[traj_idx, t]], 
+                           [self._dQ2[traj_idx, t], self._Q2[traj_idx, t]]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -711,7 +722,7 @@ class CoupledLCGraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._Q1, self._Phi1, self._V2, self._Q2, self._Phi2, self._V4, self._Q3, self._V3)
+        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._Q1, self._dQ1, self._Phi1, self._dPhi1, self._V2, self._Q2, self._dQ2, self._Phi2, self._dPhi2, self._V4, self._Q3, self._dQ3, self._V3, self._control)
         return (children, aux_data)
     
     @classmethod
@@ -724,13 +735,19 @@ class CoupledLCGraphBuilder(GraphBuilder):
         obj._num_timesteps        = aux_data[3]
         obj._num_states           = aux_data[4]
         obj._Q1                   = aux_data[5]
-        obj._Phi1                 = aux_data[6]
-        obj._V2                   = aux_data[7]
-        obj._Q2                   = aux_data[8]
-        obj._Phi2                 = aux_data[9]
-        obj._V4                   = aux_data[10]
-        obj._Q3                   = aux_data[11]
-        obj._V3                   = aux_data[12]
+        obj._dQ1                  = aux_data[6]
+        obj._Phi1                 = aux_data[7]
+        obj._dPhi1                = aux_data[8]
+        obj._V2                   = aux_data[9]
+        obj._Q2                   = aux_data[10]
+        obj._dQ2                  = aux_data[11]
+        obj._Phi2                 = aux_data[12]
+        obj._dPhi2                = aux_data[13]
+        obj._V4                   = aux_data[14]
+        obj._Q3                   = aux_data[15]
+        obj._dQ3                  = aux_data[16]
+        obj._V3                   = aux_data[17]
+        obj._control              = aux_data[18]
 
         obj._setup_graph_params()
         return obj

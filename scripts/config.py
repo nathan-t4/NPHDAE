@@ -4,7 +4,7 @@ import ml_collections
 def create_gnn_config(args) -> ml_collections.ConfigDict:
     if 'lc' in args.system.lower():
         config = ml_collections.ConfigDict({
-            'system_name': 'LC2',
+            'system_name': 'CoupledLC',
             'n_train': 200,
             'steps': 700,
             'n_val': 20,
@@ -19,7 +19,7 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
         config.training_params = ml_collections.ConfigDict({
             'seed': 0,
             'net_name': 'GNS',
-            'trial_name': f'{config.n_train}',
+            'trial_name': f'{config.n_train}_swish',
             'loss_function': 'lc_state',
             'num_epochs': int(5e2),
             'min_epochs': int(30),
@@ -40,7 +40,7 @@ def create_gnn_config(args) -> ml_collections.ConfigDict:
             'noise_std': 0.0003,
             'latent_size': 16, # use 32 for 4>= mass spring damper, other <4 use 16
             'hidden_layers': 2,
-            'activation': 'relu',
+            'activation': 'swish',
             'use_edge_model': True,
             'layer_norm': True,
             'shared_params': False,
@@ -110,11 +110,11 @@ def comp_gnn_config(args):
     })
     config.paths = ml_collections.ConfigDict({
         'dir': args.dir,
-        'ckpt_one_step': 42, # TODO: retrain LC1 GNS with 200 trajs / 1500 steps    
-        'ckpt_one_dir': 'results/GNS/LC1/0529-1743_200/checkpoint/best_model', 
-        'ckpt_two_step': 38,
-        'ckpt_two_dir': 'results/GNS/LC2/0529-1802_200/checkpoint/best_model', 
-        'coupled_lc_data_path': 'results/CoupledLC_data/val_20.pkl',
+        'ckpt_one_step': 50,
+        'ckpt_one_dir': 'results/GNS/LC1/0610-1443_200_new/checkpoint/best_model', 
+        'ckpt_two_step': 24,
+        'ckpt_two_dir': 'results/GNS/LC2/0610-1926_200_new/checkpoint/best_model', 
+        'coupled_lc_data_path': 'results/CoupledLC_data/train_20_1500.pkl',
     })
     config.training_params = ml_collections.ConfigDict({
             'seed': 0,

@@ -38,32 +38,32 @@ from utils.gnn_utils import *
 def decompose_coupled_lc_graph(lc_graph):
     """
     nodes = jnp.array([[0], [V2], [V3]]) # 1 2 3
-    edges = jnp.array([[Q1], [Phi1], [Q3]]) # e1 e2 e3
-    senders = jnp.array([0, 1, 0])
-    receivers = jnp.array([1, 2, 2])
+    edges = jnp.array([[dQ1, Q1], [Phi1, dPhi1], [dQ3, Q3], [I_ext1, 0]]) # e1 e2 e3
+    senders = jnp.array([0, 1, 0, 2])
+    receivers = jnp.array([1, 2, 2, 2])
 
-    nodes = jnp.array([[Volt], [Vc], [0]]) # 4 5 6
-    edges = jnp.array([[Q], [Phi], [Q]]) # _ e4 e5
-    senders = jnp.array([2, 1, 2])
-    receivers = jnp.array([0, 0, 1])
-    # TODO: simulate circuit 2 with time varying voltage
+    nodes = jnp.array([[V_ext], [Vc], [0]]) # 4 5 6
+    edges = jnp.array([[I, V_ext], [Phi, dPhi], [dQ, Q], [I_ext2, 0]]) # _ e4 e5
+    senders = jnp.array([2, 1, 2, 1])
+    receivers = jnp.array([0, 0, 1, 1])
 
     nodes = jnp.array([[0], [V2], [V3], [V4]]) # 1 2 3 4
-    edges = jnp.array([[Q1], [Phi1], [Q3], [Phi2], [Q2]]) # e1 e2 e3 e4 e5
+    edges = jnp.array([[dQ1, Q1], [Phi1, dPhi1], [dQ3, Q3], [Phi2, dPhi2], [dQ2, Q2]]) # e1 e2 e3 e4 e5
     senders = jnp.array([0, 1, 0, 3, 0])
     receivers = jnp.array([1, 2, 2, 2, 3])
     """
     n1_idx = jnp.array([0,1,2]) # [[0], [V2], [V3]]
     n2_idx = jnp.array([2,3,0]) # [[V3], [V4], 0]
-    e1_idx = jnp.array([0,1,2]) # [[Q1], [Phi1], [Q3]]
-    e2_idx = jnp.array([2,3,4]) # [[Q2], [Phi2], [Q2]]
-
+    e1_idx = jnp.array([0,1,2]) # [[Q1], [Phi1], [Q3]] 
+    e2_idx = jnp.array([2,3,4]) # [[Q3], [Phi2], [Q2]] 
+    I_ext1 = lc_graph.edges[4,0] # I2
+    I_ext2 = lc_graph.edges[0,0] + lc_graph.edges[2,0] # I1 + I3
     nodes_1 = lc_graph.nodes[n1_idx]
-    edges_1 = lc_graph.edges[e1_idx]
+    edges_1 = jnp.concatenate((lc_graph.edges[e1_idx], jnp.array([[I_ext1, 0]])))
     n_node_1 = jnp.array([len(nodes_1)])
     n_edge_1 = jnp.array([len(edges_1)])
-    receivers_1 = lc_graph.receivers[e1_idx]
-    senders_1 = lc_graph.senders[e1_idx]
+    receivers_1 = jnp.concatenate((lc_graph.receivers[e1_idx], jnp.array([2])))
+    senders_1 = jnp.concatenate((lc_graph.senders[e1_idx], jnp.array([2])))
 
     graph_1 = jraph.GraphsTuple(nodes=nodes_1,
                                 edges=edges_1,
@@ -74,11 +74,11 @@ def decompose_coupled_lc_graph(lc_graph):
                                 n_edge=n_edge_1)
 
     nodes_2 = lc_graph.nodes[n2_idx]
-    edges_2 = lc_graph.edges[e2_idx]
+    edges_2 = jnp.concatenate((lc_graph.edges[e2_idx], jnp.array([[I_ext2, 0]])))
     n_node_2 = jnp.array([len(nodes_2)])
     n_edge_2 = jnp.array([len(edges_2)])
-    receivers_2 = jnp.array([0, 0, 1])
-    senders_2 = jnp.array([2, 1, 2])
+    receivers_2 = jnp.array([0, 0, 1, 1])
+    senders_2 = jnp.array([2, 1, 2, 1])
 
     graph_2 = jraph.GraphsTuple(nodes=nodes_2,
                                 edges=edges_2,
@@ -117,13 +117,13 @@ def test_composition(config):
     net_one.training = False
     net_two.training = False
 
-    init_control = jnp.array(0)
+    init_control = eval_gb._control[0,0]
 
     init_graph_one, init_graph_two = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx=0, t=0))
 
-    params_one = net_one.init(init_rng, 0, init_graph_one, init_control, net_rng)
+    params_one = net_one.init(init_rng, 0, init_graph_one, init_control[0], net_rng)
 
-    params_two = net_two.init(init_rng, 0, init_graph_two, init_control, net_rng)
+    params_two = net_two.init(init_rng, 0, init_graph_two, init_control[2:], net_rng)
 
     tx_one = optax.adam(**config.optimizer_params)
 
@@ -196,11 +196,11 @@ def test_composition(config):
         def forward_pass(graphs, control):
             graph_one, graph_two = graphs
             next_graph_one, next_graph_two = state.apply_fn(state.params, traj_idx, graph_one, graph_two, jax.random.key(0))
-            pred_Q1 = (next_graph_one.edges[0]).squeeze()
-            pred_Phi1 = (next_graph_one.edges[1]).squeeze()
-            pred_Q3 = (next_graph_one.edges[2]).squeeze()
-            pred_Phi2 = (next_graph_two.edges[1]).squeeze()
-            pred_Q2 = (next_graph_two.edges[2]).squeeze()
+            pred_Q1 = (next_graph_one.edges[0,1]).squeeze()
+            pred_Phi1 = (next_graph_one.edges[1,0]).squeeze()
+            pred_Q3 = (next_graph_one.edges[2,1]).squeeze()
+            pred_Phi2 = (next_graph_two.edges[1,0]).squeeze()
+            pred_Q2 = (next_graph_two.edges[2,1]).squeeze()
             pred_H = (next_graph_one.globals).squeeze() + (next_graph_two.globals).squeeze()
 
             next_graph_one = next_graph_one._replace(globals=None)
@@ -217,7 +217,7 @@ def test_composition(config):
     
     print("Evaluating composition")
     error_sums = [0] * eval_gb._num_states
-    for i in range(1): # eval_gb._num_trajectories
+    for i in range(2): # eval_gb._num_trajectories
         ts, pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
         for j in range(len(error_sums)):
             error_sums[j] += eval_metrics[j].compute()['loss']

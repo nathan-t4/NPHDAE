@@ -24,20 +24,27 @@ class CoupledLC(Environment):
             'L': L,
         }
 
-        self.omega = np.sqrt((L * C) ** (-1))
-        self.alpha = C / C_prime
+        self.omegas = np.sqrt((L * C) ** (-1))
+        self.alphas = C / C_prime
+
+    def _update_config(self):
+        self.config['C'] = self.C
+        self.config['C_prime'] = self.C_prime
+        self.config['L'] = self.L
+        self.omegas = np.sqrt((self.L * self.C) ** (-1))
+        self.alphas = self.C / self.C_prime
 
     def _define_dynamics(self):
         def CapacitorPE(state):
             Q1 = state[0]
             Q2 = state[2]
             Q3 = -(Q1 + Q2)
-            return 0.5 * (Q1**2 / self.C + Q2**2 / self.C + Q3**2 / self.C_prime)
+            return 0.5 * (Q1**2 / self.config['C'] + Q2**2 / self.config['C'] + Q3**2 / self.config['C_prime'])
         
         def InductorPE(state):
             flux1 = state[1]
             flux2 = state[3]
-            return 0.5 * (flux1**2 / self.L + flux2**2 / self.L)
+            return 0.5 * (flux1**2 / self.config['L'] + flux2**2 / self.config['L'])
         
         def H(state):
             return CapacitorPE(state) + InductorPE(state)
@@ -61,7 +68,7 @@ class CoupledLC(Environment):
         self.InductorPE = jax.jit(InductorPE)
         self.H = jax.jit(H)
 
-        self.dynamics_function = jax.jit(dynamics_function)
+        self.dynamics_function = (dynamics_function)
         self.get_power = jax.jit(get_power)
     
     def plot_trajectory(self, trajectory, fontsize=15, linewidth=3):
@@ -116,51 +123,69 @@ class CoupledLC(Environment):
         plt.show()
 
 def generate_dataset(args, env_seed: int = 501):
-    save_dir = os.path.join(os.curdir, 'results/LC_data')
+    save_dir = os.path.join(os.curdir, f'results/CoupledLC_data')
+    if not os.path.isdir(save_dir):
+        os.makedirs(save_dir)
     
-    # state x = [Q, \Phi] (charge, flux)\ TODO: is initial flux = 0?
-
     if args.type == 'train':
+        seed = env_seed
         x0_init_lb = jnp.array([0.0, 0.0, 2.0, 0.0])
         x0_init_ub = jnp.array([2.0, 0.0, 4.0, 0.0])
+        # C_range = (0.5, 1)
+        # Cp_range = (0.5, 1)
+        # L_range = (0.5, 1)
         C_range = (0.5, 1)
-        C_prime_range = (0.5, 1)
+        Cp_range = (0.5, 1)
         L_range = (0.5, 1)
     elif args.type == 'val':
+        seed = env_seed + 1
         x0_init_lb = jnp.array([2.0, 0.0, 1.0, 0.0])
         x0_init_ub = jnp.array([3.0, 0.0, 2.0, 0.0])
+        C_range = (1, 1.5)
+        Cp_range = (1, 1.5)
+        L_range = (1, 1.5)
+        # C_range = (0.75, 0.75)
+        # Cp_range = (0.75, 0.75)
+        # L_range = (0.75, 0.75)
 
-    # TODO: vary params?
     params = {
         'dt': 0.01,
-        'C': 1,
+        'C': 0.1,
         'C_prime': 0.5,
-        'L': 1,
+        'L': 0.1,
     }
 
     env = CoupledLC(**params, random_seed=env_seed)
-    save_dir = os.path.join(os.curdir, f'results/{env.name}_data')
+   
     dataset = None
+    key = jax.random.key(seed)
+    key, ckey, lkey, cpkey = jax.random.split(key, 4)
+    Cs = jax.random.uniform(ckey, shape=(args.n,), minval=C_range[0], maxval=C_range[1])
+    Cps = jax.random.uniform(cpkey, shape=(args.n,), minval=Cp_range[0], maxval=Cp_range[1])
+    Ls = jax.random.uniform(lkey, shape=(args.n,), minval=L_range[0], maxval=L_range[1])
 
-    for _ in tqdm(range(args.n)):
+    for i in tqdm(range(args.n)):
+        env.set_control_policy(lambda x, t, k : jnp.array([0,0,0,0]))
+        env.C = Cs[i]
+        env.C_prime = Cps[i]
+        env.L = Ls[i]
+        env._update_config()
+        env._define_dynamics()
         new_dataset = env.gen_dataset(trajectory_num_steps=args.steps,
                                         num_trajectories=1,
                                         x0_init_lb=x0_init_lb,
                                         x0_init_ub=x0_init_ub)
         if dataset is not None:
-            dataset = merge_datasets(dataset, new_dataset)
+            dataset = merge_datasets(dataset, new_dataset, params=('C', 'C_prime', 'L'))
         else:
             dataset = new_dataset
-
-        if not os.path.isdir(save_dir):
-            os.makedirs(save_dir)
 
     save_path = os.path.join(os.path.abspath(save_dir),  
         strftime(f'{args.type}_{args.n}_{args.steps}.pkl'))
     with open(save_path, 'wb') as f:
         pickle.dump(dataset, f)
 
-    traj = dataset['state_trajectories'][0, :, :]
+    traj = dataset['state_trajectories'][-1, :, :]
     env.plot_trajectory(traj)
     env.plot_energy(traj)
 
@@ -172,6 +197,6 @@ if __name__ == '__main__':
     parser.add_argument('--n', type=int, required=True)
     parser.add_argument('--steps', type=int, required=True)
 
-    args = parser.parse_args()
+    args =  parser.parse_args()
 
     generate_dataset(args)    
