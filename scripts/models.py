@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from typing import Sequence, Callable
-from flax.training.train_state import TrainState
 from flax.typing import Array, Dtype
 from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
@@ -14,7 +13,7 @@ from utils.jax_utils import *
 from utils.models_utils import *
 
 class SineLayer(nn.Module):
-    # TODO:
+    # TODO: for testing purposes
     param_dtype: Dtype = jnp.float32
     omega_init: float = 30
 
@@ -187,8 +186,9 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
     """
         Graph Network Simulator with two edge decoders. 
         
-        Edges with indices "edge_idxs" are processed with the first decoder, 
-        and all other edges are processed with the second decoder
+        Edges with indices on the n-th row of "edge_idxs" 
+        are processed with the n-th decoder.
+        All other edges are processed with the last decoder.
     """
     edge_idxs: list
     encoder_node_fn: Callable
@@ -201,6 +201,7 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
     shared_params: bool
 
     use_edge_model: bool
+    use_global_model: bool
     
     layer_norm: bool = False
     latent_size: int = 16
@@ -231,19 +232,14 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
                 """
                 new_edges = None
                 for i in range(len(graph.edges)):
-                    edge_type = np.where(self.edge_idxs == i)
+                    new_edge = None
+                    edge_type = np.where(self.edge_idxs == i)[0]
                     # Check if i is not in self.edge_idxs
-                    edge_type = None if edge_type[0].shape[0] == 0 else edge_type[0]
+                    edge_type = None if edge_type.shape[0] == 0 else edge_type
                     if edge_type is not None:
                         new_edge = embed_edge_fns[edge_type.item()](graph.edges[i])
                     else:
                         new_edge = embed_edge_fns[-1](graph.edges[i])
-                    
-                    # if i in self.edge_idxs[0]:
-                    #     new_edge = embed_edges_fn_1(graph.edges[i])
-                    # else:
-                    #     new_edge = embed_edges_fn_2(graph.edges[i])
-                    
                     if new_edges is None:
                         new_edges = new_edge
                     else:
@@ -266,8 +262,10 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
-            # input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
-            input = jnp.concatenate((nodes, senders, receivers), axis=1)
+            if self.use_global_model:
+                input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            else:
+                input = jnp.concatenate((nodes, senders, receivers), axis=1)
             model = MLP(feature_sizes=node_feature_sizes, 
                         activation=self.activation, 
                         dropout_rate=self.dropout_rate, 
@@ -277,8 +275,10 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
 
         def update_edge_fn(edges, senders, receivers, globals_):
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
-            # input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
-            input = jnp.concatenate((edges, senders, receivers), axis=1)
+            if self.use_global_model:
+                input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            else:
+                input = jnp.concatenate((edges, senders, receivers), axis=1)
             model = MLP(feature_sizes=edge_feature_sizes,
                         activation=self.activation,
                         dropout_rate=self.dropout_rate, 
@@ -286,18 +286,17 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
                         with_layer_norm=self.layer_norm)
             return model(input)
             
-        # def update_global_fn(nodes, edges, globals_):
-        #     del nodes, edges
-        #     time = globals_[0]
-        #     static_params = globals_[1:]
-        #     globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
-        #     return globals_ 
+        def update_global_fn(nodes, edges, globals_):
+            # Example update_global_fn
+            del nodes, edges
+            time = globals_[0]
+            static_params = globals_[1:]
+            globals_ = jnp.concatenate((jnp.array([time + self.num_mp_steps]), static_params))
+            return globals_ 
         
-        if not self.use_edge_model:
-            update_edge_fn = None
+        if not self.use_edge_model: update_edge_fn = None
 
-        # TODO: was graph.globals is None
-        update_global_fn = None
+        if not self.use_global_model: update_global_fn = None
 
         graph_net = jraph.GraphNetwork(
                 update_node_fn=update_node_fn,
@@ -315,8 +314,9 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
         prev_graph = processed_graph
 
         # Message passing
-        for i in range(num_nets): 
-            processed_graph = graph_nets[i](processed_graph)
+        for i in range(self.num_mp_steps): 
+            j = i if not self.shared_params else 0
+            processed_graph = graph_nets[j](processed_graph)
             processed_graph = processed_graph._replace(nodes=processed_graph.nodes + prev_graph.nodes,
                                                        edges=processed_graph.edges + prev_graph.edges)
             prev_graph = processed_graph
@@ -329,158 +329,6 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
 
         return processed_graph
 
-class CompGraphNetworkSimulator(nn.Module):
-    """ 
-        Model-based composition of Graph Network Simulators
-    """
-    latent_size: int
-    hidden_layers: int
-    activation: str
-
-    I: jnp.array # interconnection structure
-
-    split_u: Callable[[jnp.array, jnp.array], tuple[jnp.array, jnp.array]]
-    split_graph: Callable[[jraph.GraphsTuple, jnp.array], tuple[jraph.GraphsTuple, jraph.GraphsTuple]]
-    join_acc: Callable[[jnp.array, jnp.array, jnp.array], jnp.array]
-    join_graph: Callable[[jraph.GraphsTuple, jraph.GraphsTuple, jnp.array], jraph.GraphsTuple]
-
-    state_one: TrainState
-    state_two: TrainState
-    
-    @nn.compact
-    def __call__(
-        self, composed_graph: jraph.GraphsTuple, u_c: jnp.array, rng: jax.Array,
-        ) -> jraph.GraphsTuple:
-        """
-            || --- 0 --- 1   (+)   1 --- 2   (=)  || --- 0 --- 1 --- 2
-
-            # graph_one, graph_two = split(composed_graph, I)
-            # F = f(composed_graph)
-            # u = u_c + F
-            # u_1, u_2 = split(u, I)
-            # next_graph_one = self.GNS_one(graph_one, u_1, rng)
-            # next_graph_two = self.GNS_two(graph_two, u_2, rng)
-            # acc_one = next_graph_one.nodes[:,-1]
-            # acc_two = next_graph_two.nodes[:,-1]
-            # acc_est = join(acc_one, acc_two, I)
-            # next_graph = join(graph_one, graph_two, I)
-
-                       delta y
-                      <-------> 
-            ||---0---1  o---o  1---2
-
-        """
-        N = len(composed_graph.nodes)
-        # TODO: generalize f to be a GraphNetwork?
-        f = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [N], activation=self.activation)
-        # jax.debug.print('graph c nodes {} edges {} globals {} receivers {} senders {} n_node {} n_edge {}', composed_graph.nodes.shape, composed_graph.edges.shape, composed_graph.globals, composed_graph.receivers, composed_graph.senders, composed_graph.n_node, composed_graph.n_edge)
-        graph_one, graph_two = self.split_graph(composed_graph, self.I)
-        # jax.debug.print('graph two nodes {} edges {} globals {} receivers {} senders {} n_node {} n_edge {}', graph_two.nodes.shape, graph_two.edges.shape, graph_two.globals, graph_two.receivers, graph_two.senders, graph_two.n_node, graph_two.n_edge)
-        # Forces from joining systems
-        # F = f(composed_graph) # TODO: when GraphNetwork
-        inputs = jnp.concatenate((graph_one.nodes, graph_two.nodes), axis=0).flatten()
-        F = [0] * (2*N)
-        F[1::2] = f(inputs)
-        F = jnp.array(F)
-        # Updated control input for composed system
-        u = u_c + F # TODO: this is not correct. should add F on nodes depending on I
-        u_1, u_2 = self.split_u(u, self.I) # TODO: should take u_c and F as input?
-
-        # Get next state - need to stack then unstack because state apply_fn uses vmap
-        graph_one = pytrees_stack([graph_one])
-        graph_two = pytrees_stack([graph_two])
-
-        next_graph_one = self.state_one.apply_fn(self.state_one.params, graph_one, jnp.array([u_1]), rng)
-        next_graph_two = self.state_two.apply_fn(self.state_two.params, graph_two, jnp.array([u_2]), rng)
-
-        next_graph_one = pytrees_unstack(graph_one)
-        next_graph_two = pytrees_unstack(graph_two)
-
-        # jax.debug.print('next graph one nodes shape {}', next_graph_one.nodes.shape)
-
-        # Predicted accelerations from GNS
-        acc_one = next_graph_one.nodes[:,-1]
-        acc_two = next_graph_two.nodes[:,-1]
-        
-        # Acceleration of composed system
-        # jax.debug.print('acc one {} acc two {}', acc_one, acc_two)
-        acc_est = self.join_acc(acc_one, acc_two, self.I)
-        # jax.debug.print('acc est {}', acc_est)
-        # jax.debug.print('next graph two nodes {}', next_graph_two.nodes)
-
-        # Add position offset to next_graph_two (TODO: remove)
-        next_graph_two_pos = next_graph_two.nodes[:,0] + next_graph_one.nodes[-1, 0]
-        next_graph_two_nodes = jnp.concatenate((
-            next_graph_two_pos.reshape((-1,1)),
-            next_graph_two.nodes[:,1:]
-        ), axis=1) # plus delta_y
-
-        # jax.debug.print('next graph two nodes {}', next_graph_two_nodes)
-
-        next_graph_two = next_graph_two._replace(nodes=next_graph_two_nodes)
-        # Join graphs
-        next_composed_graph = self.join_graph(next_graph_one, next_graph_two, self.I)
-        # Add acc_est to nodes of next_composed_graph 
-        nodes = jnp.column_stack((next_composed_graph.nodes, acc_est))
-
-        next_composed_graph = next_composed_graph._replace(nodes=nodes)
-
-        # jax.debug.print('next graph nodes {} edges {} receivers {} senders {}', next_composed_graph.nodes, next_composed_graph.edges, next_composed_graph.receivers, next_composed_graph.senders)
-
-        return next_composed_graph
-
-class CompGNS(nn.Module):
-    state_one: TrainState
-    state_two: TrainState
-    I: jnp.array # interconnection structure
-
-    @nn.compact
-    def __call__(self, graph_one, graph_two, u_one, u_two, rng):
-        """
-            Given any initial composite graph (outside of this method) that is split into two subsystem graphs (also outside of this method), predict the next-state of the composite system.
-
-            The initial composite graph is split to get the correct initial conditions...
-
-            Input: G1, G2
-            Input: u_1, u_2 (if input on same node, then what to do?)
-            Input: state_one, state_two (GNS)
-
-            TODO: need to make sure GNS is position invariant
-            TODO: recreate composition idea on mass springs?
-        """
-        graph_one_acc = self.state_one.apply_fn(self.state_one.params, graph_one, u_one, rng)
-        graph_two_acc = self.state_two.apply_fn(self.state_two.params, graph_two, u_two, rng)
-
-        acc_one = graph_one_acc.nodes[:,-1]
-        acc_two = graph_two_acc.nodes[:,-1]
-
-        N_c = len(graph_one.nodes) + len(graph_two.nodes) - len(self.I)
-        """
-            i=0,1,2
-
-            V_1 = {0,1}
-            V_2 = {1,2}
-
-            0 \in V_1 / V_m
-            1 \in V_m
-            2 \in V_2 / V_m
-
-            I = 
-            {
-                1: [1, 0],
-            }
-        """
-        F_ext = np.zeros((N_c, 2))
-        for k, v in self.I.values():
-            F_ext[k] = [acc_one[v[0]], acc_two[v[1]]]
-        
-        next_graph_one = self.state_one.apply_fn(self.state_one.params, graph_one, u_one + F_ext[:,0])
-        next_graph_two = self.state_two.apply_fn(self.state_two.params, graph_two, u_two + F_ext[:,1])
-
-        next_x_c = get_state(next_graph_one, next_graph_two) # TODO: because the state at the merged nodes needs to be dealt with special care
-
-        return next_graph_one, next_graph_two, next_x_c
-    
 class GNODE(nn.Module):
     """ 
         EncodeProcessDecode GNODE

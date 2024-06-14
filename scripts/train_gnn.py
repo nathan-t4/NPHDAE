@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import ml_collections
 from clu import metric_writers
 from clu import periodic_actions
-from clu import checkpoint
 
 from flax.training.train_state import TrainState
 from flax.training.early_stopping import EarlyStopping
@@ -17,7 +16,6 @@ from flax.training.early_stopping import EarlyStopping
 import orbax.checkpoint as ocp
 from flax.training import orbax_utils
 
-from time import strftime
 from timeit import default_timer
 from argparse import ArgumentParser
 from graph_builder import *
@@ -28,7 +26,8 @@ from utils.data_utils import *
 from utils.jax_utils import *
 from utils.gnn_utils import *
 
-from config import create_gnn_config
+from configs.lc_circuit import get_lc_config
+from scripts.config import create_gnn_config
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
 
@@ -42,7 +41,7 @@ def eval(config: ml_collections.ConfigDict):
     checkpoint_dir = os.path.join(paths.dir, 'checkpoint')
     plot_dir = os.path.join(paths.dir, 'eval_plots')
 
-    rng = jax.random.key(training_params.seed)
+    rng = jax.random.key(config.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
     # Create writer for logs
@@ -65,7 +64,7 @@ def eval(config: ml_collections.ConfigDict):
     elif 'LC' in name:
         init_control = jnp.array(0)
 
-    net_params.system_params = train_gb.system_params
+    # net_params.system_params = train_gb.system_params
 
     eval_net = create_net(name, training_params, net_params)
     eval_net.training = False
@@ -116,15 +115,16 @@ def eval(config: ml_collections.ConfigDict):
             exp_Phi = eval_gb._Phi[traj_idx, tf_idxs]
             exp_Q = eval_gb._Q[traj_idx, tf_idxs]
             exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Phi, exp_Q, exp_H)
+            exp_data = (exp_Q, exp_Phi, exp_H)
         elif name == 'CoupledLC':
             controls = t0_idxs # used as 'length' for scan loop
             exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
             exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
+            exp_Q3 = eval_gb._Q3[traj_idx, tf_idxs]
             exp_Q2 = eval_gb._Q2[traj_idx, tf_idxs]
             exp_Phi2 = eval_gb._Phi2[traj_idx, tf_idxs]
             exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q1, exp_Phi1, exp_Q2, exp_Phi2, exp_H)
+            exp_data = (exp_Q1, exp_Phi1, exp_Q3, exp_Q2, exp_Phi2, exp_H)
         
         def forward_pass(graph, control):
             if name == 'MassSpring':
@@ -144,31 +144,31 @@ def eval(config: ml_collections.ConfigDict):
             
             elif name == 'LC1':
                 graph = eval_state.apply_fn(eval_state.params, traj_idx, graph, control, jax.random.key(0))
-                pred_Q1 = (graph.edges[0,1]).squeeze()
-                pred_Phi1 = (graph.edges[1,0]).squeeze()
-                pred_Q3 = (graph.edges[2],1).squeeze()
+                pred_Q1 = (graph.edges[0]).squeeze()
+                pred_Phi1 = (graph.edges[1]).squeeze()
+                pred_Q3 = (graph.edges[2]).squeeze()
                 pred_H = (graph.globals).squeeze()
                 graph = graph._replace(globals=None)
                 return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_H)
             
             elif name == 'LC2':
                 graph = eval_state.apply_fn(eval_state.params, traj_idx, graph, control, jax.random.key(0))
-                pred_Phi = (graph.edges[1,0]).squeeze()
-                pred_Q = (graph.edges[2,1]).squeeze()
+                pred_Q = (graph.edges[0]).squeeze()
+                pred_Phi = (graph.edges[1]).squeeze()
                 pred_H = (graph.globals).squeeze()
                 graph = graph._replace(globals=None)
-                return graph, (pred_Phi, pred_Q, pred_H)
+                return graph, (pred_Q, pred_Phi, pred_H)
             
             elif name == 'CoupledLC':
                 graph = eval_state.apply_fn(eval_state.params, traj_idx, graph, None, jax.random.key(0))
-                pred_Q1 = (graph.edges[0,1]).squeeze()
-                pred_Phi1 = (graph.edges[1,0]).squeeze()
-                pred_Q3 = (graph.edges[2,1]).squeeze()
-                pred_Phi2 = (graph.edges[3,0]).squeeze()
-                pred_Q2 = (graph.edges[4,1]).squeeze()
+                pred_Q1 = (graph.edges[0]).squeeze()
+                pred_Phi1 = (graph.edges[1]).squeeze()
+                pred_Q3 = (graph.edges[2]).squeeze()
+                pred_Q2 = (graph.edges[3]).squeeze()
+                pred_Phi2 = (graph.edges[4]).squeeze()
                 pred_H = (graph.globals).squeeze()
                 graph = graph._replace(globals=None)
-                return graph, (pred_Q1, pred_Phi1, pred_Q2, pred_Phi2, pred_H)
+                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_Q2, pred_Phi2, pred_H)
             
         start = default_timer()
         final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
@@ -184,7 +184,7 @@ def eval(config: ml_collections.ConfigDict):
             }
             return ts, np.array(pred_data), np.array((exp_qs_buffer, exp_as_buffer)), aux_data, EvalMetrics.single_from_model_output(loss=rollout_loss)
         elif 'LC' in name:
-            losses = [optax.l2_loss(predictions=pred_data[i], targets=exp_data[i]) for i in range(len(exp_data))]
+            losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
             eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
             aux_data = {
                 'name': name,
@@ -237,17 +237,19 @@ def eval(config: ml_collections.ConfigDict):
     with open(eval_metrics_file, "w") as outfile:
         json.dump(eval_metrics, outfile)
 
-def train(config: ml_collections.ConfigDict):
+def train(config: ml_collections.ConfigDict, optuna_trial = None):
     training_params = config.training_params
     net_params = config.net_params
     paths = config.paths
-        
+
     name = set_name(config)
     
-    restore = False if paths.dir == None else True
+    restore = True if paths.dir else False
 
-    if paths.dir == None:
-        config.paths.dir = os.path.join(os.curdir, f'results/{training_params.net_name}/{config.system_name}/{strftime("%m%d-%H%M")}_{training_params.trial_name}')
+    if not paths.dir:
+        config.paths.dir = os.path.join(
+            os.curdir, 
+            f'results/{training_params.net_name}/{config.system_name}/{config.trial_name}')
         paths.dir = config.paths.dir
     
     log_dir = os.path.join(paths.dir, 'log')
@@ -256,7 +258,7 @@ def train(config: ml_collections.ConfigDict):
     checkpoint_dir = os.path.join(checkpoint_dir, 'best_model')
     checkpoint_dir = os.path.abspath(checkpoint_dir)
 
-    rng = jax.random.key(training_params.seed)
+    rng = jax.random.key(config.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
     # Create writer for logs
@@ -264,8 +266,7 @@ def train(config: ml_collections.ConfigDict):
     # Create optimizer
     tx = optax.adam(**config.optimizer_params)
     # Create training and evaluation data loaders
-
-    graph_builder = create_graph_builder(name, training_params, net_params)
+    graph_builder = create_graph_builder(name)
     train_gb = graph_builder(paths.training_data_path)
     eval_gb = graph_builder(paths.evaluation_data_path)
 
@@ -275,20 +276,20 @@ def train(config: ml_collections.ConfigDict):
         t0 = net_params.vel_history
         init_control = train_gb._control[0, t0, :]
     elif 'LC' in name:
-        init_control = train_gb._control[0,0]
-        net_params.system_params = train_gb.system_params
+        init_control = train_gb._control[0, 0]
 
     # Initialize training network
-    init_graph = train_gb.get_graph(traj_idx=0, t=t0)
+    init_graph = train_gb.get_graph(0, t0)
     net = create_net(name, training_params, net_params)
-    params = net.init(init_rng, 0, init_graph, init_control, net_rng)
-    if name == 'MassSpring':
+    if name == 'MassSpring' or name == 'LC1' or name == 'LC2':
+        params = net.init(init_rng, init_graph, init_control, net_rng)
         batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, None))
     else:
+        params = net.init(init_rng, 0, init_graph, init_control, net_rng)
         batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, 0, None))
 
     print(f"Number of parameters {num_parameters(params)}")
-    time_offset = net.horizon if training_params.net_name == 'gnode' else net.num_mp_steps
+    time_offset = 1
 
     def random_batch(batch_size: int, min: int, max: int, rng: jax.Array):
         """ Return random permutation of jnp.arange(min, max) in batches of batch_size """
@@ -307,19 +308,19 @@ def train(config: ml_collections.ConfigDict):
         rng, net_rng = jax.random.split(rng)
 
         def loss_fn(params, batch_graphs, batch_data):
-            if loss_function == 'acceleration':
+            if name == 'MassSpring' and loss_function == 'acceleration':
                 batch_targets, batch_control = batch_data
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 predictions = pred_graphs.nodes[:,:,-1] 
                 loss = int(1e6) * optax.l2_loss(predictions=predictions, targets=batch_targets).mean()
-            elif loss_function == 'state':
+            elif name == 'MassSpring' and loss_function == 'state':
                 batch_pos, batch_vel, batch_control = batch_data
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 pos_predictions = pred_graphs.nodes[:,:,0]
                 vel_predictions = pred_graphs.nodes[:,:,t0]
                 loss = int(1e6) * (optax.l2_loss(predictions=pos_predictions, targets=batch_pos).mean() \
                      + optax.l2_loss(predictions=vel_predictions, targets=batch_vel).mean())
-            elif name == 'LC' and loss_function == 'lc_state':
+            elif name == 'LC' and loss_function == 'state':
                 """ l2_loss([Q_hat, Flux_hat], [Q, Flux])"""
                 traj_idx = jnp.array(batch_data[0])
                 Q = jnp.array(batch_data[1]).reshape(1,-1)
@@ -329,54 +330,37 @@ def train(config: ml_collections.ConfigDict):
                 targets = jnp.concatenate((Q, Phi)).squeeze() 
                 loss = optax.l2_loss(predictions, targets)
                 loss = jnp.sum(loss)
-            elif name == 'LC1' and loss_function == 'lc_state':
-                traj_idx = jnp.array(batch_data[0])
-                batch_control = jnp.array(batch_data[1])
-                # Q1 = jnp.array(batch_data[2]).reshape(-1,1)
-                # Phi1 = jnp.array(batch_data[3]).reshape(-1,1)
-                # Q3 = jnp.array(batch_data[4]).reshape(-1,1)
-                # V2 = jnp.array(batch_data[5]).reshape(-1,1)
-                # V3 = jnp.array(batch_data[6]).reshape(-1,1)
-                dQ1 = jnp.array(batch_data[2]).reshape(-1,1)
-                Q1 = jnp.array(batch_data[3]).reshape(-1,1)
-                Phi1 = jnp.array(batch_data[4]).reshape(-1,1)
-                dPhi1 = jnp.array(batch_data[5]).reshape(-1,1)
-                dQ3 = jnp.array(batch_data[6]).reshape(-1,1)
-                Q3 = jnp.array(batch_data[7]).reshape(-1,1)
-                V2 = jnp.array(batch_data[8]).reshape(-1,1)
-                V3 = jnp.array(batch_data[9]).reshape(-1,1)
-                pred_graphs = state.apply_fn(params, traj_idx, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
-
-                predictions_e = jnp.column_stack((pred_graphs.edges[:,0,1], pred_graphs.edges[:,1,0], pred_graphs.edges[:,2,1]))
+            elif name == 'LC1' and loss_function == 'state':
+                batch_control = jnp.array(batch_data[0])
+                Q1 = jnp.array(batch_data[1]).reshape(-1,1)
+                Phi1 = jnp.array(batch_data[2]).reshape(-1,1)
+                Q3 = jnp.array(batch_data[3]).reshape(-1,1)
+                V2 = jnp.array(batch_data[4]).reshape(-1,1)
+                V3 = jnp.array(batch_data[5]).reshape(-1,1)
+                pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
+                predictions_e = pred_graphs.edges.squeeze()
                 targets_e = jnp.concatenate((Q1, Phi1, Q3), axis=1)
-
-                # predictions_e = pred_graphs.edges[:,:-1].squeeze() # exclude control
-                # targets_e1 = jnp.concatenate((dQ1, Phi1, dQ3), axis=1)
-                # targets_e2 = jnp.concatenate((Q1, dPhi1, Q3), axis=1)
-                # targets_e1 = jnp.expand_dims(targets_e1, axis=-1)
-                # targets_e2 = jnp.expand_dims(targets_e2, axis=-1)
-                # targets_e = jnp.concatenate((targets_e1, targets_e2), axis=-1)
                 predictions_n = pred_graphs.nodes[:,1:].squeeze() # excluding ground node
                 targets_n = jnp.concatenate((V2, V3), axis=1).squeeze()
                 loss_e = optax.l2_loss(predictions_e, targets_e)
-                loss_n = optax.l2_loss(predictions_n, targets_n)
-                loss = jnp.sum(loss_e) + jnp.sum(loss_n)
-            elif name == 'LC2' and loss_function == 'lc_state':
-                traj_idx = jnp.array(batch_data[0])
-                batch_control = jnp.array(batch_data[1])
+                loss_n = optax.l2_loss(predictions_n, targets_n) # TODO: removing loss_n improves training performance
+                # loss = jnp.sum(loss_e)
+                loss = optax.squared_error(predictions_e, targets_e).mean() # MSE
+            elif name == 'LC2' and loss_function == 'state':
+                batch_control = jnp.array(batch_data[0])
+                Q = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi = jnp.array(batch_data[2]).reshape(-1,1)
-                Q = jnp.array(batch_data[3]).reshape(-1,1)
-                Vc = jnp.array(batch_data[4]).reshape(-1,1)
-                pred_graphs = state.apply_fn(params, traj_idx, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
-                # predictions = pred_graphs.edges[:,jnp.array([1,2])].squeeze()
-                predictions_e = jnp.column_stack((pred_graphs.edges[:,1,0], pred_graphs.edges[:,2,1]))
-                predictions_n = pred_graphs.nodes[:,1].squeeze()
-                targets_e = jnp.concatenate((Phi, Q),axis=1).squeeze() # order is the same as LC2 graph edges
-                targets_n = Vc.squeeze()
-                loss_e = optax.l2_loss(predictions_e, targets_e)
-                loss_n = optax.l2_loss(predictions_n, targets_n)
-                loss = jnp.sum(loss_e) + jnp.sum(loss_n)
-            elif name == 'CoupledLC' and loss_function == 'lc_state':
+                Vc = jnp.array(batch_data[3]).reshape(-1,1)
+                pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
+                predictions_e = pred_graphs.edges.squeeze()
+                # predictions_n = pred_graphs.nodes[:,1].squeeze()
+                targets_e = jnp.concatenate((Q, Phi),axis=1).squeeze() # order is the same as LC2 graph edges
+                # targets_n = Vc.squeeze()
+                # loss_e = optax.l2_loss(predictions_e, targets_e)
+                # loss_n = optax.l2_loss(predictions_n, targets_n)
+                # loss = jnp.sum(loss_e)
+                loss = optax.squared_error(predictions_e, targets_e).mean() # MSE
+            elif name == 'CoupledLC' and loss_function == 'state':
                 traj_idx = jnp.array(batch_data[0])
                 Q1 = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi1 = jnp.array(batch_data[2]).reshape(-1,1)
@@ -387,14 +371,16 @@ def train(config: ml_collections.ConfigDict):
                 V3 = jnp.array(batch_data[7]).reshape(-1,1)
                 V4 = jnp.array(batch_data[8]).reshape(-1,1)
                 pred_graphs = state.apply_fn(params, traj_idx, batch_graphs, None, net_rng, rngs={'dropout': dropout_rng})
-                predictions_e = jnp.column_stack((pred_graphs.edges[:,0,1], pred_graphs.edges[:,1,0],
-                pred_graphs.edges[:,2,1], pred_graphs.edges[:,3,0], pred_graphs.edges[:,4,1]))
+                # predictions_e = jnp.column_stack((pred_graphs.edges[:,0,1], pred_graphs.edges[:,1,0],
+                # pred_graphs.edges[:,2,1], pred_graphs.edges[:,3,0], pred_graphs.edges[:,4,1]))
+                predictions_e = pred_graphs.edges.squeeze()
                 targets_e = jnp.concatenate((Q1, Phi1, Q3, Phi2, Q2),axis=1).squeeze()
-                loss_e = optax.l2_loss(predictions_e, targets_e)
-                predictions_n = pred_graphs.nodes[:,1:].squeeze()
-                targets_n = jnp.concatenate((V2, V3, V4),axis=1).squeeze()
-                loss_n = optax.l2_loss(predictions_n, targets_n)
-                loss = jnp.sum(loss_e) + jnp.sum(loss_n)
+                # loss_e = optax.l2_loss(predictions_e, targets_e)
+                loss = optax.squared_error(predictions_e, targets_e).mean()
+                # predictions_n = pred_graphs.nodes[:,1:].squeeze()
+                # targets_n = jnp.concatenate((V2, V3, V4),axis=1).squeeze()
+                # loss_n = optax.l2_loss(predictions_n, targets_n)
+                # loss = jnp.sum(loss_e) + jnp.sum(loss_n)
             elif name == 'LC1' and loss_function == 'hamiltonian':
                 traj_idx = jnp.array(batch_data[0])
                 batch_control = jnp.array(batch_data[1])
@@ -419,23 +405,22 @@ def train(config: ml_collections.ConfigDict):
 
         def train_batch(state, trajs, t0s):
             tfs = t0s + time_offset
-            if loss_function == 'acceleration':
+            if name == 'MassSpring' and loss_function == 'acceleration':
                 batch_control = train_gb._control[trajs, t0s]
                 batch_accs = train_gb._accs[trajs, tfs]
                 batch_data = (batch_accs, batch_control)
-            elif loss_function == 'state':
+            elif name == 'MassSpring' and loss_function == 'state':
                 batch_control = train_gb._control[trajs, t0s]
                 batch_pos = train_gb._qs[trajs, tfs]
                 batch_vel = train_gb._vs[trajs, tfs]
                 batch_data = (batch_pos, batch_vel, batch_control)
-            elif name == 'LC' and loss_function == 'lc_state':
+            elif name == 'LC' and loss_function == 'state':
                 batch_data = (trajs, train_gb._Q[trajs, tfs], train_gb._Phi[trajs, tfs])
-            elif name == 'LC1' and loss_function == 'lc_state':
-                # batch_data = (trajs, train_gb._control[trajs, t0s], train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], train_gb._Q3[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs])
-                batch_data = (trajs, train_gb._control[trajs, t0s], train_gb._dQ1[trajs, tfs], train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], train_gb._dPhi1[trajs, tfs], train_gb._dQ3[trajs, tfs], train_gb._Q3[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs])
-            elif name == 'LC2' and loss_function == 'lc_state':
-                batch_data = (trajs, train_gb._control[trajs, t0s], train_gb._Phi[trajs, tfs], train_gb._Q[trajs, tfs], train_gb._Vc[trajs, tfs])
-            elif name == 'CoupledLC' and loss_function == 'lc_state':
+            elif name == 'LC1' and loss_function == 'state':
+                batch_data = (train_gb._control[trajs, t0s], train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], train_gb._Q3[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs])
+            elif name == 'LC2' and loss_function == 'state':
+                batch_data = (train_gb._control[trajs, t0s], train_gb._Q[trajs, tfs], train_gb._Phi[trajs, tfs], train_gb._Vc[trajs, tfs])
+            elif name == 'CoupledLC' and loss_function == 'state':
                 batch_data = (trajs, train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], 
                               train_gb._Q3[trajs, tfs], train_gb._Phi2[trajs, tfs], train_gb._Q2[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs], train_gb._V4[trajs, tfs])
             elif name == 'LC1' and loss_function == 'hamiltonian':
@@ -453,9 +438,8 @@ def train(config: ml_collections.ConfigDict):
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
     def rollout(eval_state: TrainState, traj_idx: int, ti: int = 0):
-        tf_idxs = (ti + jnp.arange(1, (training_params.rollout_timesteps + 1) // net.num_mp_steps)) * net.num_mp_steps
-        ti = round(t0 /  net.num_mp_steps) * net.num_mp_steps
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + net.num_mp_steps, max=eval_gb._num_timesteps))
+        tf_idxs = (ti + jnp.arange(1, (training_params.rollout_timesteps + 1)))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + time_offset, max=eval_gb._num_timesteps))
         t0_idxs = tf_idxs - ti
         ts = tf_idxs * net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
@@ -472,23 +456,19 @@ def train(config: ml_collections.ConfigDict):
             exp_data = (exp_Q, exp_Phi, exp_H)
         elif name == 'LC1':
             controls = eval_gb._control[traj_idx, t0_idxs]
-            exp_dQ1 = eval_gb._dQ1[traj_idx, tf_idxs]
             exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
             exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
-            exp_dPhi1 = eval_gb._dPhi1[traj_idx, tf_idxs]
-            exp_dQ3 = eval_gb._dQ3[traj_idx, tf_idxs]
             exp_Q3 = eval_gb._Q3[traj_idx, tf_idxs]
             exp_H = eval_gb._H[traj_idx, tf_idxs]
-            # exp_data = (exp_dQ1, exp_Q1, exp_Phi1, exp_dPhi1, exp_dQ3, exp_Q3, exp_H)
             exp_data = (exp_Q1, exp_Phi1, exp_Q3, exp_H)    
         elif name == 'LC2':
             controls = eval_gb._control[traj_idx, t0_idxs]
             exp_Phi = eval_gb._Phi[traj_idx, tf_idxs]
             exp_Q = eval_gb._Q[traj_idx, tf_idxs]
             exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Phi, exp_Q, exp_H)
+            exp_data = (exp_Q, exp_Phi, exp_H)
         elif name == 'CoupledLC':
-            controls = t0_idxs # used as 'length' for scan loop # TODO
+            controls = t0_idxs
             exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
             exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
             exp_Q2 = eval_gb._Q2[traj_idx, tf_idxs]
@@ -513,25 +493,21 @@ def train(config: ml_collections.ConfigDict):
                 return graph, (pred_Q, pred_Phi, pred_H)
             
             elif name == 'LC1':
-                graph = eval_state.apply_fn(eval_state.params, jnp.array(traj_idx), graph, jnp.array(0.0), jax.random.key(0)) # TODO: change from jnp.array(0.0) to control
-                pred_dQ1 = (graph.edges[0,0]).squeeze()
-                pred_Q1 = (graph.edges[0,1]).squeeze()
-                pred_Phi1 = (graph.edges[1,0]).squeeze()
-                pred_dPhi1 = (graph.edges[1,1]).squeeze()
-                pred_dQ3 = (graph.edges[2,0]).squeeze()
-                pred_Q3 = (graph.edges[2,1]).squeeze()
+                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(0))
                 pred_H = (graph.globals).squeeze()
+                pred_Q1 = (graph.edges[0]).squeeze()
+                pred_Phi1 = (graph.edges[1]).squeeze()
+                pred_Q3 = (graph.edges[2]).squeeze()
                 graph = graph._replace(globals=None)
-                # return graph, (pred_dQ1, pred_Q1, pred_Phi1, pred_dPhi1, pred_dQ3, pred_Q3, pred_H)
-                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_H) # TODO: try plotting everything         
+                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_H) 
             
             elif name == 'LC2':
-                graph = eval_state.apply_fn(eval_state.params, jnp.array(traj_idx), graph, control, jax.random.key(0))
-                pred_Phi = (graph.edges[1,0]).squeeze()
-                pred_Q = (graph.edges[2,1]).squeeze()
+                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(0))
+                pred_Q = (graph.edges[0]).squeeze()
+                pred_Phi = (graph.edges[1]).squeeze()
                 pred_H = (graph.globals).squeeze()
                 graph = graph._replace(globals=None)
-                return graph, (pred_Phi, pred_Q, pred_H)
+                return graph, (pred_Q, pred_Phi, pred_H)
             
             elif name == 'CoupledLC':
                 graph = eval_state.apply_fn(eval_state.params, jnp.array(traj_idx), graph, None, jax.random.key(0))
@@ -556,7 +532,7 @@ def train(config: ml_collections.ConfigDict):
             }
             return ts, np.array(pred_data), np.array((exp_qs_buffer, exp_as_buffer)), aux_data, EvalMetrics.single_from_model_output(loss=rollout_loss)
         elif 'LC' in name:
-            losses = [optax.l2_loss(predictions=pred_data[i], targets=exp_data[i]) for i in range(len(exp_data))]
+            losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
             eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
             aux_data = {
                 'name': name,
@@ -565,7 +541,6 @@ def train(config: ml_collections.ConfigDict):
         
         else:
             raise NotImplementedError()
-
 
     state = TrainState.create(
         apply_fn=batched_apply,
@@ -584,7 +559,7 @@ def train(config: ml_collections.ConfigDict):
     )
 
     # Restore state from checkpoint
-    if restore: state = ckpt_mngr.restore(config.ckpt_step, args=ocp.args.StandardRestore(state))
+    if restore: state = ckpt_mngr.restore(paths.ckpt_step, args=ocp.args.StandardRestore(state))
 
     # Create evaluation network
     eval_net = create_net(name, training_params, net_params)
@@ -615,7 +590,6 @@ def train(config: ml_collections.ConfigDict):
     min_error = jnp.inf
     print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
-        # print(f'State step on epoch {epoch}: {state.step}, {state.step // steps_per_epoch + 1}')
         rng, train_rng = jax.random.split(rng)
         state, metrics_update = train_fn(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
@@ -627,11 +601,12 @@ def train(config: ml_collections.ConfigDict):
 
         is_last_step = (epoch == final_epoch - 1)
 
-        if epoch % training_params.eval_every_steps == 0 or is_last_step:
+        if epoch % config.eval_every_steps == 0 or is_last_step:
             eval_metrics = None
             eval_state = eval_state.replace(params=state.params)
 
             with report_progress.timed('eval'):
+                graph = train_gb.get_graph(0, 0)
                 rollout_error_sum = 0
                 error_sums = [0] * train_gb._num_states
                 for i in range(2): # TODO: was eval_gb._num_trajectories
@@ -667,6 +642,8 @@ def train(config: ml_collections.ConfigDict):
                     with report_progress.timed('checkpoint'):
                         ckpt_mngr.save(epoch, args=ocp.args.StandardSave(state))
                         ckpt_mngr.wait_until_finished()
+                    # if name == 'LC1': # if training J
+                    #     print('upper triangular of J: ', jnp.triu(state.params['params']['Dense_0']['kernel']))
 
                 if epoch > training_params.min_epochs: # train at least for 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_error)
@@ -674,22 +651,29 @@ def train(config: ml_collections.ConfigDict):
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')
                         training_params.num_epochs = epoch - init_epoch
                         is_last_step = True
+                if optuna_trial:
+                    optuna_trial.report(rollout_error, step=epoch)
 
-        if epoch % training_params.log_every_steps == 0 or is_last_step:
+        if epoch % config.log_every_steps == 0 or is_last_step:
             writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))
             train_metrics = None
 
-        if epoch % training_params.clear_cache_every_steps == 0 or is_last_step: 
+        if epoch % config.clear_cache_every_steps == 0 or is_last_step: 
             jax.clear_caches()
 
         if is_last_step:
             break
 
+    metrics = min_error.item()
     # Save config to json
     config_js = config.to_json_best_effort()
     run_params_file = os.path.join(paths.dir, 'run_params.js')
     with open(run_params_file, "w") as outfile:
         json.dump(config_js, outfile)
+        json.dump(metrics, outfile)
+
+
+    return metrics
 
 def test_graph_net(config: ml_collections.ConfigDict):
     """ For testing """
@@ -740,7 +724,7 @@ if __name__ == '__main__':
     parser.add_argument('--system', type=str, default='lc')
     args = parser.parse_args()
 
-    config = create_gnn_config(args)
+    config = get_lc_config(args)
 
     if args.eval:
         eval(config)

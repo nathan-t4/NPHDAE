@@ -37,8 +37,8 @@ class CoupledLC(Environment):
     def _define_dynamics(self):
         def CapacitorPE(state):
             Q1 = state[0]
-            Q2 = state[2]
-            Q3 = -(Q1 + Q2)
+            Q3 = state[2]
+            Q2 = state[4]
             return 0.5 * (Q1**2 / self.config['C'] + Q2**2 / self.config['C'] + Q3**2 / self.config['C_prime'])
         
         def InductorPE(state):
@@ -52,12 +52,17 @@ class CoupledLC(Environment):
         def dynamics_function(state, t, control_input, jax_key):
             dH = jax.grad(H)(state)
 
-            J = jnp.array([[0, 1, 0, 0],
-                           [-1, 0, 0, 0],
-                           [0, 0, 0, 1],
-                           [0, 0, -1, 0]])
+            # J = jnp.array([[0, 1, 0, 0],
+            #                [-1, 0, 0, 0],
+            #                [0, 0, 0, 1],
+            #                [0, 0, -1, 0]])
+            J = jnp.array([[0, 1, 0, 0, 0],
+                           [-1, 0, 1, 0, 0],
+                           [0, -1, 0, 0, -1],
+                           [0, 0, 0, 0, 1],
+                           [0, 0, 1, -1, 0]])
                 
-            R = jnp.zeros((4,4))
+            R = jnp.zeros((5,5))
             
             return jnp.matmul(J - R, dH) # x_dot
         
@@ -77,12 +82,14 @@ class CoupledLC(Environment):
         T = np.arange(trajectory.shape[0]) * self._dt
         Q1 = trajectory[:, 0]
         Phi1 = trajectory[:, 1]
-        Q2 = trajectory[:,2]
-        Phi2 = trajectory[:,3]
+        Q3 = trajectory[:,2]
+        Q2 = trajectory[:,3]
+        Phi2 = trajectory[:,4]
 
         ax = fig.add_subplot(211)
         ax.plot(T, Q1, label='Q1')
         ax.plot(T, Q2, label='Q2')
+        ax.plot(T, Q3, label='Q3')
         ax.set_ylabel('$Q$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
@@ -129,21 +136,21 @@ def generate_dataset(args, env_seed: int = 501):
     
     if args.type == 'train':
         seed = env_seed
-        x0_init_lb = jnp.array([0.0, 0.0, 2.0, 0.0])
-        x0_init_ub = jnp.array([2.0, 0.0, 4.0, 0.0])
+        x0_init_lb = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0])
+        x0_init_ub = jnp.array([2.0, 0.0, 1.0, 2.0, 0.0])
         # C_range = (0.5, 1)
         # Cp_range = (0.5, 1)
         # L_range = (0.5, 1)
-        C_range = (0.5, 1)
-        Cp_range = (0.5, 1)
-        L_range = (0.5, 1)
+        C_range = (0.5, 1.5)
+        Cp_range = (0.5, 1.5)
+        L_range = (0.5, 1.5)
     elif args.type == 'val':
         seed = env_seed + 1
-        x0_init_lb = jnp.array([2.0, 0.0, 1.0, 0.0])
-        x0_init_ub = jnp.array([3.0, 0.0, 2.0, 0.0])
-        C_range = (1, 1.5)
-        Cp_range = (1, 1.5)
-        L_range = (1, 1.5)
+        x0_init_lb = jnp.array([2.0, 0.0, 1.0, 2.0, 0.0])
+        x0_init_ub = jnp.array([2.5, 0.0, 1.5, 2.5, 0.0])
+        C_range = (1.5, 2.0)
+        Cp_range = (1.5, 2.0)
+        L_range = (1.5, 2.0)
         # C_range = (0.75, 0.75)
         # Cp_range = (0.75, 0.75)
         # L_range = (0.75, 0.75)
@@ -165,7 +172,7 @@ def generate_dataset(args, env_seed: int = 501):
     Ls = jax.random.uniform(lkey, shape=(args.n,), minval=L_range[0], maxval=L_range[1])
 
     for i in tqdm(range(args.n)):
-        env.set_control_policy(lambda x, t, k : jnp.array([0,0,0,0]))
+        env.set_control_policy(lambda x, t, k : jnp.array([0,0,0,0,0]))
         env.C = Cs[i]
         env.C_prime = Cps[i]
         env.L = Ls[i]

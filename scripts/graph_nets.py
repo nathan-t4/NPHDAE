@@ -271,13 +271,13 @@ class LCGNS(nn.Module):
     
 class LC1GNS(nn.Module):
     # Decoder post-processor parameters
-    system_params: dict # TODO: CAN REMOVE
     integration_method: str = 'SemiImplicitEuler'
-    dt: float = 0.01 # TODO: set from graphbuilder?
+    dt: float = 0.01
 
     # Graph Network parameters
     num_mp_steps: int = 1
-    use_edge_model: bool = False
+    use_edge_model: bool = True
+    use_global_model: bool = False
     shared_params: bool = False
     globals_output_size: int = 0
     
@@ -293,7 +293,7 @@ class LC1GNS(nn.Module):
     noise_std: float = 0.0003
 
     @nn.compact
-    def __call__(self, traj_idx, graph, control, rng): # TODO: remove traj_idx
+    def __call__(self, graph, control, rng):
         edge_output_size = 1
         node_output_size = 1
         encoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
@@ -305,9 +305,6 @@ class LC1GNS(nn.Module):
         encoder_edgeL_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                with_layer_norm=self.layer_norm, 
                                activation=self.activation)
-        encoder_edgeI_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
-                               with_layer_norm=self.layer_norm, 
-                               activation=self.activation)
 
         decoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size],
                               activation=self.activation)
@@ -315,19 +312,18 @@ class LC1GNS(nn.Module):
                               activation=self.activation)
         decoder_edgeL_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
                               activation=self.activation)
-        decoder_edgeI_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
-                               activation=self.activation)
 
         net = CustomEdgeGraphNetworkSimulator(
-            edge_idxs=np.array([[0,2], [1,None]]), # TODO: lengths need to be the same...
+            edge_idxs=np.array([[0,2]]),
             encoder_node_fn=encoder_node_fn,
-            encoder_edge_fns=[encoder_edgeC_fn, encoder_edgeL_fn, encoder_edgeI_fn],
+            encoder_edge_fns=[encoder_edgeC_fn, encoder_edgeL_fn],
             decoder_node_fn=decoder_node_fn,
-            decoder_edge_fns=[decoder_edgeC_fn, decoder_edgeL_fn, decoder_edgeI_fn],
+            decoder_edge_fns=[decoder_edgeC_fn, decoder_edgeL_fn],
             decoder_postprocessor=lambda x, _: x, # identity decoder postprocessor
             num_mp_steps=self.num_mp_steps,
             shared_params=self.shared_params,
             use_edge_model=self.use_edge_model,
+            use_global_model=self.use_global_model,
             latent_size=self.latent_size,
             hidden_layers=self.hidden_layers,
             activation=self.activation,
@@ -335,13 +331,9 @@ class LC1GNS(nn.Module):
             training=self.training,
             layer_norm=self.layer_norm
         )
-
         edges_shape = graph.edges.shape
         cur_nodes = graph.nodes
-        currents = graph.edges[:,0]
-        potential_diffs = graph.edges[:,1]
-        I1, Phi1, I3, past_control = currents
-        Q1, dPhi1, Q3, _ = potential_diffs
+        state = graph.edges.squeeze()
         if self.training: 
             rng, edges_rng = jax.random.split(rng)
             edges_noise = self.noise_std * jax.random.normal(edges_rng, edges_shape)
@@ -350,24 +342,17 @@ class LC1GNS(nn.Module):
             new_edges = jnp.array(noisy_edges).reshape(edges_shape)
             graph = graph._replace(edges=new_edges)
 
-        def H_from_state(Q1, Phi1):
+        def H_from_state(x):
             '''
                 1. state to graph
                 2. processed_graph = net(graph, aux_data, rng)
                 3. return Hamiltonian (processed_graph.globals?)
             '''
             n_node = jnp.array([3])
-            n_edge = jnp.array([4])
-            senders = jnp.array([0, 1, 0, 2])
-            receivers = jnp.array([1, 2, 2, 2])
-
-            # From LCGraphBuilder
-            Q3 = -Q1 # TODO: learn this relation or enforce it in dynamics_function
-            # edges = jnp.array([[I1, Q1], 
-            #                    [Phi1, dPhi1], 
-            #                    [I3, Q3],
-            #                    [control, 0]])
-            edges = jnp.array([[Q1], [Phi1], [Q3], [control]])
+            n_edge = jnp.array([3])
+            senders = jnp.array([0, 1, 0])
+            receivers = jnp.array([1, 2, 2])
+            edges = x.reshape(-1,1)
             global_context = None
 
             graph = jraph.GraphsTuple(
@@ -381,67 +366,64 @@ class LC1GNS(nn.Module):
             )
             aux_data = None
             processed_graph = net(graph, aux_data, rng)
-            H = jnp.sum(processed_graph.edges[:-1])
-            return H, processed_graph # exclude self loops
+            H = jnp.sum(processed_graph.edges)
+            return H, processed_graph
         
-        H, processed_graph = H_from_state(Q1, Phi1)
+        H, processed_graph = H_from_state(state)
 
         def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
-            H = aux_data
-            def dynamics_function(state, t):
-                state = jnp.array(state)
-                dH, _ = jax.grad(H_from_state, argnums=[0,1], has_aux=True)(state[0], state[1])
-                dH = jnp.array(dH).reshape(-1,1)
-                J = jnp.array([[0, 1],
-                               [-1, 0]])
-                g = jnp.array([[1, 0], [0, 0]])
-                return jnp.matmul(J, dH).squeeze() + jnp.matmul(g, jnp.array([control, 0])) # TODO: change from cur_control to control
+            H, cur_state = aux_data
+            def dynamics_function(x, t):
+                dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+                z = dH # = [Q1/C, Phi1/L, Q3/C']
+                J = jnp.array([[0, 1, 0],
+                               [-1, 0, 1],
+                               [0, -1, 0]])
+
+                # Learn interconnection matrix J
+                # in_dim = len(z)
+                # J = nn.Dense(features=in_dim, use_bias=False)(jnp.eye(3))
+                # J_triu = jnp.triu(J)
+                # J = J_triu - J_triu.T
+                # Jz = J @ z
+
+                g = jnp.array([[0, 0, 0],
+                               [0, 0, 0],
+                               [0, 0, -1]])
+                return jnp.matmul(J, z).squeeze() + jnp.matmul(g, control).squeeze()
+                # return Jz.squeeze() + jnp.matmul(g, control).squeeze()
             
             if self.integration_method == 'rk4':
-                # TODO: RK4 - fix time index? get state(t)
                 raise NotImplementedError()
-                state = jnp.array([cur_state[0], cur_state[1]])
                 next_state = rk4(dynamics_function, cur_state, 0.0, self.dt) # TODO: can add t as input
             elif self.integration_method == 'euler':
-                state = jnp.array([Q1, Phi1])
-                next_state = euler(dynamics_function, state, 0.0, self.dt)
-                next_state_dot = dynamics_function(state, 0.0)
+                next_state = euler(dynamics_function, cur_state, 0.0, self.dt)
             else:
                 raise NotImplementedError()
-            
-            next_Q1 = next_state[0]
-            next_Phi1 = next_state[1]
-            next_Q3 = -next_Q1 # TODO: learn this relation
-            next_I1 = next_state_dot[0]
-            next_dPhi1 = next_state_dot[1]
-            next_I3 = -next_I1 # TODO: learn this relation
 
-            next_edges = jnp.array(
-                [[next_I1, next_Q1], 
-                 [next_Phi1, next_dPhi1], 
-                 [next_I3, next_Q3], 
-                 [control, 0]]
-            )
+            next_nodes = jnp.concatenate((jnp.array([[0]]), graph.nodes[1:]), axis=0)
+            next_edges = next_state.reshape(-1,1)
             next_globals = jnp.array(H)
             graph = graph._replace(edges=next_edges,
+                                   nodes=next_nodes,
                                    globals=next_globals)
 
             return graph
 
-        aux_data = H
+        aux_data = H, state
         processed_graph = decoder_postprocessor(processed_graph, aux_data)
         
         return processed_graph
     
 class LC2GNS(nn.Module):
     # Decoder post-processor parameters
-    system_params: dict
     integration_method: str = 'SemiImplicitEuler'
-    dt: float = 0.01 # TODO: set from graphbuilder?
+    dt: float = 0.01
 
     # Graph Network parameters
     num_mp_steps: int = 1
-    use_edge_model: bool = False
+    use_edge_model: bool = True
+    use_global_model: bool = False
     shared_params: bool = False
     globals_output_size: int = 0
     edge_output_size: int = 1
@@ -459,7 +441,7 @@ class LC2GNS(nn.Module):
     noise_std: float = 0.0003
 
     @nn.compact    
-    def __call__(self, traj_idx, graph, control, rng): # TODO: remove traj_idx
+    def __call__(self, graph, control, rng):
         encoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                               with_layer_norm=self.layer_norm, 
                               activation=self.activation)
@@ -469,9 +451,6 @@ class LC2GNS(nn.Module):
         encoder_edgeL_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                with_layer_norm=self.layer_norm, 
                                activation=self.activation)
-        encoder_edgeI_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
-                               with_layer_norm=self.layer_norm, 
-                               activation=self.activation)
 
         decoder_node_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.node_output_size],
                               activation=self.activation)
@@ -479,19 +458,18 @@ class LC2GNS(nn.Module):
                               activation=self.activation)
         decoder_edgeL_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
                               activation=self.activation)
-        decoder_edgeI_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [self.edge_output_size], 
-                              activation=self.activation)
 
         net = CustomEdgeGraphNetworkSimulator(
-            edge_idxs=np.array([[2],[1]]),
+            edge_idxs=np.array([[0]]),
             encoder_node_fn=encoder_node_fn,
-            encoder_edge_fns=[encoder_edgeC_fn, encoder_edgeL_fn, encoder_edgeI_fn],
+            encoder_edge_fns=[encoder_edgeC_fn, encoder_edgeL_fn],
             decoder_node_fn=decoder_node_fn,
-            decoder_edge_fns=[decoder_edgeC_fn, decoder_edgeL_fn, decoder_edgeI_fn],
+            decoder_edge_fns=[decoder_edgeC_fn, decoder_edgeL_fn],
             decoder_postprocessor=lambda x, _: x, # identity decoder postprocessor
             num_mp_steps=self.num_mp_steps,
             shared_params=self.shared_params,
             use_edge_model=self.use_edge_model,
+            use_global_model=self.use_global_model,
             latent_size=self.latent_size,
             hidden_layers=self.hidden_layers,
             activation=self.activation,
@@ -502,11 +480,8 @@ class LC2GNS(nn.Module):
 
         edges_shape = graph.edges.shape
         cur_nodes = graph.nodes
+        state = graph.edges.squeeze()
         prev_Volt, Vc, _ = cur_nodes.squeeze()
-        currents = graph.edges[:,0]
-        potential_diffs = graph.edges[:,1]
-        I, Phi2, I2, prev_I_ext = currents
-        _, dPhi2, Q2, _ = potential_diffs
         if self.training: 
             rng, edges_rng, control_rng = jax.random.split(rng, 3)
             edges_noise = self.noise_std * jax.random.normal(edges_rng, edges_shape)
@@ -516,9 +491,9 @@ class LC2GNS(nn.Module):
             control_noise = self.noise_std * jax.random.normal(control_rng)
             control = control + control_noise
         
-        cur_I_ext, cur_Volt = control
+        _, cur_Volt = control
         
-        def H_from_state(Q2, Phi2):
+        def H_from_state(x):
             '''
                 1. state to graph
                 2. processed_graph = net(graph, aux_data, rng)
@@ -526,11 +501,11 @@ class LC2GNS(nn.Module):
             '''
             n_node = jnp.array([3])
             n_edge = jnp.array([edges_shape[0]])
-            senders = jnp.array([2, 1, 2, 1])
-            receivers = jnp.array([0, 0, 1, 1])
+            senders = jnp.array([2, 1])
+            receivers = jnp.array([1, 0])
 
             # From LCGraphBuilder
-            edges = jnp.array([[I], [Phi2], [Q2], [cur_I_ext]])
+            edges = x.reshape(-1,1)
             nodes = jnp.array([[cur_Volt], [Vc], [0]])
             global_context = None
 
@@ -545,49 +520,39 @@ class LC2GNS(nn.Module):
             )
             aux_data = None
             processed_graph = net(graph, aux_data, rng)
-            H = jnp.sum(processed_graph.edges[jnp.array([1,2])])
+            H = jnp.sum(processed_graph.edges)
             return H, processed_graph
         
-        H, processed_graph = H_from_state(Q2, Phi2)
+        H, processed_graph = H_from_state(state)
 
         def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
-            H = aux_data
-            def dynamics_function(state, t):
-                """ 
-                    TODO: move to LCIntegrator.dynamics_function?
-                """
-                state = jnp.array(state)
-                dH, _ = jax.grad(H_from_state, argnums=[0,1], has_aux=True)(state[0], state[1])
-                dH = jnp.array(dH).reshape(-1,1)
+            H, cur_state = aux_data
+            def dynamics_function(x, t):
+                x = jnp.array(x)
+                dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+                z = dH
+                # Learn interconnection matrix J
+                # in_dim = len(z)
+                # J = nn.Dense(features=in_dim, use_bias=False)(jnp.eye(3))
+                # J_triu = jnp.triu(J)
+                # J = J_triu - J_triu.T
+                # Jz = J @ z
                 J = jnp.array([[0, 1],
                                [-1, 0]])
-                g = jnp.array([[1,0],
+                g = jnp.array([[0, 0],
                                [0,-1]])
-                return jnp.matmul(J, dH).squeeze() + jnp.matmul(g, control).squeeze()
+                return jnp.matmul(J, z).squeeze() + jnp.matmul(g, control).squeeze()
             
             if self.integration_method == 'rk4':
-                # TODO: cur_state has dim 3, dynamics_function returns dim 2
                 # next_state = rk4(dynamics_function, cur_state, 0.0, self.dt)
                 raise NotImplementedError()
             elif self.integration_method == 'euler':
-                state = jnp.array([Q2, Phi2])
-                next_state = euler(dynamics_function, state, 0.0, self.dt)
-                next_state_dot = dynamics_function(state, 0.0)
+                next_state = euler(dynamics_function, cur_state, 0.0, self.dt)
             else:
                 raise NotImplementedError()
             
-            next_Q2 = next_state[0]
-            next_Phi2 = next_state[1]
-            next_I2 = next_state_dot[0]
-            next_dPhi2 = next_state_dot[1]
-            next_I = next_Phi2 / self.system_params['L'][traj_idx].squeeze() # TODO: learn this relation!
-            next_edges = jnp.array(
-                [[next_I, cur_Volt], 
-                 [next_Phi2, next_dPhi2], 
-                 [next_I2, next_Q2], 
-                 [cur_I_ext, 0]]
-            )
-            next_nodes = jnp.concatenate((jnp.array([[cur_Volt]]), graph.nodes[1:]), axis=0)
+            next_edges = next_state.reshape(-1,1)
+            next_nodes = jnp.concatenate((jnp.array([cur_Volt]), graph.nodes[1], jnp.array([0])), axis=0).reshape(-1,1)
             next_globals = jnp.array(H)
             graph = graph._replace(edges=next_edges,
                                    nodes=next_nodes,
@@ -595,7 +560,7 @@ class LC2GNS(nn.Module):
 
             return graph
 
-        aux_data = H
+        aux_data = H, state
         processed_graph = decoder_postprocessor(processed_graph, aux_data)
         
         return processed_graph
@@ -760,47 +725,42 @@ class CoupledLCGNS(nn.Module):
         return processed_graph
 
 class CompLCGNS(nn.Module):
-    system_params: FrozenConfigDict
     integration_method: str
     dt: float
     state_one: TrainState
     state_two: TrainState 
 
     @nn.compact
-    def __call__(self, traj_idx, graph1, graph2, rng):
-        currents1 = graph1.edges[:,0]
-        potential_diffs1 = graph1.edges[:,1]
-        I1, Phi1, I3, past_control = currents1
-        Q1, dPhi1, Q3, _ = potential_diffs1
-
-        currents2 = graph2.edges[:,0]
-        potential_diffs2 = graph2.edges[:,1]
-        I, Phi2, I2, prev_I_ext = currents2
-        _, dPhi2, Q2, _ = potential_diffs2
-
+    def __call__(self, graph1, graph2, rng):
         cur_nodes1 = graph1.nodes
+        state1 = graph1.edges.squeeze()
         _, V2, V3 = cur_nodes1.squeeze()
+
         cur_nodes2 = graph2.nodes
-        _, V4, _ = cur_nodes2.squeeze()
-        control1 = jnp.array([I2, 0]) # get from graph2
-        control2 = jnp.array([I1 + I3, V3]) # get from graph1
+        state2 = graph2.edges.squeeze()
+        prev_Volt, Vc, _ = cur_nodes2.squeeze()
+
+        state = jnp.concatenate((state1, state2))
+        control1 = jnp.array([0, 0, 0])
+        control2 = jnp.array([0, V3])
                 
-        def H_from_state(Q1, Phi1, Q2, Phi2):
+        def H_from_state(x):
             # Modify node voltages and edges to satisfy Kirchhoff's laws
-            Q3 = -(Q1 + Q2) # Modification: KCL # TODO: add new current!
-            # TODO: satisfy Kirchhoff's laws
-            edges1 = jnp.array([[I1, Q1], [Phi1, dPhi1], [I3, Q3], [control1[0], 0]]) # TODO: what about KCL for I3
+            state1 = x[:3]
+            state2 = x[3:]
+
+            edges1 = state1.reshape(-1,1)
             globals1 = None
-            senders1 = jnp.array([0, 1, 0, 2])
-            receivers1 = jnp.array([1, 2, 2, 2])
+            senders1 = jnp.array([0, 1, 0])
+            receivers1 = jnp.array([1, 2, 2])
             n_node1 = jnp.array([len(cur_nodes1)])
             n_edge1 = jnp.array([len(edges1)])
 
-            edges2 = jnp.array([[I3, control2[1]], [Phi2, dPhi2], [I2, Q2], [control2[0], 0]])
-            nodes2 = jnp.array([[control2[1]], [V4], [0]]) # Modification: same voltage at merged nodes
+            nodes2 = jnp.array([[V3], [Vc], [0]]) # same voltage at merged nodes
+            edges2 = state2.reshape(-1,1)
             globals2 = None
-            senders2 = jnp.array([2, 1, 2, 1])
-            receivers2 = jnp.array([0, 0, 1, 1])
+            senders2 = jnp.array([2, 1])
+            receivers2 = jnp.array([1, 0])
             n_node2 = jnp.array([len(nodes2)])
             n_edge2 = jnp.array([len(edges2)])
 
@@ -820,8 +780,8 @@ class CompLCGNS(nn.Module):
                                        n_node=n_node2,
                                        n_edge=n_edge2)
 
-            next_graph1 = self.state_one.apply_fn(self.state_one.params, traj_idx, graph1, control1[0], rng) # TODO 
-            next_graph2 = self.state_two.apply_fn(self.state_two.params, traj_idx, graph2, control2, rng)
+            next_graph1 = self.state_one.apply_fn(self.state_one.params, graph1, control1, rng)
+            next_graph2 = self.state_two.apply_fn(self.state_two.params, graph2, control2, rng)
 
             H1 = next_graph1.globals.squeeze()
             H2 = next_graph2.globals.squeeze()
@@ -830,45 +790,38 @@ class CompLCGNS(nn.Module):
 
             return H, (next_graph1, next_graph2)
         
-        def dynamics_function(state, t):
-            dH, _ = jax.grad(H_from_state, argnums=[0,1,2,3], has_aux=True)(state[0], state[1], state[2], state[3])
-            dH = jnp.array(dH).reshape(-1,1)
-            J = jnp.array([[0, 1, 0, 0],
-                           [-1, 0, 0, 0],
-                           [0, 0, 0, 1],
-                           [0, 0, -1, 0]])
-            g = jnp.diag(jnp.array([1, 0, 1, -1]))
-            control = jnp.concatenate((control1, control2), axis=0)
+        def dynamics_function(x, t, aux_data):
+            dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+            z = dH
+
+            J1 = jnp.array([[0, 1, 0],
+                            [-1, 0, 1],
+                            [0, -1, 0]])
+            J2 = jnp.array([[0, 1],
+                            [-1, 0]])
+            C = jnp.array([[0, 0],
+                           [0, 0],
+                           [0, -1]])
+            Jc = jnp.block([[J1, C],
+                            [-C.T, J2]])
             
-            return jnp.matmul(J, dH).squeeze() + jnp.matmul(g, control).squeeze()
+            return jnp.matmul(Jc, z).squeeze()
         
-        H, (next_graph1, next_graph2) = H_from_state(Q1, Phi1, Q2, Phi2)
-        
+        H, (next_graph1, next_graph2) = H_from_state(state)
+        aux_data = None
         # Integrate port-Hamiltonian dynamics
         next_state = None
         if self.integration_method == 'euler':
-            state = jnp.array([Q1, Phi1, Q2, Phi2]) # Q1, Phi1, Q2, Phi2
-            next_state = euler(dynamics_function, state, 0, self.dt)
-            next_state_dot = dynamics_function(state, 0)
+            next_state = euler(partial(dynamics_function, aux_data=aux_data), state, 0, self.dt)
+            # next_state_dot = dynamics_function(state, 0)
         
-        _, next_V2, next_V3 = next_graph1.nodes.squeeze()
-        _, next_V4, _ = next_graph2.nodes.squeeze()
-        next_Q1, next_Phi1, next_Q2, next_Phi2 = next_state
-        next_I1, next_dPhi1, next_I2, next_dPhi2 = next_state_dot
-        next_Q3 = -(next_Q1 + next_Q2) # KCL
-        next_I3 = -(next_I1 + next_I2) # TODO
-        next_edges1 = jnp.array([[next_I1, next_Q1], 
-                                 [next_Phi1, next_dPhi1], 
-                                 [next_I3, next_Q3], 
-                                 [control1[0], 0]])
+        next_state1 = next_state[:3]
+        next_state2 = next_state[3:]
+        next_edges1 = next_state1.reshape(-1,1)
+        next_edges2 = next_state2.reshape(-1,1)
         next_graph1 = next_graph1._replace(edges=next_edges1)
-        next_edges2 = jnp.array([[next_I3, control2[1]],
-                                 [next_Phi2, next_dPhi2], 
-                                 [next_I2, next_Q2], 
-                                 [control2[0], 0]])
-        next_nodes2 = jnp.array([[control2[1]], [next_V4], [0]])
-        next_graph2 = next_graph2._replace(edges=next_edges2,
-                                           nodes=next_nodes2)
+        next_graph2 = next_graph2._replace(edges=next_edges2)
+
         return next_graph1, next_graph2
         
 class OldGraphNetworkSimulator(nn.Module):

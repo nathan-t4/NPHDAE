@@ -126,8 +126,9 @@ class LC1(Environment):
 
     def _define_dynamics(self):
         def CapacitorPE(state):
-            Q = state[0]
-            return 0.5 * (Q**2 / self.config['C'] + Q**2 / self.config['C_prime'])
+            Q1 = state[0]
+            Q3 = state[2]
+            return 0.5 * (Q1**2 / self.config['C'] + Q3**2 / self.config['C_prime'])
         
         def InductorPE(state):
             flux = state[1]
@@ -137,19 +138,28 @@ class LC1(Environment):
             return CapacitorPE(state) + InductorPE(state)
         
         def dynamics_function(state, t, control_input, jax_key):
-            dH = jax.grad(H)(state)
+            # dH = jax.grad(H)(state)
 
-            J = jnp.array([[0, 1],
-                           [-1, 0]])
+            # J = jnp.array([[0, 1],
+            #                [-1, 0]])
             
-            R = jnp.zeros((2,2))
+            # R = jnp.zeros((2,2))
 
-            g = jnp.array([[1, 0], [0, 0]])
-
-            control_input = jnp.array([control_input, 0])
+            # g = jnp.array([[1, 0], [0, 0]])
+            # control_input = jnp.array([control_input, 0])
+            # return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
+            z = jnp.array([state[0] / self.config['C'], 
+                           state[1] / self.config['L'], 
+                           state[2] / self.config['C_prime']])
+            J = jnp.array([[0, 1, 0],
+                           [-1, 0, 1],
+                           [0, -1, 0]])
+            g = jnp.array([[0, 0, 0],
+                            [0, 0, 0],
+                            [0, 0, -1]])
             
-            return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
-        
+            return jnp.matmul(J, z) + jnp.matmul(g, control_input)
+            
         def get_power(state, control_input):
             pass
         
@@ -164,18 +174,25 @@ class LC1(Environment):
         fig = plt.figure(figsize=(5,5))
 
         T = np.arange(trajectory.shape[0]) * self._dt
-        Q = trajectory[:, 0]
+        Q1 = trajectory[:, 0]
         Phi = trajectory[:, 1]
+        Q3 = trajectory[:, 2]
 
-        ax = fig.add_subplot(211)
-        ax.plot(T, Q)
-        ax.set_ylabel('$Q$', fontsize=fontsize)
+        ax = fig.add_subplot(311)
+        ax.plot(T, Q1)
+        ax.set_ylabel('$Q1$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
 
-        ax = fig.add_subplot(212)
+        ax = fig.add_subplot(312)
         ax.plot(T, Phi)
         ax.set_ylabel('Flux', fontsize=fontsize)
+        ax.set_xlabel('Time $[s]$', fontsize=fontsize)
+        ax.grid()
+
+        ax = fig.add_subplot(313)
+        ax.plot(T, Q3)
+        ax.set_ylabel('$Q3$', fontsize=fontsize)
         ax.set_xlabel('Time $[s]$', fontsize=fontsize)
         ax.grid()
 
@@ -235,17 +252,24 @@ class LC2(Environment):
             return CapacitorPE(state) + InductorPE(state)
         
         def dynamics_function(state, t, control_input, jax_key):
-            dH = jax.grad(H)(state)
+            # dH = jax.grad(H)(state)
 
+            # J = jnp.array([[0, 1],
+            #                [-1, 0]])
+            
+            # R = jnp.zeros((2,2))
+
+            # g = jnp.array([[1,0],
+            #               [0,-1]])
+            # return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
+            z = jnp.array([state[0] / self.config['C'],
+                           state[1] / self.config['L']])
             J = jnp.array([[0, 1],
                            [-1, 0]])
-            
-            R = jnp.zeros((2,2))
+            g = jnp.array([[0, 0,],
+                           [0, -1]])
+            return jnp.matmul(J, z) + jnp.matmul(g, control_input)
 
-            g = jnp.array([[1,0],
-                          [0,-1]])
-            return jnp.matmul(J - R, dH) + jnp.matmul(g, control_input) # x_dot
-        
         def get_power(state, control_input):
             pass
         
@@ -332,22 +356,34 @@ def generate_dataset(args, env_seed: int = 501):
 
     if args.type == 'train':
         seed = env_seed
-        x0_init_lb = jnp.array([0.0, 0.0])
-        x0_init_ub = jnp.array([2.0, 0.0])
-        control_mag = 10
-        C_range = (0.5, 1)
-        C_prime_range = (0.5, 1)
-        L_range = (0.5, 1)
+        if args.circuit == 'lc1':
+            x0_init_lb = jnp.array([0.0, 0.0, 0.0])
+            x0_init_ub = jnp.array([2.0, 0.0, 1.0])
+        elif args.circuit == 'lc2':
+            x0_init_lb = jnp.array([0.0, 0.0])
+            x0_init_ub = jnp.array([2.0, 0.0])
+
+        control_mag = 1.0
+        C_range = (0.5, 1.5)
+        C_prime_range = (0.5, 1.5)
+        L_range = (0.5, 1.5)
 
     elif args.type == 'val':
         seed = env_seed + 1
-        x0_init_lb = jnp.array([2.0, 0.0])
-        x0_init_ub = jnp.array([2.5, 0.0])
+        if args.circuit == 'lc1':
+            x0_init_lb = jnp.array([2.0, 0.0, 1.0]) 
+            x0_init_ub = jnp.array([2.5, 0.0, 1.5])
+        elif args.circuit == 'lc2':
+            x0_init_lb = jnp.array([2.0, 0.0]) 
+            x0_init_ub = jnp.array([2.5, 0.0])
         control_mag = 0.0
-        C_range = (1, 1.5)
-        C_prime_range = (1, 1.5)
-        L_range = (1, 1.5)
+        C_range = (1.5, 2.0)
+        C_prime_range = (1.5, 2.0)
+        L_range = (1.5, 2.0)
         
+        # C_range = (0.75, 0.75)                    
+        # C_prime_range = (0.75, 0.75) 
+        # L_range = (0.75, 0.75)
     
     key = jax.random.key(seed)
     env = circuit(**params, random_seed=seed)
@@ -374,13 +410,13 @@ def generate_dataset(args, env_seed: int = 501):
         if args.circuit.lower() == 'lc2':
             # Train with random (constant) voltages - can be positive and negative
             key, subkey = jax.random.split(key)
-            k = 1.0 * jax.random.uniform(subkey, shape=(6,), minval=-1.0, maxval=1.0)
+            k = control_mag * jax.random.uniform(subkey, shape=(6,), minval=-1.0, maxval=1.0)
         
             def control_policy(state, t, jax_key, aux_data):
                 k = aux_data
                 i = k[0] * jnp.sin(k[1] * t + k[2]) 
                 v = k[3] * jnp.sin(k[4] * t + k[5])
-                return jnp.array([i, v])
+                return jnp.array([0, v])
 
             env.set_control_policy(partial(control_policy, aux_data=k))
 
@@ -390,7 +426,8 @@ def generate_dataset(args, env_seed: int = 501):
 
             def control_policy(state, t, jax_key, aux_data):
                 k = aux_data
-                return k[0] * jnp.sin(k[1] * t + k[2])
+                # return jnp.array([0, 0, k[0] * jnp.sin(k[1] * t + k[2])])
+                return jnp.array([0, 0, 0])
             
             env.set_control_policy(partial(control_policy, aux_data=k))
 
