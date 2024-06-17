@@ -31,8 +31,8 @@ class MLP(nn.Module):
     with_layer_norm: bool = False
 
     @nn.compact
-    def __call__(self, inputs, training: bool=False):
-        x = inputs
+    def __call__(self, input, training: bool=False):
+        x = input
         if self.activation == 'swish':
             activation_fn = nn.swish
         elif self.activation == 'relu':
@@ -51,6 +51,22 @@ class MLP(nn.Module):
         if self.with_layer_norm:
             x = nn.LayerNorm()(x)
         return x
+    
+class vmapMLP(nn.Module):
+    feature_sizes: Sequence[int]
+    activation: str = 'swish'
+    dropout_rate: float = 0
+    deterministic: bool = True
+    with_layer_norm: bool = False
+    @nn.compact
+    def __call__(self, xs):
+        vmapMLP = nn.vmap(MLP, variable_axes={'params': None}, split_rngs={'params': False}, in_axes=0) 
+        return vmapMLP(feature_sizes=self.feature_sizes,
+                         activation=self.activation,
+                         dropout_rate=self.dropout_rate,
+                         deterministic=self.deterministic,
+                         with_layer_norm=self.with_layer_norm,
+                         name='MLP')(xs)
     
 class NeuralODE(nn.Module):
     ''' 
@@ -266,25 +282,27 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
                 input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
             else:
                 input = jnp.concatenate((nodes, senders, receivers), axis=1)
-            model = MLP(feature_sizes=node_feature_sizes, 
-                        activation=self.activation, 
-                        dropout_rate=self.dropout_rate, 
-                        deterministic=not self.training,
-                        with_layer_norm=self.layer_norm)
+            # vmap across batch dim so that the MLP processed each node separately
+            model = vmapMLP(feature_sizes=node_feature_sizes, 
+                            activation=self.activation, 
+                            dropout_rate=self.dropout_rate, 
+                            deterministic=not self.training,
+                            with_layer_norm=self.layer_norm)
             return model(input)
 
         def update_edge_fn(edges, senders, receivers, globals_):
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
             if self.use_global_model:
-                input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+                inputs = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
             else:
-                input = jnp.concatenate((edges, senders, receivers), axis=1)
-            model = MLP(feature_sizes=edge_feature_sizes,
-                        activation=self.activation,
-                        dropout_rate=self.dropout_rate, 
-                        deterministic=not self.training,
-                        with_layer_norm=self.layer_norm)
-            return model(input)
+                inputs = jnp.concatenate((edges, senders, receivers), axis=1)
+            # vmap across batch dim so that the MLP processed each edge separately
+            model = vmapMLP(feature_sizes=edge_feature_sizes,
+                            activation=self.activation,
+                            dropout_rate=self.dropout_rate, 
+                            deterministic=not self.training,
+                            with_layer_norm=self.layer_norm)
+            return model(inputs)
             
         def update_global_fn(nodes, edges, globals_):
             # Example update_global_fn

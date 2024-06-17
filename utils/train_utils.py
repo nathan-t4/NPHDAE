@@ -30,14 +30,10 @@ def create_net(name, training_params, net_params):
     if training_params.net_name == 'GNS':
         if name == 'MassSpring':
             return MassSpringGNS(**net_params)
-        elif name == 'LC':
+        elif name == 'LC1' or name == 'LC2':
             return LCGNS(**net_params)
-        elif name == 'LC1':
-            return LC1GNS(**net_params)
-        elif name == 'LC2':
-            return LC2GNS(**net_params)
-        elif name == 'CoupledLC':
-            return CoupledLCGNS(**net_params)
+        elif name == 'LC' or name == 'CoupledLC':
+            raise NotImplementedError()
         else:
             raise NotImplementedError()
         

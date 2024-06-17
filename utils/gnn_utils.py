@@ -1,10 +1,13 @@
 import os
 import flax
 import jax.numpy as jnp
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from typing import Dict, Any
 from clu import metrics
+
 
 @flax.struct.dataclass
 class TrainMetrics(metrics.Collection):
@@ -322,19 +325,20 @@ def plot_evaluation_curves(
         ax['Phi1'].set_ylabel('$\Phi_1$')
         ax['Phi1'].legend()
 
+        ax['Q3'].set_title('$Q_3$')
+        ax['Q3'].plot(ts, pred_data[2,:], label='predicted')
+        ax['Q3'].plot(ts, exp_data[2,:], label='expected')
+        ax['Q3'].set_xlabel('Time [$s$]')
+        ax['Q3'].set_ylabel('$Q_3$')
+        ax['Q3'].legend()
+
         ax['Q2'].set_title('$Q_2$')
-        ax['Q2'].plot(ts, pred_data[2,:], label='predicted')
-        ax['Q2'].plot(ts, exp_data[2,:], label='expected')
+        ax['Q2'].plot(ts, pred_data[3,:], label='predicted')
+        ax['Q2'].plot(ts, exp_data[3,:], label='expected')
         ax['Q2'].set_xlabel('Time [$s$]')
         ax['Q2'].set_ylabel('$Q_2$')
         ax['Q2'].legend()
 
-        ax['Q3'].set_title('$Q_3$')
-        ax['Q3'].plot(ts, pred_data[3,:], label='predicted')
-        ax['Q3'].plot(ts, exp_data[3,:], label='expected')
-        ax['Q3'].set_xlabel('Time [$s$]')
-        ax['Q3'].set_ylabel('$Q_3$')
-        ax['Q3'].legend()
 
         ax['Phi2'].set_title('$\Phi_2$')
         ax['Phi2'].plot(ts, pred_data[4,:], label='predicted')
@@ -360,15 +364,15 @@ def plot_evaluation_curves(
         ax['Phi1_error'].set_xlabel('Time [$s$]')
         ax['Phi1_error'].set_ylabel('$\Phi_1$')
 
-        ax['Q2_error'].set_title('$Q_2$ Error')
-        ax['Q2_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
-        ax['Q2_error'].set_xlabel('Time [$s$]')
-        ax['Q2_error'].set_ylabel('$Q_2$')
-
         ax['Q3_error'].set_title('$Q_3$ Error')
-        ax['Q3_error'].plot(ts, exp_data[3,:] - pred_data[3,:])
+        ax['Q3_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
         ax['Q3_error'].set_xlabel('Time [$s$]')
         ax['Q3_error'].set_ylabel('$Q_3$')
+
+        ax['Q2_error'].set_title('$Q_2$ Error')
+        ax['Q2_error'].plot(ts, exp_data[3,:] - pred_data[3,:])
+        ax['Q2_error'].set_xlabel('Time [$s$]')
+        ax['Q2_error'].set_ylabel('$Q_2$')
 
         ax['Phi2_error'].set_title('$\Phi_2$ Error')
         ax['Phi2_error'].plot(ts, exp_data[4,:] - pred_data[4,:])

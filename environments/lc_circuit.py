@@ -358,28 +358,35 @@ def generate_dataset(args, env_seed: int = 501):
         seed = env_seed
         if args.circuit == 'lc1':
             x0_init_lb = jnp.array([0.0, 0.0, 0.0])
-            x0_init_ub = jnp.array([2.0, 0.0, 1.0])
+            x0_init_ub = jnp.array([2.0, 0.0, 4.0])
         elif args.circuit == 'lc2':
             x0_init_lb = jnp.array([0.0, 0.0])
             x0_init_ub = jnp.array([2.0, 0.0])
 
         control_mag = 1.0
-        C_range = (0.5, 1.5)
-        C_prime_range = (0.5, 1.5)
-        L_range = (0.5, 1.5)
+        # C_range = (0.5, 1.5)
+        # C_prime_range = (0.5, 1.5)
+        # L_range = (0.5, 1.5)
+
+        C_range = (1.0, 1.0)
+        C_prime_range = (1.0, 1.0)
+        L_range = (1.0, 1.0)
 
     elif args.type == 'val':
         seed = env_seed + 1
         if args.circuit == 'lc1':
-            x0_init_lb = jnp.array([2.0, 0.0, 1.0]) 
-            x0_init_ub = jnp.array([2.5, 0.0, 1.5])
+            x0_init_lb = jnp.array([2.0, 0.0, 4.0]) 
+            x0_init_ub = jnp.array([2.5, 0.0, 4.5])
         elif args.circuit == 'lc2':
             x0_init_lb = jnp.array([2.0, 0.0]) 
             x0_init_ub = jnp.array([2.5, 0.0])
         control_mag = 0.0
-        C_range = (1.5, 2.0)
-        C_prime_range = (1.5, 2.0)
-        L_range = (1.5, 2.0)
+        C_range = (1.0, 2.0)
+        C_prime_range = (1.0, 2.0)
+        L_range = (1.0, 2.0)
+        # C_range = (1.0, 1.0)
+        # C_prime_range = (1.0, 1.0)
+        # L_range = (1.0, 1.0)
         
         # C_range = (0.75, 0.75)                    
         # C_prime_range = (0.75, 0.75) 
@@ -426,7 +433,6 @@ def generate_dataset(args, env_seed: int = 501):
 
             def control_policy(state, t, jax_key, aux_data):
                 k = aux_data
-                # return jnp.array([0, 0, k[0] * jnp.sin(k[1] * t + k[2])])
                 return jnp.array([0, 0, 0])
             
             env.set_control_policy(partial(control_policy, aux_data=k))

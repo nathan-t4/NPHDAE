@@ -38,12 +38,12 @@ class CoupledLC(Environment):
         def CapacitorPE(state):
             Q1 = state[0]
             Q3 = state[2]
-            Q2 = state[4]
+            Q2 = state[3]
             return 0.5 * (Q1**2 / self.config['C'] + Q2**2 / self.config['C'] + Q3**2 / self.config['C_prime'])
         
         def InductorPE(state):
             flux1 = state[1]
-            flux2 = state[3]
+            flux2 = state[4]
             return 0.5 * (flux1**2 / self.config['L'] + flux2**2 / self.config['L'])
         
         def H(state):
@@ -137,23 +137,23 @@ def generate_dataset(args, env_seed: int = 501):
     if args.type == 'train':
         seed = env_seed
         x0_init_lb = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0])
-        x0_init_ub = jnp.array([2.0, 0.0, 1.0, 2.0, 0.0])
-        # C_range = (0.5, 1)
-        # Cp_range = (0.5, 1)
-        # L_range = (0.5, 1)
-        C_range = (0.5, 1.5)
-        Cp_range = (0.5, 1.5)
-        L_range = (0.5, 1.5)
+        x0_init_ub = jnp.array([2.0, 0.0, 4.0, 2.0, 0.0])
+        C_range = (1, 1)
+        Cp_range = (1, 1)
+        L_range = (1, 1)
+        # C_range = (0.5, 1.5)
+        # Cp_range = (0.5, 1.5)
+        # L_range = (0.5, 1.5)
     elif args.type == 'val':
         seed = env_seed + 1
-        x0_init_lb = jnp.array([2.0, 0.0, 1.0, 2.0, 0.0])
-        x0_init_ub = jnp.array([2.5, 0.0, 1.5, 2.5, 0.0])
+        x0_init_lb = jnp.array([2.0, 0.0, 4.0, 2.0, 0.0])
+        x0_init_ub = jnp.array([2.5, 0.0, 4.5, 2.5, 0.0])
         C_range = (1.5, 2.0)
         Cp_range = (1.5, 2.0)
         L_range = (1.5, 2.0)
-        # C_range = (0.75, 0.75)
-        # Cp_range = (0.75, 0.75)
-        # L_range = (0.75, 0.75)
+        # C_range = (1, 1)
+        # Cp_range = (1, 1)
+        # L_range = (1, 1)
 
     params = {
         'dt': 0.01,

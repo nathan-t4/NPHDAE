@@ -381,33 +381,42 @@ class LC1GraphBuilder(GraphBuilder):
         self.senders = jnp.array([0, 1, 0])
         self.receivers = jnp.array([1, 2, 2])
 
-    def get_graph_from_state(self, state, control, system_params) -> jraph.GraphsTuple:
+    def get_graph_from_state(self, state, control=None, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
         Q1 = state[0]
         Phi1 = state[1]
-        Q3 = -Q1
-        V2 = Q1 / system_params['C']
-        V3 = Q3 / system_params['C_prime']
-        nodes = jnp.array([[0], [V2], [V3]])
-        edges = jnp.array([[Q1], [Phi1], [Q3], [control]])
-        global_context = None
+        Q3 = state[2]
+        nodes = nodes
+        if set_nodes:
+            V2 = Q1 / system_params['C']
+            V3 = Q3 / system_params['C_prime']
+            nodes = jnp.array([[0], [V2], [V3]])
+        if set_ground_and_control:
+            nodes = jnp.concatenate((jnp.array([[0]]), nodes[1:]), axis=0)
+
+        edges = jnp.array([[Q1, 0], [Phi1, 1], [Q3, 0]])
+        n_node = jnp.array([3])
+        n_edge = jnp.array([3])
+        senders = jnp.array([0, 1, 0])
+        receivers = jnp.array([1, 2, 2])
+        global_context = globals
 
         graph = jraph.GraphsTuple(
             nodes=nodes,
             edges=edges,
             globals=global_context,
-            n_node=self.n_node,
-            n_edge=self.n_edge,
-            senders=self.senders,
-            receivers=self.receivers,
+            n_node=n_node,
+            n_edge=n_edge,
+            senders=senders,
+            receivers=receivers,
         )
 
         return graph
     
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]]])
-        edges = jnp.array([[self._Q1[traj_idx, t]], 
-                           [self._Phi1[traj_idx, t]], 
-                           [self._Q3[traj_idx, t]]])
+        edges = jnp.array([[self._Q1[traj_idx, t], 0], # TODO: add a one-hot encoding to label edge types
+                           [self._Phi1[traj_idx, t], 1], 
+                           [self._Q3[traj_idx, t], 0]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -513,31 +522,41 @@ class LC2GraphBuilder(GraphBuilder):
         self.senders = jnp.array([2, 1])
         self.receivers = jnp.array([1, 0])
 
-    def get_graph_from_state(self, state, volt, system_params) -> jraph.GraphsTuple:
+    def get_graph_from_state(self, state, control, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
         Q = state[0]
         Phi = state[1]
-        Vc = Q / system_params['C']
-        I = Phi / system_params['L']
-        nodes = jnp.array([[volt], [Vc], [0]])
-        edges = jnp.array([[Q], [Phi]])
-        global_context = None
+        _, volt = control
+        nodes = nodes
+        if set_nodes:
+            Vc = Q / system_params['C']
+            I = Phi / system_params['L']
+            nodes = jnp.array([[volt], [Vc], [0]])
+        elif set_ground_and_control:
+            nodes = jnp.concatenate((jnp.array([volt]), nodes[1], jnp.array([0])), axis=0).reshape(-1,1)
+
+        edges = jnp.array([[Q, 0], [Phi, 1]])
+        global_context = globals
+        n_node = jnp.array([3])
+        n_edge = jnp.array([2])
+        senders = jnp.array([2, 1])
+        receivers = jnp.array([1, 0])
 
         graph = jraph.GraphsTuple(
             nodes=nodes,
             edges=edges,
             globals=global_context,
-            n_node=self.n_node,
-            n_edge=self.n_edge,
-            senders=self.senders,
-            receivers=self.receivers,
+            n_node=n_node,
+            n_edge=n_edge,
+            senders=senders,
+            receivers=receivers,
         )
 
         return graph
     
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[self._control[traj_idx, t, 1]], [self._Vc[traj_idx, t]], [0]])
-        edges = jnp.array([[self._Q[traj_idx, t]],
-                           [self._Phi[traj_idx, t]]])
+        edges = jnp.array([[self._Q[traj_idx, t], 0],
+                           [self._Phi[traj_idx, t], 1]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -551,7 +570,7 @@ class LC2GraphBuilder(GraphBuilder):
         
         return graph
 
-    @jax.jit
+    # @jax.jit
     def get_graph_batch(self, traj_idxs, t0s) -> Sequence[jraph.GraphsTuple]:
         def f(carry, idxs):
             return carry, self.get_graph(*idxs)
@@ -596,7 +615,7 @@ class CoupledLCGraphBuilder(GraphBuilder):
         state = data['state_trajectories']
         self._num_trajectories = state.shape[0]
         self._num_timesteps = state.shape[1]
-        self._num_states = 4
+        self._num_states = 5
         self._dt = config['dt']
         self.system_params = {
             'C': jnp.array(config['C']).reshape(-1,1),
@@ -606,19 +625,14 @@ class CoupledLCGraphBuilder(GraphBuilder):
         self._control = jnp.array(data['control_inputs'])
 
         self._Q1 = jnp.array(state[:,:,0])
-        self._dQ1 = jnp.diff(self._Q1, axis=-1) * self._dt
         self._Phi1 = jnp.array(state[:,:,1])
-        self._dPhi1 = jnp.diff(self._Phi1, axis=-1) * self._dt
         self._V2 = self._Q1 / self.system_params['C']
 
         self._Q3 = jnp.array(state[:,:,2])
-        self._dQ3 = jnp.diff(self._Q3, axis=-1) * self._dt
         self._V3 = self._Q3 / self.system_params['C_prime']
 
         self._Q2 = jnp.array(state[:,:,3])
-        self._dQ2 = jnp.diff(self._Q2, axis=-1) * self._dt
         self._Phi2 = jnp.array(state[:,:,4])
-        self._dPhi2 = jnp.diff(self._Phi2, axis=-1) * self._dt
         self._V4 = self._Q2 / self.system_params['C']
 
         self._H = 0.5 * (self._Q1 ** 2 / self.system_params['C'] + self._Q2 ** 2 / self.system_params['C'] + self._Q3 ** 2 / self.system_params['C_prime'] + self._Phi1 ** 2 / self.system_params['L'] + self._Phi2 ** 2 / self.system_params['L'])
@@ -672,14 +686,17 @@ class CoupledLCGraphBuilder(GraphBuilder):
         self.n_edge = jnp.array([5])
         self.senders = jnp.array([0, 1, 0, 3, 0])
         self.receivers = jnp.array([1, 2, 2, 2, 3])
+
+    def get_graph_from_state(self, state, system_params=None, set_nodes=False):
+        pass
     
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]], [self._V4[traj_idx, t]]])
-        edges = jnp.array([[self._Q1[traj_idx, t]],
-                           [self._Phi1[traj_idx, t]],
-                           [self._Q3[traj_idx, t]],
-                           [self._Q2[traj_idx, t]],
-                           [self._Phi2[traj_idx, t]]])
+        edges = jnp.array([[self._Q1[traj_idx, t], 0],
+                           [self._Phi1[traj_idx, t], 1],
+                           [self._Q3[traj_idx, t], 0],
+                           [self._Q2[traj_idx, t], 0],
+                           [self._Phi2[traj_idx, t], 1]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -704,7 +721,7 @@ class CoupledLCGraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._Q1, self._dQ1, self._Phi1, self._dPhi1, self._V2, self._Q2, self._dQ2, self._Phi2, self._dPhi2, self._V4, self._Q3, self._dQ3, self._V3, self._control, self._norm_stats)
+        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._Q1, self._Phi1, self._V2, self._Q2, self._Phi2, self._V4, self._Q3, self._V3, self._H, self._control, self._norm_stats)
         return (children, aux_data)
     
     @classmethod
@@ -717,19 +734,15 @@ class CoupledLCGraphBuilder(GraphBuilder):
         obj._num_timesteps        = aux_data[3]
         obj._num_states           = aux_data[4]
         obj._Q1                   = aux_data[5]
-        obj._dQ1                  = aux_data[6]
-        obj._Phi1                 = aux_data[7]
-        obj._dPhi1                = aux_data[8]
-        obj._V2                   = aux_data[9]
-        obj._Q2                   = aux_data[10]
-        obj._dQ2                  = aux_data[11]
-        obj._Phi2                 = aux_data[12]
-        obj._dPhi2                = aux_data[13]
-        obj._V4                   = aux_data[14]
-        obj._Q3                   = aux_data[15]
-        obj._dQ3                  = aux_data[16]
-        obj._V3                   = aux_data[17]
-        obj._control              = aux_data[18]
-        obj._norm_stats           = aux_data[19]
+        obj._Phi1                 = aux_data[6]
+        obj._V2                   = aux_data[7]
+        obj._Q2                   = aux_data[8]
+        obj._Phi2                 = aux_data[9]
+        obj._V4                   = aux_data[10]
+        obj._Q3                   = aux_data[11]
+        obj._V3                   = aux_data[12]
+        obj._H                    = aux_data[13]
+        obj._control              = aux_data[14]
+        obj._norm_stats           = aux_data[15]
         obj._setup_graph_params()
         return obj

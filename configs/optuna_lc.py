@@ -5,7 +5,7 @@ def get_optuna_lc_cfg(name, trial) -> ml_collections.ConfigDict:
     config = ml_collections.ConfigDict({
         'seed': 0,
         'system_name': name,
-        'n_train': 400,
+        'n_train': 200,
         'steps': 700,
         'n_val': 20,
         'ckpt_step': None,
@@ -25,7 +25,7 @@ def get_optuna_lc_cfg(name, trial) -> ml_collections.ConfigDict:
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GNS',
         'loss_function': 'state',
-        'num_epochs': int(50),
+        'num_epochs': int(15),
         'min_epochs': int(15),
         'batch_size': trial.suggest_int('batch_size', 1, 10),
         'rollout_timesteps': 1500,
@@ -37,8 +37,8 @@ def get_optuna_lc_cfg(name, trial) -> ml_collections.ConfigDict:
     config.net_params = ml_collections.ConfigDict({
         'integration_method': 'euler', 
         'num_mp_steps': trial.suggest_int('num_mp_steps', 1, 5),
-        'noise_std': trial.suggest_float('noise_std', 1e-5, 1e-3),
-        'latent_size': trial.suggest_int('latent_size', 4, 16),
+        'noise_std': trial.suggest_float('noise_std', 1e-5, 1e-3, log=True),
+        'latent_size': trial.suggest_int('latent_size', 4, 16, log=True),
         'hidden_layers': 2,
         'activation': trial.suggest_categorical('activation', ["relu", "swish"]),
         'use_edge_model': True,

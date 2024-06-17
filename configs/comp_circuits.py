@@ -1,4 +1,5 @@
 import ml_collections
+import jax.numpy as jnp
 from time import strftime
 
 def get_comp_gnn_config(args):
@@ -14,27 +15,36 @@ def get_comp_gnn_config(args):
 
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
-    config.paths.ckpt_one_step = 22
-    config.paths.ckpt_one_dir = 'results/GNS/LC1/0614-0923_200/checkpoint/best_model'
-    config.paths.ckpt_two_step = 6
-    config.paths.ckpt_two_dir = 'results/GNS/LC2/0614-1117_400/checkpoint/best_model'
-    config.paths.coupled_lc_data_path = 'results/CoupledLC_data/val_2_1500.pkl'
+    config.paths.ckpt_one_step = 56
+    config.paths.ckpt_one_dir = 'results/GNS/LC1/0616-2205_200/checkpoint/best_model'
+    config.paths.ckpt_two_step = 56
+    config.paths.ckpt_two_dir = 'results/GNS/LC1/0617-0921_200/checkpoint/best_model'
+    config.paths.coupled_lc_data_path = 'results/CoupledLC_data/train_5_1500.pkl'
 
     config.training_params_1 = ml_collections.ConfigDict({
             'net_name': 'GNS',
             'loss_function': 'state',
             'num_epochs': int(5e2),
             'min_epochs': int(30),
-            'batch_size': 5,
+            'batch_size': 4,
     })
     config.optimizer_params_1 = ml_collections.ConfigDict({
             'learning_rate': 1e-3,
     })
     config.net_params_1 = ml_collections.ConfigDict({
+            'graph_from_state': None,
+            'J': jnp.array([[0, 1, 0],
+                            [-1, 0, 1],
+                            [0, -1, 0]]),
+            'g': jnp.array([[0, 0, 0],
+                            [0, 0, 0],
+                            [0, 0, 0]]), # TODO: changed last entry from -1 to 0
+            'edge_idxs': None,
+            'include_idxs': None,
             'integration_method': 'euler', 
-            'num_mp_steps': 2,
-            'noise_std': 0.0003,
-            'latent_size': 5,
+            'num_mp_steps': 1,
+            'noise_std': 0.0008,
+            'latent_size': 4,
             'hidden_layers': 2,
             'activation': 'relu',
             'use_edge_model': True,
@@ -48,18 +58,27 @@ def get_comp_gnn_config(args):
             'loss_function': 'state',
             'num_epochs': int(5e2),
             'min_epochs': int(30),
-            'batch_size': 9,
+            'batch_size': 4,
     })
     config.optimizer_params_2 = ml_collections.ConfigDict({
-            'learning_rate': 0.0061530848896117285,
+            'learning_rate': 1e-3,
     })
     config.net_params_2 = ml_collections.ConfigDict({
+            'graph_from_state': None,
+            'J': jnp.array([[0, 1, 0],
+                            [-1, 0, 1],
+                            [0, -1, 0]]),
+            'g': jnp.array([[0, 0, 0],
+                            [0, 0, 0],
+                            [0, 0, 0]]), # TODO changed last entry from -1 to 0
+            'edge_idxs': None,
+            'include_idxs': None,
             'integration_method': 'euler', 
-            'num_mp_steps': 5,
-            'noise_std': 0.0003,
-            'latent_size': 12,
+            'num_mp_steps': 1,
+            'noise_std': 0.0008,
+            'latent_size': 4,
             'hidden_layers': 2,
-            'activation': 'swish',
+            'activation': 'relu',
             'use_edge_model': True,
             'use_global_model': False,
             'layer_norm': True,

@@ -17,14 +17,15 @@
 
     # TODO:
     - why isn't it working?
+        - the voltages are initialized to the right values...
     - GNSs predict energies associated with edges of graphs 1 and 2
+    - can try just using one GNN (change edge_idxs )
+    - TODO 6/17: try with GNS trained and composition tested for C = L = C_prime = 1
 """
 
 import os
 import jax
 import optax
-from time import strftime
-from clu import checkpoint
 from flax.training.train_state import TrainState
 import orbax.checkpoint as ocp
 
@@ -41,25 +42,23 @@ def decompose_coupled_lc_graph(lc_graph):
     receivers = jnp.array([1, 2, 2])
 
     nodes = jnp.array([[V_ext], [Vc], [0]]) # 4 5 6
-    edges = jnp.array([[Q2], [Phi2]]) # e5 e4
-    senders = jnp.array([2, 1])
-    receivers = jnp.array([1, 0])
+    edges = jnp.array([[Q2], [Phi2], [Q3]]) # e5 e4
+    senders = jnp.array([2, 1, 2])
+    receivers = jnp.array([1, 0, 0])
 
     nodes = jnp.array([[0], [V2], [V3], [V4]]) # 1 2 3 4
     edges = jnp.array([[Q1], [Phi1], [Q3], [Q2], [Phi2]]) # e1 e2 e3 e4 e5
     senders = jnp.array([0, 1, 0, 3, 0])
     receivers = jnp.array([1, 2, 2, 2, 3])
     """
-    n1_idx = jnp.array([0,1,2]) # [[0], [V2], [V3]]
-    n2_idx = jnp.array([2,3,0]) # [[V3], [V4], 0]
-    e1_idx = jnp.array([0,1,2]) # [[Q1], [Phi1], [Q3]] 
-    e2_idx = jnp.array([3,4]) # [[Q2], [Phi2]] 
-    nodes_1 = lc_graph.nodes[n1_idx]
-    edges_1 = lc_graph.edges[e1_idx]
+    Q1, Phi1, Q3, Q2, Phi2 = lc_graph.edges
+    zero, V2, V3, V4 = lc_graph.nodes
+    nodes_1 = jnp.array([[0], V2, V3]) # [[0], [V2], [V3]]
+    edges_1 = jnp.array([Q1, Phi1, Q3]) # [[Q1], [Phi1], [Q3]] 
     n_node_1 = jnp.array([len(nodes_1)])
     n_edge_1 = jnp.array([len(edges_1)])
-    receivers_1 = lc_graph.receivers[e1_idx]
-    senders_1 = lc_graph.senders[e1_idx]
+    senders_1 = jnp.array([0, 1, 0])
+    receivers_1 = jnp.array([1, 2, 2])
 
     graph_1 = jraph.GraphsTuple(nodes=nodes_1,
                                 edges=edges_1,
@@ -69,12 +68,12 @@ def decompose_coupled_lc_graph(lc_graph):
                                 n_node=n_node_1,
                                 n_edge=n_edge_1)
 
-    nodes_2 = lc_graph.nodes[n2_idx]
-    edges_2 = lc_graph.edges[e2_idx]
+    nodes_2 = jnp.array([[0], V4, V3]) # [0, [V4], [V3]]
+    edges_2 = jnp.array([Q2, Phi2, Q3]) # [[Q2], [Phi2], [Q3]] 
     n_node_2 = jnp.array([len(nodes_2)])
     n_edge_2 = jnp.array([len(edges_2)])
-    senders_2 = jnp.array([2, 1])
-    receivers_2 = jnp.array([1, 0])
+    senders_2 = jnp.array([0, 1, 0])
+    receivers_2 = jnp.array([1, 2, 2])
 
     graph_2 = jraph.GraphsTuple(nodes=nodes_2,
                                 edges=edges_2,
@@ -107,19 +106,26 @@ def test_composition(config):
     eval_gb = graph_builder(paths.coupled_lc_data_path)
 
     net_one = create_net('LC1', training_params_1, net_params_1)
-    
-    net_two = create_net('LC2', training_params_2, net_params_2)
+    # net_two = create_net('LC1', training_params_1, net_params_1)
+    net_two = create_net('LC1', training_params_2, net_params_2)
 
     net_one.training = False
     net_two.training = False
+
+    net_one.graph_from_state = create_graph_builder('LC1')('results/LC1_data/train_200_700.pkl').get_graph_from_state
+    net_two.graph_from_state = create_graph_builder('LC1')('results/LC1_data/train_200_700.pkl').get_graph_from_state
+
+    net_one.edge_idxs = np.array([[0,2]])
+    net_two.edge_idxs = np.array([[0,2]])
+    net_two.include_idxs = np.array([0,1])
 
     init_control = eval_gb._control[0,0]
 
     init_graph_one, init_graph_two = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx=0, t=0))
 
-    params_one = net_one.init(init_rng, init_graph_one, init_control[:3], net_rng)
+    params_one = net_one.init(init_rng, init_graph_one, init_control[jnp.array([0,1,2])], net_rng)
 
-    params_two = net_two.init(init_rng, init_graph_two, init_control[3:], net_rng)
+    params_two = net_two.init(init_rng, init_graph_two, init_control[jnp.array([3,4,2])], net_rng)
 
     tx_one = optax.adam(**config.optimizer_params_1)
 
@@ -151,6 +157,7 @@ def test_composition(config):
         item_handlers=ocp.StandardCheckpointHandler(),
     )
 
+    # Restore state from checkpoint
     state_one = ckpt_mngr_one.restore(paths.ckpt_one_step, args=ocp.args.StandardRestore(state_one))
     state_two = ckpt_mngr_two.restore(paths.ckpt_two_step, args=ocp.args.StandardRestore(state_two))
 
@@ -175,7 +182,7 @@ def test_composition(config):
         tf_idxs = (ti + jnp.arange(1, (config.rollout_timesteps + 1)))
         tf_idxs = jnp.unique(tf_idxs.clip(min=ti + time_offset, max=eval_gb._num_timesteps))
         t0_idxs = tf_idxs - ti
-        ts = tf_idxs * net.dt
+        ts = tf_idxs * dt
         graphs = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx, ti)) 
 
         controls = t0_idxs # used as 'length' for scan loop
@@ -190,11 +197,11 @@ def test_composition(config):
         def forward_pass(graphs, control):
             graph_one, graph_two = graphs
             next_graph_one, next_graph_two = state.apply_fn(state.params, graph_one, graph_two, jax.random.key(0))
-            pred_Q1 = (next_graph_one.edges[0]).squeeze()
-            pred_Phi1 = (next_graph_one.edges[1]).squeeze()
-            pred_Q3 = (next_graph_one.edges[2]).squeeze()
-            pred_Q2 = (next_graph_two.edges[0]).squeeze()
-            pred_Phi2 = (next_graph_two.edges[1]).squeeze()
+            pred_Q1 = (next_graph_one.edges[0,0]).squeeze()
+            pred_Phi1 = (next_graph_one.edges[1,0]).squeeze()
+            pred_Q3 = (next_graph_one.edges[2,0]).squeeze() # TODO: next_graph_two.edges[2,0] is also Q3
+            pred_Q2 = (next_graph_two.edges[0,0]).squeeze()
+            pred_Phi2 = (next_graph_two.edges[1,0]).squeeze()
             pred_H = (next_graph_one.globals).squeeze() + (next_graph_two.globals).squeeze()
 
             next_graph_one = next_graph_one._replace(globals=None)
