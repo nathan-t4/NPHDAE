@@ -364,13 +364,12 @@ def generate_dataset(args, env_seed: int = 501):
             x0_init_ub = jnp.array([2.0, 0.0])
 
         control_mag = 1.0
-        # C_range = (0.5, 1.5)
-        # C_prime_range = (0.5, 1.5)
-        # L_range = (0.5, 1.5)
-
         C_range = (1.0, 1.0)
         C_prime_range = (1.0, 1.0)
         L_range = (1.0, 1.0)
+        # C_range = (1.0, 2.0)
+        # C_prime_range = (1.0, 2.0)
+        # L_range = (1.0, 2.0)
 
     elif args.type == 'val':
         seed = env_seed + 1
@@ -381,16 +380,12 @@ def generate_dataset(args, env_seed: int = 501):
             x0_init_lb = jnp.array([2.0, 0.0]) 
             x0_init_ub = jnp.array([2.5, 0.0])
         control_mag = 0.0
-        C_range = (1.0, 2.0)
-        C_prime_range = (1.0, 2.0)
-        L_range = (1.0, 2.0)
-        # C_range = (1.0, 1.0)
-        # C_prime_range = (1.0, 1.0)
-        # L_range = (1.0, 1.0)
-        
-        # C_range = (0.75, 0.75)                    
-        # C_prime_range = (0.75, 0.75) 
-        # L_range = (0.75, 0.75)
+        # C_range = (1.5, 2.0)
+        # C_prime_range = (1.5, 2.0)
+        # L_range = (1.5, 2.0)
+        C_range = (1.0, 1.0)
+        C_prime_range = (1.0, 1.0)
+        L_range = (1.0, 1.0)
     
     key = jax.random.key(seed)
     env = circuit(**params, random_seed=seed)
@@ -451,7 +446,7 @@ def generate_dataset(args, env_seed: int = 501):
             os.makedirs(save_dir)
 
     save_path = os.path.join(os.path.abspath(save_dir),  
-        strftime(f'{args.type}_{args.n}_{args.steps}.pkl'))
+        strftime(f'{args.type}_{args.n}_{args.steps}_constant_params.pkl'))
     with open(save_path, 'wb') as f:
         pickle.dump(dataset, f)
 

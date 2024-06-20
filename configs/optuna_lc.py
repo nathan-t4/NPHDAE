@@ -14,20 +14,20 @@ def get_optuna_lc_cfg(name, trial) -> ml_collections.ConfigDict:
         'ckpt_every_steps': 5,
         'clear_cache_every_steps': 1,
     })
-    config.trial_name = f'{strftime("%m%d-%H%M")}_optuna_{config.n_train}'
+    config.trial_name = f'{strftime("%m%d-%H%M")}_constant_optuna_{config.n_train}'
 
     config.paths = ml_collections.ConfigDict({
         'dir': None,
         'ckpt_step': None,
-        'training_data_path': f'results/{config.system_name}_data/train_{config.n_train}_{config.steps}.pkl',
-        'evaluation_data_path': f'results/{config.system_name}_data/val_{config.n_val}_1500.pkl',
+        'training_data_path': f'results/{config.system_name}_data/train_{config.n_train}_{config.steps}_constant_params.pkl',
+        'evaluation_data_path': f'results/{config.system_name}_data/val_{config.n_val}_1500_constant_params.pkl',
     }) 
     config.training_params = ml_collections.ConfigDict({
         'net_name': 'GNS',
         'loss_function': 'state',
-        'num_epochs': int(15),
-        'min_epochs': int(15),
-        'batch_size': trial.suggest_int('batch_size', 1, 10),
+        'num_epochs': int(30),
+        'min_epochs': int(30),
+        'batch_size': trial.suggest_int('batch_size', 1, 100, log=True),
         'rollout_timesteps': 1500,
     })
     config.optimizer_params = ml_collections.ConfigDict({
@@ -35,12 +35,14 @@ def get_optuna_lc_cfg(name, trial) -> ml_collections.ConfigDict:
         'learning_rate': trial.suggest_float('learning_rate', 1e-4, 1e-2, log=True)
     })
     config.net_params = ml_collections.ConfigDict({
+        'dt': 0.01,
         'integration_method': 'euler', 
-        'num_mp_steps': trial.suggest_int('num_mp_steps', 1, 5),
+        'num_mp_steps': trial.suggest_int('num_mp_steps', 1, 2, log=True),
         'noise_std': trial.suggest_float('noise_std', 1e-5, 1e-3, log=True),
-        'latent_size': trial.suggest_int('latent_size', 4, 16, log=True),
+        'latent_size': trial.suggest_int('latent_size', 4, 8, log=True),
         'hidden_layers': 2,
-        'activation': trial.suggest_categorical('activation', ["relu", "swish"]),
+        'activation': trial.suggest_categorical('activation', ["relu", "swish", "squareplus"]),
+        'learn_nodes': False,
         'use_edge_model': True,
         'use_global_model': False,
         'layer_norm': True,

@@ -93,6 +93,8 @@ class Environment(object):
             key, subkey = jax.random.split(jax_key)
             control_input = self.control_policy(state, t, subkey)
 
+            self._define_dynamics()
+
             key, subkey = jax.random.split(key)
             f = lambda x, t : self.dynamics_function(x, t, control_input, subkey)
             

@@ -5,7 +5,6 @@
 """
 import optuna
 import jax
-from functools import partial
 from train_gnn import train
 from configs.optuna_lc import get_optuna_lc_cfg
 
@@ -17,7 +16,7 @@ def optimize(system_name):
         return loss
 
     study = optuna.create_study(
-        study_name='test',
+        study_name=f'{system_name}',
         direction='minimize',
         # storage=f'sqlite:///{system_name}/optuna_hparam_search.db',
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=15),
@@ -39,13 +38,13 @@ def optimize(system_name):
     fig.show()
 
 if __name__ == '__main__':
-    # from argparse import ArgumentParser
-    # parser = ArgumentParser()
-    # parser.add_argument('--name', type=str, required=True)
-    # args = parser.parse_args()
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('--system', type=str, required=True)
+    args = parser.parse_args()
 
-    # assert (args.name == 'LC1' or args.name == 'LC2'), 'Invalid name'
+    compatible_systems = ['LC1', 'LC2', 'CoupledLC']
 
-    # optimize(args.name)
+    assert args.system in compatible_systems, 'Invalid system name'
 
-    optimize('LC1')
+    optimize(args.system)

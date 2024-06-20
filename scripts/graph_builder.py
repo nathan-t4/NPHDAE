@@ -4,7 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import ml_collections
 from jax.tree_util import register_pytree_node_class
-from typing import Sequence
+from copy import deepcopy
+from functools import partial
+from typing import Sequence, Tuple
 from utils.graph_utils import add_edges
 
 class GraphBuilder():
@@ -20,6 +22,15 @@ class GraphBuilder():
         raise NotImplementedError
 
     def _load_data(self, path):
+        raise NotImplementedError
+    
+    def get_control(self, trajs, ts):
+        raise NotImplementedError
+    
+    def get_pred_data(self, graph):
+        raise NotImplementedError
+    
+    def get_exp_data(self, trajs, ts):
         raise NotImplementedError
 
     def _get_norm_stats(self):
@@ -207,6 +218,7 @@ class LCGraphBuilder(GraphBuilder):
         data = np.load(path, allow_pickle=True)
         config = data['config']
         state = data['state_trajectories']
+        u = data['control_inputs']
         self._num_trajectories = state.shape[0]
         self._num_timesteps = state.shape[1]
         self._num_states = state.shape[2]
@@ -220,7 +232,20 @@ class LCGraphBuilder(GraphBuilder):
         self._Phi = jnp.array(state[:,:,1])
         self._V = self._Q / self.system_params['C']
         self._H = 0.5 * (self._Q**2 / self.system_params['C'] + self._Phi**2 / self.system_params['L'])
+        self._control = jnp.array(u).squeeze()
+    
+    def get_control(self, trajs, ts):
+        return self._control[trajs, ts]
+    
+    def get_pred_data(self, graph):
+        pred_Q = (graph.edges[0,0]).squeeze()
+        pred_Phi = (graph.edges[1,0]).squeeze()
+        pred_H = (graph.globals).squeeze()
+        return (pred_Q, pred_Phi, pred_H)
 
+    def get_exp_data(self, trajs, ts):
+        return (self._Q[trajs, ts], self._Phi[trajs, ts], self._H[trajs, ts])
+    
     def _get_norm_stats(self):
         norm_stats = ml_collections.ConfigDict()
         norm_stats.Q = ml_collections.ConfigDict({
@@ -251,7 +276,7 @@ class LCGraphBuilder(GraphBuilder):
         Phi = state[1]
         V = Q / self.system_params['C']
         nodes = jnp.array([[0], [V]])
-        edges = jnp.array([[Q], [Phi]])
+        edges = jnp.array([[Q, 0], [Phi, 1]])
         global_context = None
 
         graph = jraph.GraphsTuple(
@@ -269,7 +294,7 @@ class LCGraphBuilder(GraphBuilder):
     @jax.jit
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V[traj_idx, t]]])
-        edges = jnp.array([[self._Q[traj_idx, t]], [self._Phi[traj_idx, t]]])
+        edges = jnp.array([[self._Q[traj_idx, t], 0], [self._Phi[traj_idx, t], 1]])
         global_context = None
 
         graph =  jraph.GraphsTuple(
@@ -336,16 +361,27 @@ class LC1GraphBuilder(GraphBuilder):
             'C_prime': self.C_prime,
             'L': self.L,
         }
-
         self._Q1 = jnp.array(state[:,:,0])
         self._Phi1 = jnp.array(state[:,:,1])
         self._Q3 = jnp.array(state[:,:,2])
-
         self._V2 = self._Q1 / self.C
         self._V3 = self._Q3 / self.C_prime
         self._H = 0.5 * (self._Q1**2 / self.C + self._Q3**2 / self.C_prime + self._Phi1**2 / self.L)
         self._control = jnp.array(u).squeeze()
 
+    def get_control(self, trajs, ts):
+        return self._control[trajs, ts]
+    
+    def get_pred_data(self, graph):
+        pred_Q1 = (graph.edges[0,0]).squeeze()
+        pred_Phi1 = (graph.edges[1,0]).squeeze()
+        pred_Q3 = (graph.edges[2,0]).squeeze()
+        pred_H = (graph.globals).squeeze()
+        return (pred_Q1, pred_Phi1, pred_Q3, pred_H) 
+
+    def get_exp_data(self, trajs, ts) -> Tuple:
+        return (self._Q1[trajs, ts], self._Phi1[trajs, ts], self._Q3[trajs, ts], self._H[trajs, ts])
+    
     def _get_norm_stats(self):
         norm_stats = ml_collections.ConfigDict()
         norm_stats.Q1 = ml_collections.ConfigDict({
@@ -414,7 +450,7 @@ class LC1GraphBuilder(GraphBuilder):
     
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]]])
-        edges = jnp.array([[self._Q1[traj_idx, t], 0], # TODO: add a one-hot encoding to label edge types
+        edges = jnp.array([[self._Q1[traj_idx, t], 0], 
                            [self._Phi1[traj_idx, t], 1], 
                            [self._Q3[traj_idx, t], 0]])
         global_context = None
@@ -430,7 +466,6 @@ class LC1GraphBuilder(GraphBuilder):
         
         return graph
 
-    @jax.jit
     def get_graph_batch(self, traj_idxs, t0s) -> Sequence[jraph.GraphsTuple]:
         def f(carry, idxs):
             return carry, self.get_graph(*idxs)
@@ -490,13 +525,24 @@ class LC2GraphBuilder(GraphBuilder):
 
         self._Q = jnp.array(state[:,:,0]).reshape(self._num_trajectories, self._num_timesteps)
         self._Phi = jnp.array(state[:,:,1]).reshape(self._num_trajectories, self._num_timesteps)
-        # self._I = self._Phi / self.L
 
         self._control = jnp.array(u)
 
         self._Vc = self._Q / self.C
         self._H = 0.5 * (self._Q**2 / self.C + self._Phi**2 / self.L)
 
+    def get_control(self, trajs, ts):
+        return self._control[trajs, ts]
+    
+    def get_pred_data(self, graph):
+        pred_Q = (graph.edges[0,0]).squeeze()
+        pred_Phi = (graph.edges[1,0]).squeeze()
+        pred_H = (graph.globals).squeeze()
+        return (pred_Q, pred_Phi, pred_H)
+    
+    def get_exp_data(self, trajs, ts):
+        return (self._Q[trajs, ts], self._Phi[trajs, ts], self._H[trajs, ts])
+    
     def _get_norm_stats(self):
         norm_stats = ml_collections.ConfigDict()
         norm_stats.Q = ml_collections.ConfigDict({
@@ -604,6 +650,218 @@ class LC2GraphBuilder(GraphBuilder):
         obj._setup_graph_params()
         return obj
 
+# @register_pytree_node_class # TODO
+class AltenatorGraphBuilder(GraphBuilder):
+    def __init__(self, path):
+        super().__init__(path, add_undirected_edges=False, add_self_loops=False)
+
+    def _load_data(self, path):
+        data = np.load(path, allow_pickle=True)
+        config = data['config']
+        state = data['state_trajectories']
+        self._num_trajectories = state.shape[0]
+        self._num_timesteps = state.shape[1]
+        self._num_states = state.shape[2]
+        self._dt = config['dt']
+
+        params = ('rm', 'rr', 'd', 'M', 'L_aa0', 'L_ab0', 'L_afd', 'L_akd', 'L_akq', 'L_ffd', 'L_kkd', 'L_kkq')
+
+        self.system_params = {f'{p}': jnp.array(config[f'{p}']).reshape(-1,1).reshape(-1,1) for p in params}
+
+        self._inductances = deepcopy(self.system_params)
+        self._inductances.pop('rm')
+        self._inductances.pop('rr')
+        self._inductances.pop('d')
+        self._inductances.pop('M')
+
+        self._control = jnp.array(data['control_inputs'])
+
+        self._PhiS = jnp.array(state[:,:,0:3])
+        self._PhiR = jnp.array(state[:,:,3:6])
+        self._p = jnp.array(state[:,:,6])
+        self._theta = jnp.array(state[:,:,7])
+
+        def get_L(_, t, inductances):
+            L_aa0, L_ab0, L_afd, L_akd, L_akq, L_ffd, L_kkd, L_kkq = inductances
+            L_ess = jnp.array([[L_aa0, -L_ab0, -L_ab0],
+                            [-L_ab0, L_aa0, -L_ab0],
+                            [-L_ab0, -L_ab0, L_aa0]])
+    
+            L_ers = jnp.array([
+                [L_afd * jnp.cos(t), L_akd * jnp.cos(t), -L_akq * jnp.sin(t)],
+                [L_afd * jnp.cos(t - 2 * jnp.pi / 3), L_akd * jnp.cos(t - 2 * jnp.pi / 3), -L_akq * jnp.sin(t - 2 * jnp.pi / 3)],
+                [L_afd * jnp.cos(t + 2 * jnp.pi / 3), L_akd * jnp.cos(t + 2 * jnp.pi / 3), -L_akq * jnp.sin(t + 2 * jnp.pi / 3)]
+            ])
+
+            L_err = jnp.array([[L_ffd, L_akd, 0],
+                               [L_akd, L_kkd, 0],
+                               [0, 0, L_kkq]])
+            
+            L = jnp.block([[L_ess, L_ers], # Inductance matrix
+                           [L_ers.T, L_err]])
+            
+            return _, L
+
+        vmap_get_L = jax.vmap(partial(get_L, inductances=self._inductances), in_axes=(None,0))
+
+        self._Ls = jax.lax.scan(vmap_get_L, None, self._theta)
+
+        # self._Ls = jax.vmap(get_L, in_axes=(None, 0))(self._inductances, self._theta)
+
+        self._H = 0.5 * (self._PhiS.T @ jnp.linalg.inv(self._Ls) @ self._PhiS) + 0.5 * (self._p ** 2 / self.system_params['M'])
+
+    def get_control(self, trajs, ts):
+        return self._control[trajs, ts]
+    
+    def get_pred_data(self, graph):
+        pred_PhiS = (graph.edges[0:3,0]).squeeze()
+        pred_PhiR = (graph.edges[3:6,0]).squeeze()
+        pred_p = (graph.edges[6,0]).squeeze()
+        pred_theta = (graph.edges[7,0]).squeeze()
+        pred_H = (graph.globals).squeeze()
+        return (pred_PhiS, pred_PhiR, pred_p, pred_theta, pred_H)
+    
+    def get_exp_data(self, trajs, ts):
+        return (self._PhiS[trajs, ts], self._PhiR[trajs, ts], self._p[trajs, ts], self._theta[trajs, ts], self._H[trajs, ts])
+    
+    def _get_norm_stats(self):
+        norm_stats = ml_collections.ConfigDict()
+        norm_stats.Q1 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._Q1),
+            'std': jnp.std(self._Q1),
+        })
+        
+        norm_stats.Phi1 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._Phi1),
+            'std': jnp.std(self._Phi1),
+        })
+
+        norm_stats.V2 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._V2),
+            'std': jnp.std(self._V2),
+        })
+
+        norm_stats.Q2 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._Q2),
+            'std': jnp.std(self._Q2),
+        })
+        
+        norm_stats.Phi2 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._Phi2),
+            'std': jnp.std(self._Phi2),
+        })
+
+        norm_stats.V4 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._V4),
+            'std': jnp.std(self._V4),
+        })
+
+        norm_stats.Q3 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._Q3),
+            'std': jnp.std(self._Q3),
+        })
+
+        norm_stats.V3 = ml_collections.ConfigDict({
+            'mean': jnp.mean(self._V3),
+            'std': jnp.std(self._V3),
+        })
+        
+        self._norm_stats = norm_stats
+    
+    def _setup_graph_params(self):
+        self.n_node = jnp.array([3])
+        self.n_edge = jnp.array([8])
+        self.senders = jnp.array([0, 0, 0, 0, 0, 1, 1, 1])
+        self.receivers = jnp.array([1, 1, 1, 1, 1, 2, 2, 2])
+
+    def get_graph_from_state(self, state, control, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None):
+        PhiSa, PhiSb, PhiSc = state[:3]
+        PhiRf, PhiRkd, PhiRkq = state[3:6]
+        p = state[6]
+        theta = state[7]
+        nodes = nodes
+        if set_ground_and_control:
+            nodes = jnp.concatenate((jnp.array([[0]]), nodes[1:]), axis=0).reshape(-1,1)
+
+        edges = jnp.array([[PhiSa, 0], [PhiSb, 0], [PhiSc, 0], [PhiRf, 0], [PhiRkd, 0], [PhiRkq, 0], [p, 1], [theta, 2]])
+        global_context = globals
+        n_node = jnp.array([3])
+        n_edge = jnp.array([8])
+        senders = jnp.array([0, 0, 0, 0, 0, 1, 1, 1])
+        receivers = jnp.array([1, 1, 1, 1, 1, 2, 2, 2])
+
+        graph = jraph.GraphsTuple(
+            nodes=nodes,
+            edges=edges,
+            globals=global_context,
+            n_node=n_node,
+            n_edge=n_edge,
+            senders=senders,
+            receivers=receivers,
+        )
+
+        return graph
+    
+    def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
+        nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]], [self._V4[traj_idx, t]]])
+        edges = jnp.array([[self._PhiS[traj_idx, t, 0], 0],
+                           [self._PhiS[traj_idx, t, 1], 0],
+                           [self._PhiS[traj_idx, t, 2], 0],
+                           [self._p[traj_idx, t], 1],
+                           [self._theta[traj_idx, t], 2],
+                           [self._PhiR[traj_idx, t, 0], 0],
+                           [self._PhiR[traj_idx, t, 1], 0],
+                           [self._PhiR[traj_idx, t, 2], 0]])
+        global_context = None
+
+        graph =  jraph.GraphsTuple(
+                    nodes=nodes,
+                    edges=edges,
+                    senders=self.senders,
+                    receivers=self.receivers,
+                    n_node=self.n_node,
+                    n_edge=self.n_edge,
+                    globals=global_context)
+        
+        return graph
+
+    @jax.jit
+    def get_graph_batch(self, traj_idxs, t0s) -> Sequence[jraph.GraphsTuple]:
+        def f(carry, idxs):
+            return carry, self.get_graph(*idxs)
+        
+        _, graphs = jax.lax.scan(f, None, (traj_idxs, t0s))
+        
+        return graphs
+    
+    def tree_flatten(self):
+        children = ()
+        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._PhiS, self._PhiR, self._p, self._theta, self._H, self._control, self._norm_stats)
+        return (children, aux_data)
+    
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        del children
+        obj = object.__new__(CoupledLCGraphBuilder)
+        obj._dt                   = aux_data[0]
+        obj.system_params         = aux_data[1]
+        obj._num_trajectories     = aux_data[2]
+        obj._num_timesteps        = aux_data[3]
+        obj._num_states           = aux_data[4]
+        obj._Q1                   = aux_data[5]
+        obj._Phi1                 = aux_data[6]
+        obj._V2                   = aux_data[7]
+        obj._Q2                   = aux_data[8]
+        obj._Phi2                 = aux_data[9]
+        obj._V4                   = aux_data[10]
+        obj._Q3                   = aux_data[11]
+        obj._V3                   = aux_data[12]
+        obj._H                    = aux_data[13]
+        obj._control              = aux_data[14]
+        obj._norm_stats           = aux_data[15]
+        obj._setup_graph_params()
+        return obj
+    
 @register_pytree_node_class
 class CoupledLCGraphBuilder(GraphBuilder):
     def __init__(self, path):
@@ -637,6 +895,21 @@ class CoupledLCGraphBuilder(GraphBuilder):
 
         self._H = 0.5 * (self._Q1 ** 2 / self.system_params['C'] + self._Q2 ** 2 / self.system_params['C'] + self._Q3 ** 2 / self.system_params['C_prime'] + self._Phi1 ** 2 / self.system_params['L'] + self._Phi2 ** 2 / self.system_params['L'])
 
+    def get_control(self, trajs, ts):
+        return self._control[trajs, ts]
+    
+    def get_pred_data(self, graph):
+        pred_Q1 = (graph.edges[0,0]).squeeze()
+        pred_Phi1 = (graph.edges[1,0]).squeeze()
+        pred_Q3 = (graph.edges[2,0]).squeeze()
+        pred_Q2 = (graph.edges[3,0]).squeeze()
+        pred_Phi2 = (graph.edges[4,0]).squeeze()
+        pred_H = (graph.globals).squeeze()
+        return (pred_Q1, pred_Phi1, pred_Q3, pred_Q2, pred_Phi2, pred_H)
+    
+    def get_exp_data(self, trajs, ts):
+        return (self._Q1[trajs, ts], self._Phi1[trajs, ts], self._Q3[trajs, ts], self._Q2[trajs, ts], self._Phi2[trajs, ts], self._H[trajs, ts])
+    
     def _get_norm_stats(self):
         norm_stats = ml_collections.ConfigDict()
         norm_stats.Q1 = ml_collections.ConfigDict({
@@ -687,8 +960,35 @@ class CoupledLCGraphBuilder(GraphBuilder):
         self.senders = jnp.array([0, 1, 0, 3, 0])
         self.receivers = jnp.array([1, 2, 2, 2, 3])
 
-    def get_graph_from_state(self, state, system_params=None, set_nodes=False):
-        pass
+    def get_graph_from_state(self, state, control, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None):
+        Q1, Phi1, Q3, Q2, Phi2 = state
+        nodes = nodes
+        if set_nodes:
+            V2 = Q1 / system_params['C']
+            V3 = Q3 / system_params['C_prime']
+            V4 = Q2 / system_params['C']
+            nodes = jnp.array([[0], [V2], [V3], [V4]])
+        elif set_ground_and_control:
+            nodes = jnp.concatenate((jnp.array([[0]]), nodes[1:]), axis=0).reshape(-1,1)
+
+        edges = jnp.array([[Q1, 0], [Phi1, 1], [Q3, 0], [Q2, 0], [Phi2, 1]])
+        global_context = globals
+        n_node = jnp.array([4])
+        n_edge = jnp.array([5])
+        senders = jnp.array([0, 1, 0, 3, 0])
+        receivers = jnp.array([1, 2, 2, 2, 3])
+
+        graph = jraph.GraphsTuple(
+            nodes=nodes,
+            edges=edges,
+            globals=global_context,
+            n_node=n_node,
+            n_edge=n_edge,
+            senders=senders,
+            receivers=receivers,
+        )
+
+        return graph
     
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array([[0], [self._V2[traj_idx, t]], [self._V3[traj_idx, t]], [self._V4[traj_idx, t]]])
@@ -721,7 +1021,7 @@ class CoupledLCGraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._Q1, self._Phi1, self._V2, self._Q2, self._Phi2, self._V4, self._Q3, self._V3, self._H, self._control, self._norm_stats)
+        aux_data = (self._dt, self.system_params, self._num_trajectories, self._num_timesteps, self._num_states, self._H, self._control, self._norm_stats)
         return (children, aux_data)
     
     @classmethod

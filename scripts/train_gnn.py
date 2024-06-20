@@ -3,7 +3,6 @@ import jax
 import optax
 import json
 
-import matplotlib.pyplot as plt
 import jax.numpy as jnp
 
 import ml_collections
@@ -25,7 +24,8 @@ from utils.data_utils import *
 from utils.jax_utils import *
 from utils.gnn_utils import *
 
-from configs.lc_circuit import get_lc_config
+from configs.lc1 import get_lc1_config
+from configs.coupled_lc import get_coupled_lc_config
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
 
@@ -90,84 +90,28 @@ def eval(config: ml_collections.ConfigDict):
         t0_idxs = tf_idxs - eval_net.num_mp_steps
         ts = tf_idxs * eval_net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
+        controls = eval_gb.get_control(traj_idx, t0_idxs)
+        exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
+        get_pred_data = eval_gb.get_pred_data
 
         if name == 'MassSpring':
             controls = eval_gb._control[traj_idx, t0_idxs]
             exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
             exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
-        elif name == 'LC':
-            controls = tf_idxs - eval_net.num_mp_steps # used as 'length' for scan loop
-            exp_Q = eval_gb._Q[traj_idx, tf_idxs]
-            exp_Phi = eval_gb._Phi[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q, exp_Phi, exp_H)
-        elif name == 'LC1':
-            controls = eval_gb._control[traj_idx, t0_idxs]
-            exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
-            exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
-            exp_Q3 = eval_gb._Q3[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q1, exp_Phi1, exp_Q3, exp_H)
-        elif name == 'LC2':
-            controls = eval_gb._control[traj_idx, t0_idxs]
-            exp_Phi = eval_gb._Phi[traj_idx, tf_idxs]
-            exp_Q = eval_gb._Q[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q, exp_Phi, exp_H)
-        elif name == 'CoupledLC':
-            controls = t0_idxs # used as 'length' for scan loop
-            exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
-            exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
-            exp_Q3 = eval_gb._Q3[traj_idx, tf_idxs]
-            exp_Q2 = eval_gb._Q2[traj_idx, tf_idxs]
-            exp_Phi2 = eval_gb._Phi2[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q1, exp_Phi1, exp_Q3, exp_Q2, exp_Phi2, exp_H)
         
         def forward_pass(graph, control):
             if name == 'MassSpring':
-                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(0))
+                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(config.seed))
                 pred_qs = (graph.nodes[:,0]).squeeze()
                 pred_accs = (graph.nodes[:,-1]).squeeze()
                 graph = graph._replace(nodes=graph.nodes[:,:-1]) # remove acceleration  
                 return graph, (pred_qs, pred_accs)
             
-            elif name == 'LC':
-                graph = eval_state.apply_fn(eval_state.params, graph, None, jax.random.key(0))
-                pred_Q = (graph.edges[0]).squeeze()
-                pred_Phi = (graph.edges[1]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q, pred_Phi, pred_H)
-            
-            elif name == 'LC1':
-                graph = eval_state.apply_fn(eval_state.params, traj_idx, graph, control, jax.random.key(0))
-                pred_Q1 = (graph.edges[0]).squeeze()
-                pred_Phi1 = (graph.edges[1]).squeeze()
-                pred_Q3 = (graph.edges[2]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_H)
-            
-            elif name == 'LC2':
-                graph = eval_state.apply_fn(eval_state.params, traj_idx, graph, control, jax.random.key(0))
-                pred_Q = (graph.edges[0]).squeeze()
-                pred_Phi = (graph.edges[1]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q, pred_Phi, pred_H)
-            
-            elif name == 'CoupledLC':
-                graph = eval_state.apply_fn(eval_state.params, traj_idx, graph, None, jax.random.key(0))
-                pred_Q1 = (graph.edges[0]).squeeze()
-                pred_Phi1 = (graph.edges[1]).squeeze()
-                pred_Q3 = (graph.edges[2]).squeeze()
-                pred_Q2 = (graph.edges[3]).squeeze()
-                pred_Phi2 = (graph.edges[4]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_Q2, pred_Phi2, pred_H)
-            
+            graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(config.seed))
+            pred_data = get_pred_data(graph)
+            graph = graph._replace(globals=None)
+            return graph, pred_data
+
         start = default_timer()
         final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
         end = default_timer()
@@ -244,7 +188,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     
     restore = True if paths.dir else False
 
-    if not paths.dir:
+    if paths.dir is None:
         config.paths.dir = os.path.join(
             os.curdir, 
             f'results/{training_params.net_name}/{config.system_name}/{config.trial_name}')
@@ -267,43 +211,29 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     graph_builder = create_graph_builder(name)
     train_gb = graph_builder(paths.training_data_path)
     eval_gb = graph_builder(paths.evaluation_data_path)
-
+    net_params.training = True
+    net_params.graph_from_state = train_gb.get_graph_from_state
+    net_params.include_idxs = None
+    net_params.set_edge_idxs = set_edge_idxs(name)
     t0 = 0
+    J, R, g = get_pH_matrices(name)
+    net_params.J = J
+    net_params.g = g
+
     if name == 'MassSpring':
         net_params.norm_stats = train_gb._norm_stats
         t0 = net_params.vel_history
         init_control = train_gb._control[0, t0, :]
-    elif name == 'LC1':
-        net_params.graph_from_state = train_gb.get_graph_from_state
-        net_params.edge_idxs = np.array([[0,2]])
-        net_params.J = jnp.array([[0, 1, 0],
-                                  [-1, 0, 1],
-                                  [0, -1, 0]])
-        net_params.g = jnp.array([[0, 0, 0],
-                                  [0, 0, 0],
-                                  [0, 0, -1]])
-    elif name == 'LC2':
-        net_params.graph_from_state = train_gb.get_graph_from_state
-        net_params.edge_idxs = np.array([[0]])
-        net_params.J = jnp.array([[0, 1],
-                                  [-1, 0]])
-        # net_params.g = jnp.array([[0, 0],
-        #                           [0,-1]]) 
-        net_params.g = jnp.array([[0, 0],
-                                  [0, 0]]) # TODO: make g all zeros for now
-    init_control = train_gb._control[0, t0]
+
+    init_control = train_gb.get_control(0, t0)
     # Initialize training network
     init_graph = train_gb.get_graph(0, t0)
     net = create_net(name, training_params, net_params)
-    if name == 'MassSpring' or name == 'LC1' or name == 'LC2':
-        params = net.init(init_rng, init_graph, init_control, net_rng)
-        batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, None))
-    else:
-        params = net.init(init_rng, 0, init_graph, init_control, net_rng)
-        batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, 0, None))
+    params = net.init(init_rng, init_graph, init_control, net_rng)
+    batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, None))
 
     print(f"Number of parameters {num_parameters(params)}")
-    time_offset = 1
+    time_offset = net.T
 
     def random_batch(batch_size: int, min: int, max: int, rng: jax.Array):
         """ Return random permutation of jnp.arange(min, max) in batches of batch_size """
@@ -335,7 +265,6 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 loss = int(1e6) * (optax.l2_loss(predictions=pos_predictions, targets=batch_pos).mean() \
                      + optax.l2_loss(predictions=vel_predictions, targets=batch_vel).mean())
             elif name == 'LC' and loss_function == 'state':
-                """ l2_loss([Q_hat, Flux_hat], [Q, Flux])"""
                 traj_idx = jnp.array(batch_data[0])
                 Q = jnp.array(batch_data[1]).reshape(1,-1)
                 Phi = jnp.array(batch_data[2]).reshape(1,-1)
@@ -349,95 +278,45 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 Q1 = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi1 = jnp.array(batch_data[2]).reshape(-1,1)
                 Q3 = jnp.array(batch_data[3]).reshape(-1,1)
-                V2 = jnp.array(batch_data[4]).reshape(-1,1)
-                V3 = jnp.array(batch_data[5]).reshape(-1,1)
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 predictions_e = pred_graphs.edges[:,:,0].squeeze()
-                targets_e = jnp.concatenate((Q1, Phi1, Q3), axis=1)
-                predictions_n = pred_graphs.nodes[:,1:].squeeze() # excluding ground node
-                targets_n = jnp.concatenate((V2, V3), axis=1).squeeze()
-                loss_e = optax.l2_loss(predictions_e, targets_e)
-                loss_n = optax.l2_loss(predictions_n, targets_n)
-                # loss = jnp.sum(loss_e)
+                targets_e = jnp.concatenate((Q1, Phi1, Q3), axis=1).squeeze()
                 loss = optax.squared_error(predictions_e, targets_e).mean() # MSE
             elif name == 'LC2' and loss_function == 'state':
                 batch_control = jnp.array(batch_data[0])
                 Q = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi = jnp.array(batch_data[2]).reshape(-1,1)
-                Vc = jnp.array(batch_data[3]).reshape(-1,1)
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 predictions_e = pred_graphs.edges[:,:,0].squeeze()
-                # predictions_n = pred_graphs.nodes[:,1].squeeze()
                 targets_e = jnp.concatenate((Q, Phi),axis=1).squeeze() # order is the same as LC2 graph edges
-                # targets_n = Vc.squeeze()
-                # loss_e = optax.l2_loss(predictions_e, targets_e)
-                # loss_n = optax.l2_loss(predictions_n, targets_n)
-                # loss = jnp.sum(loss_e)
                 loss = optax.squared_error(predictions_e, targets_e).mean() # MSE
             elif name == 'CoupledLC' and loss_function == 'state':
-                traj_idx = jnp.array(batch_data[0])
+                batch_control = jnp.array(batch_data[0])
                 Q1 = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi1 = jnp.array(batch_data[2]).reshape(-1,1)
                 Q3 = jnp.array(batch_data[3]).reshape(-1,1)
                 Q2 = jnp.array(batch_data[4]).reshape(-1,1)
                 Phi2 = jnp.array(batch_data[5]).reshape(-1,1)
-                V2 = jnp.array(batch_data[6]).reshape(-1,1)
-                V3 = jnp.array(batch_data[7]).reshape(-1,1)
-                V4 = jnp.array(batch_data[8]).reshape(-1,1)
-                pred_graphs = state.apply_fn(params, traj_idx, batch_graphs, None, net_rng, rngs={'dropout': dropout_rng})
-                predictions_e = pred_graphs.edges.squeeze()
+                pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
+                predictions_e = pred_graphs.edges[:,:,0].squeeze()
                 targets_e = jnp.concatenate((Q1, Phi1, Q3, Q2, Phi2),axis=1).squeeze()
-                # loss_e = optax.l2_loss(predictions_e, targets_e)
                 loss = optax.squared_error(predictions_e, targets_e).mean()
-                # predictions_n = pred_graphs.nodes[:,1:].squeeze()
-                # targets_n = jnp.concatenate((V2, V3, V4),axis=1).squeeze()
-                # loss_n = optax.l2_loss(predictions_n, targets_n)
-                # loss = jnp.sum(loss_e) + jnp.sum(loss_n)
-            elif name == 'LC1' and loss_function == 'hamiltonian':
-                traj_idx = jnp.array(batch_data[0])
-                batch_control = jnp.array(batch_data[1])
-                H = jnp.array(batch_data[2])
-                Q1 = jnp.array(batch_data[3]).reshape(-1,1)
-                Phi1 = jnp.array(batch_data[4]).reshape(-1,1)
-                Q3 = jnp.array(batch_data[5]).reshape(-1,1)
-                V2 = jnp.array(batch_data[6]).reshape(-1,1)
-                V3 = jnp.array(batch_data[7]).reshape(-1,1)
-                pred_graphs = state.apply_fn(params, traj_idx, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
-                predictions_H = pred_graphs.globals
-                targets_H = H
-                predictions_E = pred_graphs.edges[:,:-1].squeeze() # excluding self loop
-                targets_E = jnp.concatenate((Q1, Phi1, Q3), axis=1)
-                predictions_V = pred_graphs.nodes[:,1:].squeeze()
-                targets_V = jnp.concatenate((V2, V3),axis=1) # excluding ground node
-                loss_H = optax.l2_loss(predictions_H, targets_H)
-                loss_E = optax.l2_loss(predictions_E, targets_E)
-                loss_V = optax.l2_loss(predictions_V, targets_V)
-                loss = jnp.sum(loss_H) + jnp.sum(loss_E) + 0.1 * jnp.sum(loss_V)
             return loss
 
         def train_batch(state, trajs, t0s):
             tfs = t0s + time_offset
+            batch_control = train_gb.get_control(trajs, t0s)
+            batch_exp_data = train_gb.get_exp_data(trajs, tfs)
+            batch_data = (batch_control, *batch_exp_data)            
+
             if name == 'MassSpring' and loss_function == 'acceleration':
-                batch_control = train_gb._control[trajs, t0s]
                 batch_accs = train_gb._accs[trajs, tfs]
                 batch_data = (batch_accs, batch_control)
             elif name == 'MassSpring' and loss_function == 'state':
-                batch_control = train_gb._control[trajs, t0s]
                 batch_pos = train_gb._qs[trajs, tfs]
                 batch_vel = train_gb._vs[trajs, tfs]
                 batch_data = (batch_pos, batch_vel, batch_control)
-            elif name == 'LC' and loss_function == 'state':
-                batch_data = (trajs, train_gb._Q[trajs, tfs], train_gb._Phi[trajs, tfs])
-            elif name == 'LC1' and loss_function == 'state':
-                batch_data = (train_gb._control[trajs, t0s], train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], train_gb._Q3[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs])
-            elif name == 'LC2' and loss_function == 'state':
-                batch_data = (train_gb._control[trajs, t0s], train_gb._Q[trajs, tfs], train_gb._Phi[trajs, tfs], train_gb._Vc[trajs, tfs])
-            elif name == 'CoupledLC' and loss_function == 'state':
-                batch_data = (trajs, train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], 
-                              train_gb._Q3[trajs, tfs], train_gb._Q2[trajs, tfs], train_gb._Phi2[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs], train_gb._V4[trajs, tfs])
-            elif name == 'LC1' and loss_function == 'hamiltonian':
-                batch_data = (trajs, train_gb._control[trajs, t0s], train_gb._H[trajs, tfs], train_gb._Q1[trajs, tfs], train_gb._Phi1[trajs, tfs], train_gb._Q3[trajs, tfs], train_gb._V2[trajs, tfs], train_gb._V3[trajs, tfs]) 
-            
+
             graphs = train_gb.get_graph_batch(trajs, t0s)
             loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data)
             state = state.apply_gradients(grads=grads)
@@ -450,87 +329,32 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
     def rollout(eval_state: TrainState, traj_idx: int, ti: int = 0):
-        tf_idxs = (ti + jnp.arange(1, (training_params.rollout_timesteps + 1)))
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + time_offset, max=eval_gb._num_timesteps))
-        t0_idxs = tf_idxs - ti
+        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(training_params.rollout_timesteps + 1, net.T))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, net.T))) * net.T
+        t0_idxs = tf_idxs - time_offset
         ts = tf_idxs * net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
+        controls = eval_gb.get_control(traj_idx, t0_idxs)
+        exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
+        get_pred_data = eval_gb.get_pred_data
 
         if name == 'MassSpring':
             controls = eval_gb._control[traj_idx, t0_idxs]
             exp_qs_buffer = eval_gb._qs[traj_idx, tf_idxs]
             exp_as_buffer = eval_gb._accs[traj_idx, tf_idxs]
-        elif name == 'LC':
-            controls = t0_idxs # used as 'length' for scan loop
-            exp_Q = eval_gb._Q[traj_idx, tf_idxs]
-            exp_Phi = eval_gb._Phi[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q, exp_Phi, exp_H)
-        elif name == 'LC1':
-            controls = eval_gb._control[traj_idx, t0_idxs]
-            exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
-            exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
-            exp_Q3 = eval_gb._Q3[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q1, exp_Phi1, exp_Q3, exp_H)    
-        elif name == 'LC2':
-            controls = eval_gb._control[traj_idx, t0_idxs]
-            exp_Phi = eval_gb._Phi[traj_idx, tf_idxs]
-            exp_Q = eval_gb._Q[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q, exp_Phi, exp_H)
-        elif name == 'CoupledLC':
-            controls = t0_idxs
-            exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
-            exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
-            exp_Q2 = eval_gb._Q2[traj_idx, tf_idxs]
-            exp_Phi2 = eval_gb._Phi2[traj_idx, tf_idxs]
-            exp_H = eval_gb._H[traj_idx, tf_idxs]
-            exp_data = (exp_Q1, exp_Phi1, exp_Q2, exp_Phi2, exp_H)
         
         def forward_pass(graph, control):
             if name == 'MassSpring':
-                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(0))
+                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(config.seed))
                 pred_qs = (graph.nodes[:,0]).squeeze()
                 pred_accs = (graph.nodes[:,-1]).squeeze()
                 graph = graph._replace(nodes=graph.nodes[:,:-1]) # remove acceleration  
                 return graph, (pred_qs, pred_accs)
             
-            elif name == 'LC':
-                graph = eval_state.apply_fn(eval_state.params, jnp.array(traj_idx), graph, None, jax.random.key(0))
-                pred_Q = (graph.edges[0]).squeeze()
-                pred_Phi = (graph.edges[1]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q, pred_Phi, pred_H)
-            
-            elif name == 'LC1':
-                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(0))
-                pred_H = (graph.globals).squeeze()
-                pred_Q1 = (graph.edges[0,0]).squeeze()
-                pred_Phi1 = (graph.edges[1,0]).squeeze()
-                pred_Q3 = (graph.edges[2,0]).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_H) 
-            
-            elif name == 'LC2':
-                graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(0))
-                pred_Q = (graph.edges[0,0]).squeeze()
-                pred_Phi = (graph.edges[1,0]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q, pred_Phi, pred_H)
-            
-            elif name == 'CoupledLC':
-                graph = eval_state.apply_fn(eval_state.params, jnp.array(traj_idx), graph, None, jax.random.key(0))
-                pred_Q1 = (graph.edges[0]).squeeze()
-                pred_Phi1 = (graph.edges[1]).squeeze()
-                pred_Q3 = (graph.edges[2]).squeeze()
-                pred_Q2 = (graph.edges[3]).squeeze()
-                pred_Phi2 = (graph.edges[4]).squeeze()
-                pred_H = (graph.globals).squeeze()
-                graph = graph._replace(globals=None)
-                return graph, (pred_Q1, pred_Phi1, pred_Q3, pred_Q2, pred_Phi2, pred_H)
+            graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(config.seed))
+            pred_data = get_pred_data(graph)
+            graph = graph._replace(globals=None)
+            return graph, pred_data
 
         final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
         
@@ -543,7 +367,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 'b': eval_gb._b[traj_idx],
             }
             return ts, np.array(pred_data), np.array((exp_qs_buffer, exp_as_buffer)), aux_data, EvalMetrics.single_from_model_output(loss=rollout_loss)
-        elif 'LC' in name:
+        elif 'LC' in name or 'Alternator' in name:
             losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
             eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
             aux_data = {
@@ -589,7 +413,6 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     ts_size = (train_gb._num_timesteps - t0)
     trajs_size = train_gb._num_trajectories
     steps_per_epoch = int((ts_size * trajs_size) // (training_params.batch_size ** 2))
-    train_fn = train_epoch
 
     # Setup training epochs
     init_epoch = state.step // steps_per_epoch + 1
@@ -603,7 +426,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
         rng, train_rng = jax.random.split(rng)
-        state, metrics_update = train_fn(state, training_params.batch_size, train_rng) 
+        state, metrics_update = train_epoch(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
             train_metrics = metrics_update
         else:
@@ -618,14 +441,13 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
             eval_state = eval_state.replace(params=state.params)
 
             with report_progress.timed('eval'):
-                graph = train_gb.get_graph(0, 0)
                 rollout_error_sum = 0
                 error_sums = [0] * train_gb._num_states
                 for i in range(2): # TODO: was eval_gb._num_trajectories
                     if name == 'MassSpring':
                         ts, pred_data, exp_data, aux_data, eval_metrics = rollout(eval_state, traj_idx=i)
                         rollout_error_sum += eval_metrics.compute()['loss']   
-                    elif 'LC' in name:
+                    elif 'LC' in name or name == 'Alternator':
                         ts, pred_data, exp_data, aux_data, eval_metrics = rollout(eval_state, traj_idx=i)
                         for j in range(len(error_sums)):
                             error_sums[j] += eval_metrics[j].compute()['loss']
@@ -659,7 +481,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                         J = J_triu - J_triu.T
                         print('upper triangular of J: ', J)
 
-                if epoch > training_params.min_epochs: # train at least for 'min_epochs' epochs
+                if epoch > training_params.min_epochs: # train for at least 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_error)
                     if early_stop.should_stop:
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')
@@ -735,12 +557,26 @@ if __name__ == '__main__':
     parser.add_argument('--dir', type=str, default=None)
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--ckpt_step', type=int, default=None)
-    parser.add_argument('--system', type=str, default='lc')
+    parser.add_argument('--system', type=str, required=True)
     args = parser.parse_args()
 
-    config = get_lc_config(args)
+    # args = ml_collections.ConfigDict()
+    # args.system = 'LC1'
+    # args.eval = False
+    # args.ckpt_step = None
+    # args.dir = None
+
+    config = None
+    if args.system == 'LC1':
+        config = get_lc1_config(args)
+    elif args.system == 'CoupledLC':
+        config = get_coupled_lc_config(args)
+    else:
+        raise NotImplementedError(f'No config for system {args.system}')
 
     if args.eval:
         eval(config)
     else:
         train(config)
+
+    

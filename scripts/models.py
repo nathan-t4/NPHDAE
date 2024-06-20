@@ -12,6 +12,28 @@ from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
 
+@jax.jit
+def squareplus(x: Array, b: Array = 4) -> Array:
+    r"""Squareplus activation function.
+
+    From Flax source code
+
+    Computes the element-wise function
+
+    .. math::
+        \mathrm{squareplus}(x) = \frac{x + \sqrt{x^2 + b}}{2}
+
+    as described in https://arxiv.org/abs/2112.11687.
+
+    Args:
+        x : input array
+        b : smoothness parameter
+    """
+    x = jnp.asarray(x)
+    b = jnp.asarray(b)
+    y = x + jnp.sqrt(jnp.square(x) + b)
+    return y / 2
+
 class SineLayer(nn.Module):
     # TODO: for testing purposes
     param_dtype: Dtype = jnp.float32
@@ -39,8 +61,10 @@ class MLP(nn.Module):
             activation_fn = nn.relu
         elif self.activation == 'sin':
             activation_fn = SineLayer()
-        else:
+        elif self.activation == 'softplus':
             activation_fn = nn.softplus
+        elif self.activation == 'squareplus':
+            activation_fn = squareplus
 
         for i, size in enumerate(self.feature_sizes):
             x = nn.Dense(features=size)(x)
@@ -62,11 +86,11 @@ class vmapMLP(nn.Module):
     def __call__(self, xs):
         vmapMLP = nn.vmap(MLP, variable_axes={'params': None}, split_rngs={'params': False}, in_axes=0) 
         return vmapMLP(feature_sizes=self.feature_sizes,
-                         activation=self.activation,
-                         dropout_rate=self.dropout_rate,
-                         deterministic=self.deterministic,
-                         with_layer_norm=self.with_layer_norm,
-                         name='MLP')(xs)
+                       activation=self.activation,
+                       dropout_rate=self.dropout_rate,
+                       deterministic=self.deterministic,
+                       with_layer_norm=self.with_layer_norm,
+                       name='MLP')(xs)
     
 class NeuralODE(nn.Module):
     ''' 
@@ -198,7 +222,7 @@ class GraphNetworkSimulator(nn.Module):
 
         return processed_graph
     
-class CustomEdgeGraphNetworkSimulator(nn.Module):
+class HeterogeneousGraphNetworkSimulator(nn.Module):
     """
         Graph Network Simulator with two edge decoders. 
         
@@ -207,30 +231,39 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
         All other edges are processed with the last decoder.
     """
     edge_idxs: list
-    encoder_node_fn: Callable
     encoder_edge_fns: Sequence[Callable]
-    decoder_node_fn: Callable
+    encoder_node_fn: Callable
     decoder_edge_fns: Sequence[Callable]
+    decoder_node_fn: Callable
     decoder_postprocessor: Callable
 
     num_mp_steps: int
     shared_params: bool
 
+    learn_nodes: bool
     use_edge_model: bool
     use_global_model: bool
     
-    layer_norm: bool = False
-    latent_size: int = 16
-    hidden_layers: int = 2
-    activation: str = 'relu'
-    dropout_rate: float = 0
-    training: bool = True
+    dt: float
+    T: int
+    layer_norm: bool
+    latent_size: int
+    hidden_layers: int
+    activation: str
+    dropout_rate: float
+    training: bool
 
     @nn.compact    
     def __call__(self, graph, aux_data, rng):   
         def CustomEdgeGraphMapFeatures(embed_edge_fns = Sequence[Callable],
                                        embed_node_fn = None,
                                        embed_global_fn = None):
+            """
+                This function processes each edge independently, but the nodes are processed altogether.
+                So the edges are effectively batched, while the nodes are not.
+                This is why we use vmapMLP for the node encoder/decoder and 
+                just MLP for the edge encoders/decoders.
+            """
             identity = lambda x : x
             # TODO:
             # for i in range(len(embed_edge_fns)):
@@ -280,6 +313,8 @@ class CustomEdgeGraphNetworkSimulator(nn.Module):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
             if self.use_global_model:
                 input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            elif self.learn_nodes:
+                input = jnp.concatenate((senders, receivers), axis=1)
             else:
                 input = jnp.concatenate((nodes, senders, receivers), axis=1)
             # vmap across batch dim so that the MLP processed each node separately

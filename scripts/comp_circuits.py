@@ -36,18 +36,18 @@ from utils.gnn_utils import *
 
 def decompose_coupled_lc_graph(lc_graph):
     """
-    nodes = jnp.array([[0], [V2], [V3]]) # 1 2 3
-    edges = jnp.array([[Q1], [Phi1], [Q3]) # e1 e2 e3
+    nodes = jnp.array([[0], [V2], [V3]])
+    edges = jnp.array([[Q1], [Phi1], [Q3])
     senders = jnp.array([0, 1, 0])
     receivers = jnp.array([1, 2, 2])
 
-    nodes = jnp.array([[V_ext], [Vc], [0]]) # 4 5 6
-    edges = jnp.array([[Q2], [Phi2], [Q3]]) # e5 e4
-    senders = jnp.array([2, 1, 2])
-    receivers = jnp.array([1, 0, 0])
+    nodes = jnp.array([[0], [V4], [V3]])
+    edges = jnp.array([[Q2], [Phi2], [Q3]])
+    senders = jnp.array([0, 1, 0])
+    receivers = jnp.array([1, 2, 2])
 
-    nodes = jnp.array([[0], [V2], [V3], [V4]]) # 1 2 3 4
-    edges = jnp.array([[Q1], [Phi1], [Q3], [Q2], [Phi2]]) # e1 e2 e3 e4 e5
+    nodes = jnp.array([[0], [V2], [V3], [V4]])
+    edges = jnp.array([[Q1], [Phi1], [Q3], [Q2], [Phi2]])
     senders = jnp.array([0, 1, 0, 3, 0])
     receivers = jnp.array([1, 2, 2, 2, 3])
     """
@@ -105,18 +105,18 @@ def test_composition(config):
 
     eval_gb = graph_builder(paths.coupled_lc_data_path)
 
-    net_one = create_net('LC1', training_params_1, net_params_1)
-    # net_two = create_net('LC1', training_params_1, net_params_1)
-    net_two = create_net('LC1', training_params_2, net_params_2)
 
-    net_one.training = False
-    net_two.training = False
+    net_params_1.training = False
+    net_params_2.training = False
 
-    net_one.graph_from_state = create_graph_builder('LC1')('results/LC1_data/train_200_700.pkl').get_graph_from_state
-    net_two.graph_from_state = create_graph_builder('LC1')('results/LC1_data/train_200_700.pkl').get_graph_from_state
+    net_one = create_net(config.net_one_name, training_params_1, net_params_1)
+    net_two = create_net(config.net_two_name, training_params_2, net_params_2)
 
-    net_one.edge_idxs = np.array([[0,2]])
-    net_two.edge_idxs = np.array([[0,2]])
+    net_one.graph_from_state = create_graph_builder(config.net_one_name)('results/LC1_data/train_200_700.pkl').get_graph_from_state
+    net_two.graph_from_state = create_graph_builder(config.net_two_name)('results/LC1_data/train_200_700.pkl').get_graph_from_state
+
+    net_one.edge_idxs = set_edge_idxs(config.net_one_name)
+    net_two.edge_idxs = set_edge_idxs(config.net_two_name)
     net_two.include_idxs = np.array([0,1])
 
     init_control = eval_gb._control[0,0]
@@ -162,8 +162,9 @@ def test_composition(config):
     state_two = ckpt_mngr_two.restore(paths.ckpt_two_step, args=ocp.args.StandardRestore(state_two))
 
     assert net_one.dt == net_two.dt
-
+    assert net_one.T == net_two.T
     dt = net_one.dt
+    T = net_one.T
 
     # Initialize composite GNS
     net = CompLCGNS('euler', eval_gb._dt, state_one, state_two)
@@ -179,9 +180,9 @@ def test_composition(config):
     time_offset = 1
 
     def rollout(state, traj_idx, ti = 0):
-        tf_idxs = (ti + jnp.arange(1, (config.rollout_timesteps + 1)))
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + time_offset, max=eval_gb._num_timesteps))
-        t0_idxs = tf_idxs - ti
+        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(config.rollout_timesteps + 1, net.T))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, T))) * T
+        t0_idxs = tf_idxs - time_offset
         ts = tf_idxs * dt
         graphs = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx, ti)) 
 
@@ -199,11 +200,11 @@ def test_composition(config):
             next_graph_one, next_graph_two = state.apply_fn(state.params, graph_one, graph_two, jax.random.key(0))
             pred_Q1 = (next_graph_one.edges[0,0]).squeeze()
             pred_Phi1 = (next_graph_one.edges[1,0]).squeeze()
-            pred_Q3 = (next_graph_one.edges[2,0]).squeeze() # TODO: next_graph_two.edges[2,0] is also Q3
+            pred_Q3 = (next_graph_one.edges[2,0]).squeeze()
             pred_Q2 = (next_graph_two.edges[0,0]).squeeze()
             pred_Phi2 = (next_graph_two.edges[1,0]).squeeze()
             pred_H = (next_graph_one.globals).squeeze() + (next_graph_two.globals).squeeze()
-
+            
             next_graph_one = next_graph_one._replace(globals=None)
             next_graph_two = next_graph_two._replace(globals=None)
 
