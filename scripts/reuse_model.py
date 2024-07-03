@@ -6,13 +6,14 @@ import os
 import jax
 import optax
 from flax.training.train_state import TrainState
+from flax.core import frozen_dict
 import orbax.checkpoint as ocp
 
-from configs.reuse_model import get_comp_gnn_config
+from configs.reuse_model import get_reuse_model_config
 from utils.train_utils import *
 from utils.gnn_utils import *
 
-def test_composition(config):
+def transfer(config):
     training_params_1 = config.training_params_1
     net_params_1 = config.net_params_1
     paths = config.paths
@@ -26,35 +27,19 @@ def test_composition(config):
     rng = jax.random.key(config.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
-    net = create_net(config.system_name, training_params_1, net_params_1)
+    net_params_1.training = False
 
-    net.training = False
+    net = create_net(config.system_name, net_params_1)
 
     graph_builder = create_graph_builder(config.eval_system_name)
     eval_gb = graph_builder(paths.evaluation_data_path)
+    net.edge_idxs = get_edge_idxs(config.eval_system_name)
 
-    if config.eval_system_name == 'LC1':
-        net.edge_idxs = np.array([[0,2]])
-        net.J = jnp.array([[0, 1, 0],
-                        [-1, 0, 1],
-                        [0, -1, 0]])
-        net.g = jnp.array([[0, 0, 0],
-                           [0, 0, 0],
-                           [0, 0, 0]])
-    elif config.eval_system_name == 'LC2':
-        net.edge_idxs = np.array([[0]])
-        net.J = jnp.array([[0, 1],
-                          [-1, 0]])
-        net.g = jnp.array([[0, 0],
-                          [0, 0]])
-    elif config.eval_system_name == 'CoupledLC':
-        net.edge_idxs = np.array([[0,2,3]])
-        net.J = jnp.array([[0, 1, 0, 0, 0],
-                           [-1, 0, 1, 0, 0],
-                           [0, -1, 0, 0, -1],
-                           [0, 0, 0, 0, 1],
-                           [0, 0, 1, -1, 0]])
-        net.g = jnp.zeros((5,5))
+    if not training_params_1.learn_matrices:
+        J, R, g = get_pH_matrices(config.eval_system_name)
+        net.J = J
+        net.R = R
+        net.g = g
 
     net.graph_from_state = eval_gb.get_graph_from_state
     init_control = eval_gb._control[0,0]
@@ -62,7 +47,13 @@ def test_composition(config):
     
     params = net.init(init_rng, init_graph, init_control, net_rng)
 
+    # print(params)
+
     tx = optax.adam(**config.optimizer_params_1)
+    # Need to freeze params
+    # tx = optax.multi_transform({'adam': optax.adam(**config.optimizer_params_1), 
+    #                             'zero': optax.set_to_zero()}, 
+    #                             frozen_dict.freeze({'params':{'update_edge': 'adam', 'update_node': 'adam', 'enc_node': 'adam', 'enc_edge_1': 'adam', 'enc_edge_2': 'adam', 'dec_node': 'adam', 'dec_edge_1': 'adam', 'dec_edge_2': 'adam', 'GNS': 'adam', 'J': 'zero', 'g': 'zero'} }))
 
     state = TrainState.create(
         apply_fn=net.apply,
@@ -80,13 +71,14 @@ def test_composition(config):
 
     state = ckpt_mngr.restore(paths.ckpt_one_step, args=ocp.args.StandardRestore(state))
 
-    time_offset = 1
+    T = net.T
+    dt = net.dt
 
     def rollout(state, traj_idx, ti = 0):
-        tf_idxs = (ti + jnp.arange(1, (config.rollout_timesteps + 1)))
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + time_offset, max=eval_gb._num_timesteps))
-        t0_idxs = tf_idxs - time_offset
-        ts = tf_idxs * net.dt
+        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(config.rollout_timesteps + 1, T))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, T))) * T
+        t0_idxs = tf_idxs - T
+        ts = tf_idxs * dt
         graphs = eval_gb.get_graph(traj_idx, ti)
         controls = eval_gb.get_control(traj_idx, t0_idxs)
         exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
@@ -122,7 +114,7 @@ def test_composition(config):
         
         return ts, np.array(pred_data), np.array(exp_data), eval_metrics
     
-    print("Evaluating composition")
+    print("Evaluating zero-shot transfer")
     error_sums = [0] * eval_gb._num_states
     for i in range(eval_gb._num_trajectories):
         ts, pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
@@ -133,19 +125,26 @@ def test_composition(config):
             pred_data, 
             exp_data, 
             {'name': config.eval_system_name},
-            plot_dir=os.path.join(plot_dir, f'traj_{i}'),
+            plot_dir=plot_dir,
             prefix=f'comp_eval_traj_{i}')
-    rollout_mean_error = np.array(error_sums) / eval_gb._num_trajectories
+    rollout_mean_error = np.array(error_sums) / (eval_gb._num_trajectories * eval_gb._num_timesteps)
 
     print(f'State error {rollout_mean_error}')
-    metrics = {'rollout_mean_error': rollout_mean_error.tolist()}
+    print(f'Mean error {rollout_mean_error.mean()}')
+
+    metrics = {
+        'rollout_mean_error_states': rollout_mean_error.tolist(),
+        'rollout_mean_error': str(rollout_mean_error.mean())
+    }
     with open(os.path.join(paths.dir, 'metrics.js'), "w") as outfile:
         json.dump(metrics, outfile, indent=4)
+
+    return metrics['rollout_mean_error']
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('--dir', type=str, default=None)
     args = parser.parse_args()
-    cfg = get_comp_gnn_config(args)
-    test_composition(cfg)
+    cfg = get_reuse_model_config(args)
+    transfer(cfg)

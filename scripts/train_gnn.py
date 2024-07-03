@@ -16,7 +16,6 @@ import orbax.checkpoint as ocp
 
 from timeit import default_timer
 from argparse import ArgumentParser
-from graph_builder import *
 from scripts.models import *
 from scripts.graph_nets import *
 from utils.train_utils import *
@@ -24,12 +23,16 @@ from utils.data_utils import *
 from utils.jax_utils import *
 from utils.gnn_utils import *
 
-from configs.lc1 import get_lc1_config
-from configs.coupled_lc import get_coupled_lc_config
+from helpers.graph_builder_factory import gb_factory
+from helpers.config_factory import config_factory
+
+# from absl import logging
+# logging.set_verbosity(logging.INFO)
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
 
 def eval(config: ml_collections.ConfigDict):
+    # TODO: fix T!
     training_params = config.training_params
     net_params = config.net_params
     paths = config.paths
@@ -47,25 +50,28 @@ def eval(config: ml_collections.ConfigDict):
 
     tx = optax.adam(**config.optimizer_params)
 
-    graph_builder = create_graph_builder(name, training_params, net_params)
+    graph_builder = gb_factory(name)
 
     train_gb = graph_builder(paths.training_data_path)
     eval_gb = graph_builder(paths.evaluation_data_path)
     
     t0 = 0
-    if name == 'MassSpring':
-        t0 = net_params.vel_history
-        net_params.norm_stats = train_gb._norm_stats
-        init_control = eval_gb._control[0, 0]
-    elif name == 'LC2':
-        init_control = jnp.array(eval_gb._Volt[0])
-    elif 'LC' in name:
-        init_control = jnp.array(0)
+    init_control = eval_gb._control[0, 0]
 
     # net_params.system_params = train_gb.system_params
+    net_params.training = False
+    net_params.graph_from_state = train_gb.get_graph_from_state
+    net_params.include_idxs = None
+    net_params.edge_idxs = get_edge_idxs(name)
 
-    eval_net = create_net(name, training_params, net_params)
+    if not training_params.learn_matrices:
+        net_params.J = train_gb.J
+        net_params.R = train_gb.R
+        net_params.g = train_gb.g
+
+    eval_net = create_net(name, net_params)
     eval_net.training = False
+    time_offset = eval_net.T
     init_graph = eval_gb.get_graph(traj_idx=0, t=t0)
     params = eval_net.init(init_rng, init_graph, init_control, net_rng)
     state = TrainState.create(
@@ -84,10 +90,9 @@ def eval(config: ml_collections.ConfigDict):
     state = ckpt_mngr.restore(paths.ckpt_step, args=ocp.args.StandardRestore(state))
 
     def rollout(eval_state: TrainState, traj_idx: int, ti: int = 0):
-        tf_idxs = (ti + jnp.arange(1, (training_params.rollout_timesteps + 1) // eval_net.num_mp_steps)) * eval_net.num_mp_steps
-        ti = round(t0 / eval_net.num_mp_steps) * eval_net.num_mp_steps
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + eval_net.num_mp_steps, max=eval_gb._num_timesteps))
-        t0_idxs = tf_idxs - eval_net.num_mp_steps
+        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(training_params.rollout_timesteps + 1, eval_net.T))
+        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, eval_net.T))) * eval_net.T
+        t0_idxs = tf_idxs - time_offset
         ts = tf_idxs * eval_net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
         controls = eval_gb.get_control(traj_idx, t0_idxs)
@@ -155,10 +160,12 @@ def eval(config: ml_collections.ConfigDict):
         else:
             raise NotImplementedError()
         
+        error_sums = np.array(error_sums)
+        
         plot_evaluation_curves(ts, pred_data, exp_data, aux_data,
-                                plot_dir=os.path.join(plot_dir, f'traj_{i}'),
+                                plot_dir=plot_dir,
                                 prefix=f'eval_traj_{i}')
-        writer.write_scalars(i, add_prefix_to_keys({'loss': sum(error_sums)}, 'eval'))
+        writer.write_scalars(i, add_prefix_to_keys({'loss': error_sums.mean() / eval_gb._num_timesteps}, 'eval'))
         
     rollout_error = np.Inf
     if name == 'MassSpring':
@@ -166,13 +173,15 @@ def eval(config: ml_collections.ConfigDict):
         print(f'Rollout mean position loss = {jnp.round(rollout_error, 4)}')
         
     elif 'LC' in name:
-        rollout_mean_error = np.array(error_sums) / eval_gb._num_trajectories
-        print(f'State errors {rollout_mean_error}')
-        rollout_error = sum(rollout_mean_error)
+        rollout_error_state = error_sums / (eval_gb._num_trajectories * eval_gb._num_timesteps)
+        rollout_error = rollout_error_state.mean()
+        print(f'State errors {rollout_error_state}')
+        print(f'Rollout error {rollout_error}')
 
     # Save evaluation metrics to json
     eval_metrics = {
-        'mean_rollout_error': (rollout_error / eval_gb._num_trajectories).tolist(),
+        'rollout_error_state': rollout_error_state.tolist(),
+        'rollout_error': str(rollout_error),
         'evaluation_data_path': paths.evaluation_data_path,
     }
     eval_metrics_file = os.path.join(plot_dir, 'eval_metrics.js')
@@ -208,17 +217,19 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     # Create optimizer
     tx = optax.adam(**config.optimizer_params)
     # Create training and evaluation data loaders
-    graph_builder = create_graph_builder(name)
+    graph_builder = gb_factory(name)
     train_gb = graph_builder(paths.training_data_path)
     eval_gb = graph_builder(paths.evaluation_data_path)
     net_params.training = True
     net_params.graph_from_state = train_gb.get_graph_from_state
     net_params.include_idxs = None
-    net_params.set_edge_idxs = set_edge_idxs(name)
+    net_params.edge_idxs = get_edge_idxs(name)
     t0 = 0
-    J, R, g = get_pH_matrices(name)
-    net_params.J = J
-    net_params.g = g
+
+    if not training_params.learn_matrices:
+        net_params.J = train_gb.J
+        net_params.R = train_gb.R
+        net_params.g = train_gb.g
 
     if name == 'MassSpring':
         net_params.norm_stats = train_gb._norm_stats
@@ -228,10 +239,11 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     init_control = train_gb.get_control(0, t0)
     # Initialize training network
     init_graph = train_gb.get_graph(0, t0)
-    net = create_net(name, training_params, net_params)
+    net = create_net(name, net_params)
     params = net.init(init_rng, init_graph, init_control, net_rng)
     batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, None))
 
+    # logging.log(logging.INFO, f"Number of parameters {num_parameters(params)}")
     print(f"Number of parameters {num_parameters(params)}")
     time_offset = net.T
 
@@ -300,6 +312,13 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 predictions_e = pred_graphs.edges[:,:,0].squeeze()
                 targets_e = jnp.concatenate((Q1, Phi1, Q3, Q2, Phi2),axis=1).squeeze()
+                loss = optax.squared_error(predictions_e, targets_e).mean()
+            elif name == 'Alternator' and loss_function == 'state':
+                batch_control = jnp.array(batch_data[0])
+                pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
+                predictions_e = pred_graphs.edges[:,:,0].squeeze()
+                targets_e = [data.reshape(-1, 1) for data in batch_data[1:-1]] # excluding control and H
+                targets_e = jnp.concatenate(targets_e, axis=1).squeeze()
                 loss = optax.squared_error(predictions_e, targets_e).mean()
             return loss
 
@@ -398,7 +417,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     if restore: state = ckpt_mngr.restore(paths.ckpt_step, args=ocp.args.StandardRestore(state))
 
     # Create evaluation network
-    eval_net = create_net(name, training_params, net_params)
+    eval_net = create_net(name, net_params)
     eval_net.training = False
     # Use same normalization stats as training set
     if 'mass_spring' in name:
@@ -407,9 +426,11 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
 
     # Create logger to report training progress
     report_progress = periodic_actions.ReportProgress(
-        num_train_steps=training_params.num_epochs,
-        writer=writer
-    )
+            num_train_steps=training_params.num_epochs,
+            writer=writer
+        )
+    profiler = periodic_actions.Profile(logdir=log_dir)
+    hooks = [report_progress, profiler]
     ts_size = (train_gb._num_timesteps - t0)
     trajs_size = train_gb._num_trajectories
     steps_per_epoch = int((ts_size * trajs_size) // (training_params.batch_size ** 2))
@@ -423,16 +444,22 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
 
     train_metrics = None
     min_error = jnp.inf
+    ckpt_step = init_epoch
+    # logging.info(f"Start training at epoch {init_epoch}")
     print(f"Start training at epoch {init_epoch}")
     for epoch in range(init_epoch, final_epoch):
         rng, train_rng = jax.random.split(rng)
+        # with jax.profiler.StepTraceAnnotation('train', step_num=epoch):
         state, metrics_update = train_epoch(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
             train_metrics = metrics_update
         else:
             train_metrics = train_metrics.merge(metrics_update)
 
-        print(f'Epoch {epoch}: loss = {jnp.round(train_metrics.compute()["loss"], 4)}')
+        print(f'Epoch {epoch}: ' + 'loss = {:.15}'.format(train_metrics.compute()["loss"]))
+
+        # for hook in hooks:
+        #     hook(epoch)
 
         is_last_step = (epoch == final_epoch - 1)
 
@@ -443,7 +470,8 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
             with report_progress.timed('eval'):
                 rollout_error_sum = 0
                 error_sums = [0] * train_gb._num_states
-                for i in range(2): # TODO: was eval_gb._num_trajectories
+                num_eval_trajs = 2 # eval_gb._num_trajectories
+                for i in range(num_eval_trajs):
                     if name == 'MassSpring':
                         ts, pred_data, exp_data, aux_data, eval_metrics = rollout(eval_state, traj_idx=i)
                         rollout_error_sum += eval_metrics.compute()['loss']   
@@ -460,26 +488,33 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 rollout_error = np.Inf
                 if name == 'MassSpring':
                     rollout_error = rollout_error_sum / eval_gb._num_trajectories
-                    print(f'Epoch {epoch}: rollout mean position loss = {jnp.round(rollout_error, 4)}')
+                    # print(f'Epoch {epoch}: rollout mean position loss = {jnp.round(rollout_error, 4)}')
                     
-                elif 'LC' in name:
-                    rollout_mean_error = np.array(error_sums) / eval_gb._num_trajectories
-                    print(f'Epoch {epoch} state errors {rollout_mean_error}')
-                    rollout_error = sum(rollout_mean_error)
+                else:
+                    rollout_error_state = np.array(error_sums) / (num_eval_trajs * eval_gb._num_timesteps) # TODO: was eval_gb._num_trajectories
+                    print(f'Epoch {epoch} state errors {rollout_error_state}')
+                    rollout_error = rollout_error_state.mean()
 
                 writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error}, 'eval'))
 
                 if rollout_error < min_error: 
                     # Save best model
                     min_error = rollout_error
+                    ckpt_step = epoch
+                    # logging.info(f'Saving best model at epoch {epoch}')
                     print(f'Saving best model at epoch {epoch}')
                     with report_progress.timed('checkpoint'):
                         ckpt_mngr.save(epoch, args=ocp.args.StandardSave(state))
                         ckpt_mngr.wait_until_finished()
+                    
                     if net.J is None: # if training J
-                        J_triu = jnp.triu(state.params['params']['Dense_0']['kernel'])
+                        J_triu = jnp.triu(state.params['params']['J']['kernel'])
                         J = J_triu - J_triu.T
-                        print('upper triangular of J: ', J)
+                        # logging.info(f'upper triangular of J: {J}')
+                        print(f'upper triangular of J: {J}')
+
+                    if net.g is None: # if training g
+                        pass # TODO
 
                 if epoch > training_params.min_epochs: # train for at least 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_error)
@@ -499,17 +534,23 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
 
         if is_last_step:
             break
+    
+    # Save training details to json
+    config.metrics = ml_collections.ConfigDict()
+    config.metrics.min_error = min_error.item()
+    config.paths.ckpt_step = ckpt_step
 
-    metrics = {'min_error': min_error.item()}
-    # Save config to json
+    if training_params.learn_matrices:
+        J_triu = jnp.triu(state.params['params']['J']['kernel'])
+        J = J_triu - J_triu.T
+        config.net_params.J = J.tolist()
+    
     config_js = config.to_json_best_effort()
     run_params_file = os.path.join(paths.dir, 'run_params.js')
     with open(run_params_file, "w") as outfile:
         json.dump(config_js, outfile, indent=4)
-        outfile.write("\n")
-        json.dump(metrics, outfile, indent=4)
 
-    return metrics['min_error']
+    return config if not optuna_trial else config.metrics.min_error
 
 def test_graph_net(config: ml_collections.ConfigDict):
     """ For testing """
@@ -559,20 +600,8 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt_step', type=int, default=None)
     parser.add_argument('--system', type=str, required=True)
     args = parser.parse_args()
-
-    # args = ml_collections.ConfigDict()
-    # args.system = 'LC1'
-    # args.eval = False
-    # args.ckpt_step = None
-    # args.dir = None
-
-    config = None
-    if args.system == 'LC1':
-        config = get_lc1_config(args)
-    elif args.system == 'CoupledLC':
-        config = get_coupled_lc_config(args)
-    else:
-        raise NotImplementedError(f'No config for system {args.system}')
+    
+    config = config_factory(args.system, args)
 
     if args.eval:
         eval(config)

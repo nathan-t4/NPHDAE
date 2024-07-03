@@ -15,6 +15,10 @@ class System(abc.ABC):
     @abc.abstractmethod
     def dynamics_function(self, state, t, graph):
         """ return next state """
+
+    @abc.abstractmethod
+    def eval_plots(T, pred_data, exp_data):
+        "Save evaluation plots"
     
 class MassSpringIntegrator(System):
     def __init__(self, dt, num_mp_steps, norm_stats, integration_method='SemiImplicitEuler'):

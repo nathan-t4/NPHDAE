@@ -6,11 +6,11 @@
 import optuna
 import jax
 from train_gnn import train
-from configs.optuna_lc import get_optuna_lc_cfg
+from configs.optuna import get_optuna_cfg
 
 def optimize(system_name):
     def objective(trial):
-        cfg = get_optuna_lc_cfg(system_name, trial)
+        cfg = get_optuna_cfg(system_name, trial)
         loss = train(cfg, trial)
         jax.clear_caches()
         return loss
@@ -43,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument('--system', type=str, required=True)
     args = parser.parse_args()
 
-    compatible_systems = ['LC1', 'LC2', 'CoupledLC']
+    compatible_systems = ['LC1', 'LC2', 'CoupledLC', 'Alternator']
 
     assert args.system in compatible_systems, 'Invalid system name'
 

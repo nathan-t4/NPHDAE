@@ -138,9 +138,12 @@ def generate_dataset(args, env_seed: int = 501):
         seed = env_seed
         x0_init_lb = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0])
         x0_init_ub = jnp.array([2.0, 0.0, 4.0, 2.0, 0.0])
-        C_range = (1.0, 2.0)
-        Cp_range = (1.0, 2.0)
-        L_range = (1.0, 2.0)
+        # C_range = (1.0, 2.0)
+        # Cp_range = (1.0, 2.0)
+        # L_range = (1.0, 2.0)
+        C_range = (1.0, 1.0)
+        Cp_range = (1.0, 1.0)
+        L_range = (1.0, 1.0)
     elif args.type == 'val':
         seed = env_seed + 1
         x0_init_lb = jnp.array([2.0, 0.0, 4.0, 2.0, 0.0])

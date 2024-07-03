@@ -84,11 +84,13 @@ class SynchronousGenerator(Environment):
         def GeneratorPE(state):
             phis = state[:6]
             theta = state[7]
-            return 0.5 * (phis.T @ self.get_inv_L(theta) @ phis)
+            PE = 0.5 * (phis.T @ self.get_inv_L(theta) @ phis)
+            return jax.lax.cond(PE > 0, lambda : PE, lambda : 0.0)
         
         def RotorKE(state):
             p = state[6]
-            return 0.5 * (p**2 / self.config['M'])
+            KE = 0.5 * (p**2 / self.config['M'])
+            return jax.lax.cond(KE > 0, lambda : KE, lambda : 0.0)
         
         def H(state):
             return GeneratorPE(state) + RotorKE(state)
@@ -169,7 +171,6 @@ class SynchronousGenerator(Environment):
 
         ax.plot(T, GeneratorPE, color='red', label='GeneratorPE')
         ax.plot(T, RotorKE, color='blue', label='RotorKE')
-
         ax.plot(T, H, color='green', label='Total Energy')
 
         ax.set_ylabel('$Energy$ $[J]$', fontsize=fontsize)
@@ -180,7 +181,7 @@ class SynchronousGenerator(Environment):
         plt.show()
 
 def generate_dataset(args, env_seed: int = 501):
-    save_dir = os.path.join(os.curdir, f'results/PowerNetwork_data')
+    save_dir = os.path.join(os.curdir, f'results/Alternator_data')
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
     
@@ -188,13 +189,13 @@ def generate_dataset(args, env_seed: int = 501):
         seed = env_seed
         control_mag = 1
         x0_init_lb = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        x0_init_ub = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+        x0_init_ub = jnp.array([2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0])
         
     elif args.type == 'val':
         seed = env_seed + 1
         control_mag = 1
-        x0_init_lb = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-        x0_init_lb = jnp.array([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
+        x0_init_lb = jnp.array([2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0])
+        x0_init_ub = jnp.array([2.2, 2.2, 2.2, 2.2, 2.2, 2.2, 2.2, 2.2])
 
     params = {
         'dt': 0.01,
@@ -202,14 +203,14 @@ def generate_dataset(args, env_seed: int = 501):
         'rr': 0.1,
         'd': 0.1,
         'M': 0.5,
-        'L_aa0': 1,
-        'L_ab0': 0.9,
-        'L_afd': 1,
-        'L_akd': 0.8,
-        'L_akq': 1,
-        'L_ffd': 1,
-        'L_kkd': 1,
-        'L_kkq': 1,
+        'L_aa0': 0.8,
+        'L_ab0': 0.5,
+        'L_afd': 0.8,
+        'L_akd': 0.4,
+        'L_akq': 0.8,
+        'L_ffd': 0.2,
+        'L_kkd': 0.8,
+        'L_kkq': 1.0,
     }
 
     param_names = ('rm', 'rr', 'd', 'M')
@@ -230,9 +231,10 @@ def generate_dataset(args, env_seed: int = 501):
         
         def control_policy(state, t, jax_key, aux_data):
             k = aux_data
-            E = k[0] * jnp.sin(k[1] * t + k[2]) 
-            T = k[3] * jnp.sin(k[4] * t + k[5])
-            return jnp.array([E, T])
+            # E = k[0] * jnp.sin(k[1] * t + k[2]) 
+            # T = k[3] * jnp.sin(k[4] * t + k[5])
+            # return jnp.array([E, T])
+            return jnp.array([0, 0])
     
         env.set_control_policy(partial(control_policy, aux_data=k))
         # env.rm = rms[i]
@@ -261,15 +263,15 @@ def generate_dataset(args, env_seed: int = 501):
 
 
 if __name__ == '__main__':
-    # from argparse import ArgumentParser
-    # parser = ArgumentParser()
-    # parser.add_argument('--type', type=str, default='train')
-    # parser.add_argument('--n', type=int, required=True)
-    # parser.add_argument('--steps', type=int, required=True)
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('--type', type=str, default='train')
+    parser.add_argument('--n', type=int, required=True)
+    parser.add_argument('--steps', type=int, required=True)
 
-    # args =  parser.parse_args()
-    import ml_collections
-    args = ml_collections.ConfigDict({'type': 'train', 'n': 1, 'steps': 1500,})
+    args =  parser.parse_args()
+    # import ml_collections
+    # args = ml_collections.ConfigDict({'type': 'train', 'n': 1, 'steps': 1500,})
 
-    jax.config.update("jax_debug_nans", True)
+    # jax.config.update("jax_debug_nans", True)
     generate_dataset(args)    

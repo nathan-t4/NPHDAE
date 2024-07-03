@@ -124,10 +124,11 @@ class MassSpringGNS(nn.Module):
 
         return self.net(graph, aux_data, rng)
     
-class LCGNS(nn.Module):
+class PHGNS(nn.Module):
     # Decoder post-processor parameters
     graph_from_state: Callable
     J: Union[None, Array] # if None then learn
+    R: Union[None, Array] # if None then learn
     g: Union[None, Array] # if None then learn
 
     integration_method: str
@@ -156,31 +157,37 @@ class LCGNS(nn.Module):
 
     @nn.compact
     def __call__(self, graph, control, rng):
+        '''
+            TODO:
+            - encoder_node_fn -> encoder_node_fns
+        '''
         edge_output_size = 1
         node_output_size = 1
+        num_edge_types = len(self.edge_idxs.shape) + 1
         encoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * (self.hidden_layers),
                                   with_layer_norm=self.layer_norm, 
-                                  activation=self.activation) # TODO: GraphMapFeatures only batches edges not nodes... 
-        encoder_edge1_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
-                               with_layer_norm=self.layer_norm, 
-                               activation=self.activation)
-        encoder_edge2_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
-                               with_layer_norm=self.layer_norm, 
-                               activation=self.activation)
+                                  activation=self.activation, 
+                                  name='enc_node') # TODO: GraphMapFeatures only batches edges not nodes... 
+
+        encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'enc_edge_{i}') for i in range(num_edge_types)]
 
         decoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size],
-                                  activation=self.activation)
-        decoder_edge1_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
-                               activation=self.activation)
-        decoder_edge2_fn = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
-                               activation=self.activation)
+                                  activation=self.activation, 
+                                  name='dec_node')
+        
+        decoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+                                activation=self.activation, 
+                                name=f'dec_edge_{i}') for i in range(num_edge_types)]
 
         net = HeterogeneousGraphNetworkSimulator(
             edge_idxs=np.array(self.edge_idxs),
             encoder_node_fn=encoder_node_fn,
-            encoder_edge_fns=[encoder_edge1_fn, encoder_edge2_fn],
+            encoder_edge_fns=encoder_edge_fns,
             decoder_node_fn=decoder_node_fn,
-            decoder_edge_fns=[decoder_edge1_fn, decoder_edge2_fn],
+            decoder_edge_fns=decoder_edge_fns,
             decoder_postprocessor=lambda x, _: x, # identity decoder post-processor
             num_mp_steps=self.num_mp_steps,
             shared_params=self.shared_params,
@@ -194,7 +201,8 @@ class LCGNS(nn.Module):
             activation=self.activation,
             dropout_rate=self.dropout_rate,
             training=self.training,
-            layer_norm=self.layer_norm
+            layer_norm=self.layer_norm,
+            name='GNN',
         )
         edges_shape = graph.edges.shape
         cur_nodes = graph.nodes
@@ -218,31 +226,38 @@ class LCGNS(nn.Module):
         
         H, processed_graph = H_from_state(state)
 
+        def get_learned_J():
+            out_dim = len(state)
+            J = nn.Dense(features=out_dim, use_bias=False, name='J')(jnp.eye(out_dim))
+            J_triu = jnp.triu(J)
+            return J_triu - J_triu.T  # Make J skew-symmetric
+        
+        def get_learned_R():
+            out_dim = len(state)
+            L = nn.Dense(features=out_dim, use_bias=False, name='R')(jnp.eye(out_dim))
+            L_tril = jnp.tril(L)
+            return jnp.matmul(L_tril, L_tril.T)  # Make R positive-definite and symmetric
+                
+        def get_learned_g():
+            out_dim = len(state)
+            g = nn.Dense(features=out_dim, use_bias=False, name='g')(jnp.eye(out_dim))
+            return g
+
+        J = self.J if self.J is not None else get_learned_J()
+        R = self.R if self.R is not None else get_learned_R()
+        g = self.g if self.g is not None else get_learned_g()
+
         def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
             H, cur_state = aux_data
-            def dynamics_function(x, t):
-
-                def get_learned_J():
-                    out_dim = len(x)
-                    J = nn.Dense(features=out_dim, use_bias=False)(jnp.eye(out_dim))
-                    J_triu = jnp.triu(J)
-                    return J_triu - J_triu.T  # Make J skew-symmetric
-                
-                def get_learned_g():
-                    out_dim = len(x)
-                    g = nn.Dense(features=out_dim, use_bias=False)(jnp.eye(out_dim))
-                    return g
-                
+            def dynamics_function(x, t):                
                 dH, _ = jax.grad(H_from_state, has_aux=True)(x)
                 z = dH
-                J = self.J if self.J is not None else get_learned_J()
-                g = self.g if self.g is not None else get_learned_g()
-                return jnp.matmul(J, z).squeeze() + jnp.matmul(g, control).squeeze()
+                return jnp.matmul(J - R, z).squeeze() + jnp.matmul(g, control).squeeze()
             
-            if self.T == 1:
-                next_state = integrator_factory(self.integration_method)(dynamics_function, cur_state, 0.0, self.dt)
-            else: # multi-step integration scheme
+            if self.integration_method == 'adam_bashforth': # The only multi-step method implemented
                 next_state = integrator_factory(self.integration_method)(dynamics_function, cur_state, 0.0, self.dt, self.T)
+            else: # single-step integration scheme
+                next_state = integrator_factory(self.integration_method)(dynamics_function, cur_state, 0.0, self.dt)
             
             next_globals = jnp.array(H)
             graph = self.graph_from_state(state=next_state, 
@@ -262,6 +277,7 @@ class LCGNS(nn.Module):
 class CompLCGNS(nn.Module):
     integration_method: str
     dt: float
+    T: int
     state_one: TrainState
     state_two: TrainState 
     graph_from_state_one: Callable = None # TODO
@@ -360,8 +376,11 @@ class CompLCGNS(nn.Module):
         aux_data = None
         # Integrate port-Hamiltonian dynamics
         next_state = None
-        if self.integration_method == 'euler':
-            next_state = euler(partial(dynamics_function, aux_data=aux_data), full_state, 0, self.dt) 
+        if self.integration_method == 'adam_bashforth':
+            next_state = integrator_factory(self.integration_method)(partial(dynamics_function, aux_data=aux_data), full_state, 0, self.dt, self.T) 
+        else:
+            next_state = integrator_factory(self.integration_method)(partial(dynamics_function, aux_data=aux_data), full_state, 0, self.dt)
+        
         next_Q1, next_Phi1, next_Q3, next_Q2, next_Phi2 = next_state
         # reset voltages to observed value...
         next_nodes1 = jnp.array([[0], [next_Q1], [next_Q3]]) # Assuming C = L = C_prime = 1 (params are known)

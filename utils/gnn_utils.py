@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 from typing import Dict, Any
 
-def set_edge_idxs(name):
+def get_edge_idxs(name):
     match name:
         case 'LC1':
             return np.array([[0,2]])
@@ -15,6 +15,8 @@ def set_edge_idxs(name):
             return np.array([[0]])
         case 'CoupledLC':
             return np.array([[0,2,3]])
+        case 'Alternator': 
+            return np.array([[0,1,2,3,4,5], [6,None,None,None,None,None]])
         case _:
             raise NotImplementedError(f"Edge indices not set for system {name}")
         
@@ -73,5 +75,7 @@ def get_g(name):
             return jnp.zeros((2,2))
         case 'CoupledLC':
             return jnp.zeros((5,5))
+        case 'Alternator': 
+            return jnp.zeros((8,2))
         case _:
             raise NotImplementedError(f"g matrix not set for system {name}")

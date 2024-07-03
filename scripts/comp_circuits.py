@@ -3,7 +3,6 @@
 
     How to compose:
     - Concatenate states of circuits 1 and 2 to get state of coupled lc circuit
-    - modify circuit 1 and 2 graphs to satisfy Kirchhoff's laws that arise from composition
     - Predict Hamiltonian of circuits 1 and 2 from respective GNS
         - make sure nodes of circuits are correct, then edges of GNS predict energy.
     - Add Hamiltonian and use PH dynamics to get next state (decoder)
@@ -14,13 +13,6 @@
     - feed into CompGNS to get next_graph1 and next_graph2
     - repeat for # of rollout timesteps
     - compare results from CompGNS vs expected results
-
-    # TODO:
-    - why isn't it working?
-        - the voltages are initialized to the right values...
-    - GNSs predict energies associated with edges of graphs 1 and 2
-    - can try just using one GNN (change edge_idxs )
-    - TODO 6/17: try with GNS trained and composition tested for C = L = C_prime = 1
 """
 
 import os
@@ -85,10 +77,8 @@ def decompose_coupled_lc_graph(lc_graph):
 
     return graph_1, graph_2
 
-def test_composition(config):
-    training_params_1 = config.training_params_1
+def compose(config):
     net_params_1 = config.net_params_1
-    training_params_2 = config.training_params_2
     net_params_2 = config.net_params_2
     paths = config.paths
 
@@ -104,19 +94,29 @@ def test_composition(config):
     graph_builder = create_graph_builder('CoupledLC')
 
     eval_gb = graph_builder(paths.coupled_lc_data_path)
-
+    
+    if not config.learn_matrices_one:
+        J1, R1, g1 = get_pH_matrices(config.net_one_name)
+        net_params_1.J = J1
+        net_params_1.R = R1
+        net_params_1.g = g1
+    if not config.learn_matrices_two:
+        J2, R2, g2 = get_pH_matrices(config.net_two_name)
+        net_params_2.J = J2
+        net_params_2.R = R2
+        net_params_2.g = g2
 
     net_params_1.training = False
     net_params_2.training = False
 
-    net_one = create_net(config.net_one_name, training_params_1, net_params_1)
-    net_two = create_net(config.net_two_name, training_params_2, net_params_2)
+    net_one = create_net(config.net_one_name, net_params_1)
+    net_two = create_net(config.net_two_name, net_params_2)
 
     net_one.graph_from_state = create_graph_builder(config.net_one_name)('results/LC1_data/train_200_700.pkl').get_graph_from_state
     net_two.graph_from_state = create_graph_builder(config.net_two_name)('results/LC1_data/train_200_700.pkl').get_graph_from_state
 
-    net_one.edge_idxs = set_edge_idxs(config.net_one_name)
-    net_two.edge_idxs = set_edge_idxs(config.net_two_name)
+    net_one.edge_idxs = get_edge_idxs(config.net_one_name)
+    net_two.edge_idxs = get_edge_idxs(config.net_two_name)
     net_two.include_idxs = np.array([0,1])
 
     init_control = eval_gb._control[0,0]
@@ -163,11 +163,13 @@ def test_composition(config):
 
     assert net_one.dt == net_two.dt
     assert net_one.T == net_two.T
+    assert net_one.integration_method == net_two.integration_method
     dt = net_one.dt
     T = net_one.T
+    integrator = net_one.integration_method
 
     # Initialize composite GNS
-    net = CompLCGNS('euler', eval_gb._dt, state_one, state_two)
+    net = CompLCGNS(integrator, eval_gb._dt, T, state_one, state_two)
     params = net.init(init_rng, init_graph_one, init_graph_two, net_rng)
     tx = optax.adam(1e-3)
 
@@ -177,12 +179,10 @@ def test_composition(config):
         tx=tx,
     )
 
-    time_offset = 1
-
     def rollout(state, traj_idx, ti = 0):
-        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(config.rollout_timesteps + 1, net.T))
+        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(config.rollout_timesteps + 1, T))
         tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, T))) * T
-        t0_idxs = tf_idxs - time_offset
+        t0_idxs = tf_idxs - T
         ts = tf_idxs * dt
         graphs = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx, ti)) 
 
@@ -228,16 +228,27 @@ def test_composition(config):
             pred_data, 
             exp_data, 
             {'name': 'CompLCCircuits'},
-            plot_dir=os.path.join(plot_dir, f'traj_{i}'),
+            plot_dir=plot_dir,
             prefix=f'comp_eval_traj_{i}')
-    rollout_mean_error = np.array(error_sums) / eval_gb._num_trajectories
+    rollout_mean_error = np.array(error_sums) / (eval_gb._num_trajectories * eval_gb._num_timesteps)
+    print('Rollout error:', rollout_mean_error)
+    metrics = {
+        'net_name_one': config.net_one_name,
+        'net_name_two': config.net_two_name,
+        'dir_one': config.paths.ckpt_one_dir,
+        'dir_two': config.paths.ckpt_two_dir,
+        'rollout_mean_error_states': rollout_mean_error.tolist(),
+        'rollout_mean_error': str(rollout_mean_error.mean()),
+    }
+    with open(os.path.join(paths.dir, 'metrics.js'), "w") as outfile:
+        json.dump(metrics, outfile, indent=4)
 
-    print(f'State error {rollout_mean_error}')
-
+    return metrics['rollout_mean_error']
+    
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument('--dir', type=str, default=None)
     args = parser.parse_args()
     cfg = get_comp_gnn_config(args)
-    test_composition(cfg)
+    compose(cfg)

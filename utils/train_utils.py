@@ -2,6 +2,7 @@ import os
 import flax
 import json
 import jax.numpy as jnp
+from matplotlib import cm
 import matplotlib.pyplot as plt
 
 from typing import Dict, Any
@@ -22,34 +23,15 @@ class EvalMetrics(metrics.Collection):
 def set_name(config):
     if 'mass_spring' in config.system_name:
         name = 'MassSpring'
-    elif config.system_name == 'LC':
-        name =  'LC'
-    elif config.system_name == 'LC1':
-        name = 'LC1'
-    elif config.system_name == 'LC2':
-        name = 'LC2'
-    elif config.system_name == 'CoupledLC':
-        name = 'CoupledLC'
     else:
-        raise NotImplementedError()
+        name = config.system_name
     return name
 
-def create_net(name, training_params, net_params):
-    if training_params.net_name == 'GNS':
-        if name == 'MassSpring':
-            return MassSpringGNS(**net_params)
-        elif name == 'LC1' or name == 'LC2' or 'CoupledLC':
-            return LCGNS(**net_params)
-        elif name == 'LC':
-            raise NotImplementedError()
-        else:
-            raise NotImplementedError()
-        
-    # elif training_params.net_name == 'GNODE':
-    #     return GNODE(**net_params)
-    
+def create_net(name, net_params):
+    if name == 'MassSpring':
+        return MassSpringGNS(**net_params)
     else:
-        raise RuntimeError('Invalid net name')
+        return PHGNS(**net_params)
     
 def create_graph_builder(name, training_params=None, net_params=None):
     if name == 'MassSpring':
@@ -68,6 +50,10 @@ def create_graph_builder(name, training_params=None, net_params=None):
         return LC2GraphBuilder
     elif name == 'CoupledLC':
         return CoupledLCGraphBuilder
+    elif name == 'Alternator':
+        return AlternatorGraphBuilder
+    else:
+        raise NotImplementedError(f'Graph builder not implemented for system {name}')
 
 def add_prefix_to_keys(result: Dict[str, Any], prefix: str) -> Dict[str, Any]:
   """Adds a prefix to the keys of a dict, returning a new dict."""
@@ -103,6 +89,8 @@ def plot_evaluation_curves(
     ):
     if not os.path.isdir(plot_dir):
         os.makedirs(plot_dir)
+
+    cmap = cm.tab10
 
     system_name = aux_data['name']
     if system_name == 'MassSpring':
@@ -204,55 +192,46 @@ def plot_evaluation_curves(
         fig = plt.figure(layout="constrained", figsize=(20,10))
         fig.suptitle(f'{prefix}')
 
-        layout = [['Q1', 'Phi1', 'Q3', 'H'],
-                  ['Q1_error', 'Phi1_error', 'Q3_error', 'H_error']]
+        layout = [['Q', 'Phi', 'H'],
+                  ['Q_error', 'Phi_error','H_error']]
         ax = fig.subplot_mosaic(layout)
 
-        ax['Q1'].set_title('$Q_1$')
-        ax['Q1'].plot(ts, pred_data[0,:], label='predicted')
-        ax['Q1'].plot(ts, exp_data[0,:], label='expected')
-        ax['Q1'].set_xlabel('Time [$s$]')
-        ax['Q1'].set_ylabel('$Q_1$')
-        ax['Q1'].legend()
+        ax['Q'].set_title('$Q$')
+        ax['Q'].plot(ts, pred_data[0,:], color=cmap(0), ls='-', label='pred $Q_1$')
+        ax['Q'].plot(ts, pred_data[2,:], color=cmap(1), ls='-', label='pred $Q_3$')
+        ax['Q'].plot(ts, exp_data[0,:], color=cmap(0), ls='--', label='exp $Q_1$')
+        ax['Q'].plot(ts, exp_data[2,:], color=cmap(1), ls='--', label='exp $Q_3$')
+        ax['Q'].set_xlabel('Time [$s$]')
+        ax['Q'].set_ylabel('$Q$')
+        ax['Q'].legend()
 
-        ax['Phi1'].set_title('$\Phi_1$')
-        ax['Phi1'].plot(ts, pred_data[1,:], label='predicted')
-        ax['Phi1'].plot(ts, exp_data[1,:], label='expected')
-        ax['Phi1'].set_xlabel('Time [$s$]')
-        ax['Phi1'].set_ylabel('$\Phi_1$')
-        ax['Phi1'].legend()
-
-        ax['Q3'].set_title('$Q_3$')
-        ax['Q3'].plot(ts, pred_data[2,:], label='predicted')
-        ax['Q3'].plot(ts, exp_data[2,:], label='expected')
-        ax['Q3'].set_xlabel('Time [$s$]')
-        ax['Q3'].set_ylabel('$Q_3$')
-        ax['Q3'].legend()
+        ax['Phi'].set_title('$\Phi$')
+        ax['Phi'].plot(ts, pred_data[1,:], color=cmap(0), ls='-', label='pred $\Phi$')
+        ax['Phi'].plot(ts, exp_data[1,:], color=cmap(0), ls='--', label='exp $\Phi$')
+        ax['Phi'].set_xlabel('Time [$s$]')
+        ax['Phi'].set_ylabel('$\Phi$')
+        ax['Phi'].legend()
 
         ax['H'].set_title('Hamiltonian')
-        ax['H'].plot(ts, pred_data[3,:], label='predicted')
-        ax['H'].plot(ts, exp_data[3,:], label='expected')
+        ax['H'].plot(ts, pred_data[3,:], color=cmap(0), ls='-', label='predicted')
+        ax['H'].plot(ts, exp_data[3,:], color=cmap(0), ls='--', label='expected')
         ax['H'].set_xlabel('Time [$s$]')
         ax['H'].set_ylabel('Hamiltonian')
         ax['H'].legend()
     
-        ax['Q1_error'].set_title('$Q_1$ Error')
-        ax['Q1_error'].plot(ts, exp_data[0,:] - pred_data[0,:])
-        ax['Q1_error'].set_xlabel('Time [$s$]')
-        ax['Q1_error'].set_ylabel('$Q_1$')
+        ax['Q_error'].set_title('$Q$ Error')
+        ax['Q_error'].plot(ts, exp_data[0,:] - pred_data[0,:], color=cmap(0), ls='-')
+        ax['Q_error'].plot(ts, exp_data[2,:] - pred_data[2,:], color=cmap(1), ls='-')
+        ax['Q_error'].set_xlabel('Time [$s$]')
+        ax['Q_error'].set_ylabel('$Q$')
 
-        ax['Phi1_error'].set_title('$\Phi_1$ Error')
-        ax['Phi1_error'].plot(ts, exp_data[1,:] - pred_data[1,:])
-        ax['Phi1_error'].set_xlabel('Time [$s$]')
-        ax['Phi1_error'].set_ylabel('$\Phi_1$')
-
-        ax['Q3_error'].set_title('$Q_3$ Error')
-        ax['Q3_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
-        ax['Q3_error'].set_xlabel('Time [$s$]')
-        ax['Q3_error'].set_ylabel('$Q_3$')
+        ax['Phi_error'].set_title('$\Phi_1$ Error')
+        ax['Phi_error'].plot(ts, exp_data[1,:] - pred_data[1,:], color=cmap(0), ls='-')
+        ax['Phi_error'].set_xlabel('Time [$s$]')
+        ax['Phi_error'].set_ylabel('$\Phi_1$')
 
         ax['H_error'].set_title('Hamiltonian Error')
-        ax['H_error'].plot(ts, exp_data[3,:] - pred_data[3,:])
+        ax['H_error'].plot(ts, exp_data[3,:] - pred_data[3,:], color=cmap(0), ls='-')
         ax['H_error'].set_xlabel('Time [$s$]')
         ax['H_error'].set_ylabel('Hamiltonian')
 
@@ -310,86 +289,139 @@ def plot_evaluation_curves(
     
     elif system_name == 'CoupledLC' or system_name == 'CompLCCircuits':
         fig = plt.figure(layout="constrained", figsize=(20,10))
-        fig.suptitle(f'{prefix}')
+        # fig.suptitle(f'{prefix}')
 
-        layout = [['Q1', 'Phi1', 'Q3', 'Q2', 'Phi2', 'H'],
-                  ['Q1_error', 'Phi1_error', 'Q3_error', 'Q2_error', 'Phi2_error', 'H_error']]
+        layout = [['Q', 'Phi', 'H'],
+                  ['Q_error', 'Phi_error', 'H_error']]
         ax = fig.subplot_mosaic(layout)
 
-        ax['Q1'].set_title('$Q_1$')
-        ax['Q1'].plot(ts, pred_data[0,:], label='predicted')
-        ax['Q1'].plot(ts, exp_data[0,:], label='expected')
-        ax['Q1'].set_xlabel('Time [$s$]')
-        ax['Q1'].set_ylabel('$Q_1$')
-        ax['Q1'].legend()
+        ax['Q'].set_title('$Q$')
+        ax['Q'].plot(ts, pred_data[0,:], color=cmap(0), ls='-', label='pred $Q_1$')
+        ax['Q'].plot(ts, exp_data[0,:], color=cmap(0), ls='--', label='exp $Q_1$')
+        ax['Q'].plot(ts, pred_data[2,:], color=cmap(1), ls='-', label='pred $Q_3$')
+        ax['Q'].plot(ts, exp_data[2,:], color=cmap(1), ls='--', label='exp $Q_3$')
+        ax['Q'].plot(ts, pred_data[3,:], color=cmap(2), ls='-', label='pred $Q_2$')
+        ax['Q'].plot(ts, exp_data[3,:], color=cmap(2), ls='--', label='exp $Q_2$')
+        ax['Q'].set_xlabel('Time [$s$]')
+        ax['Q'].set_ylabel('$Q_1$')
+        ax['Q'].legend(loc='upper right')
 
-        ax['Phi1'].set_title('$\Phi_1$')
-        ax['Phi1'].plot(ts, pred_data[1,:], label='predicted')
-        ax['Phi1'].plot(ts, exp_data[1,:], label='expected')
-        ax['Phi1'].set_xlabel('Time [$s$]')
-        ax['Phi1'].set_ylabel('$\Phi_1$')
-        ax['Phi1'].legend()
-
-        ax['Q3'].set_title('$Q_3$')
-        ax['Q3'].plot(ts, pred_data[2,:], label='predicted')
-        ax['Q3'].plot(ts, exp_data[2,:], label='expected')
-        ax['Q3'].set_xlabel('Time [$s$]')
-        ax['Q3'].set_ylabel('$Q_3$')
-        ax['Q3'].legend()
-
-        ax['Q2'].set_title('$Q_2$')
-        ax['Q2'].plot(ts, pred_data[3,:], label='predicted')
-        ax['Q2'].plot(ts, exp_data[3,:], label='expected')
-        ax['Q2'].set_xlabel('Time [$s$]')
-        ax['Q2'].set_ylabel('$Q_2$')
-        ax['Q2'].legend()
-
-
-        ax['Phi2'].set_title('$\Phi_2$')
-        ax['Phi2'].plot(ts, pred_data[4,:], label='predicted')
-        ax['Phi2'].plot(ts, exp_data[4,:], label='expected')
-        ax['Phi2'].set_xlabel('Time [$s$]')
-        ax['Phi2'].set_ylabel('$\Phi_2$')
-        ax['Phi2'].legend()
+        ax['Phi'].set_title('$\Phi$')
+        ax['Phi'].plot(ts, pred_data[1,:], color=cmap(0), ls='-', label='pred $\Phi_1$')
+        ax['Phi'].plot(ts, exp_data[1,:], color=cmap(0), ls='--', label='exp $\Phi_1$')
+        ax['Phi'].plot(ts, pred_data[4,:], color=cmap(1), ls='-', label='pred $\Phi_2$')
+        ax['Phi'].plot(ts, exp_data[4,:], color=cmap(1), ls='--', label='exp $\Phi_2$')
+        ax['Phi'].set_xlabel('Time [$s$]')
+        ax['Phi'].set_ylabel('$\Phi$')
+        ax['Phi'].legend(loc='upper right')
 
         ax['H'].set_title('Hamiltonian')
-        ax['H'].plot(ts, pred_data[5,:], label='predicted')
-        ax['H'].plot(ts, exp_data[5,:], label='expected')
+        ax['H'].plot(ts, pred_data[5,:], color=cmap(0), ls='-', label='pred H')
+        ax['H'].plot(ts, exp_data[5,:], color=cmap(0), ls='--',label='exp H')
         ax['H'].set_xlabel('Time [$s$]')
         ax['H'].set_ylabel('Hamiltonian')
-        ax['H'].legend()
+        ax['H'].legend(loc='upper right')
     
-        ax['Q1_error'].set_title('$Q_1$ Error')
-        ax['Q1_error'].plot(ts, exp_data[0,:] - pred_data[0,:])
-        ax['Q1_error'].set_xlabel('Time [$s$]')
-        ax['Q1_error'].set_ylabel('$Q_1$')
+        ax['Q_error'].set_title('$Q$ Error')
+        ax['Q_error'].plot(ts, exp_data[0,:] - pred_data[0,:], color=cmap(0), label='$Q_1$')
+        ax['Q_error'].plot(ts, exp_data[2,:] - pred_data[2,:], color=cmap(1), label='$Q_3$')
+        ax['Q_error'].plot(ts, exp_data[3,:] - pred_data[3,:], color=cmap(2), label='$Q_2$')
+        ax['Q_error'].set_xlabel('Time [$s$]')
+        ax['Q_error'].set_ylabel('$Q$')
+        ax['Q_error'].legend(loc='upper right')
 
-        ax['Phi1_error'].set_title('$\Phi_1$ Error')
-        ax['Phi1_error'].plot(ts, exp_data[1,:] - pred_data[1,:])
-        ax['Phi1_error'].set_xlabel('Time [$s$]')
-        ax['Phi1_error'].set_ylabel('$\Phi_1$')
-
-        ax['Q3_error'].set_title('$Q_3$ Error')
-        ax['Q3_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
-        ax['Q3_error'].set_xlabel('Time [$s$]')
-        ax['Q3_error'].set_ylabel('$Q_3$')
-
-        ax['Q2_error'].set_title('$Q_2$ Error')
-        ax['Q2_error'].plot(ts, exp_data[3,:] - pred_data[3,:])
-        ax['Q2_error'].set_xlabel('Time [$s$]')
-        ax['Q2_error'].set_ylabel('$Q_2$')
-
-        ax['Phi2_error'].set_title('$\Phi_2$ Error')
-        ax['Phi2_error'].plot(ts, exp_data[4,:] - pred_data[4,:])
-        ax['Phi2_error'].set_xlabel('Time [$s$]')
-        ax['Phi2_error'].set_ylabel('$\Phi_2$')
+        ax['Phi_error'].set_title('$\Phi$ Error')
+        ax['Phi_error'].plot(ts, exp_data[1,:] - pred_data[1,:], color=cmap(0), label='$\Phi_1$')
+        ax['Phi_error'].plot(ts, exp_data[4,:] - pred_data[4,:], color=cmap(1),  label='$\Phi_2$')
+        ax['Phi_error'].set_xlabel('Time [$s$]')
+        ax['Phi_error'].set_ylabel('$\Phi$')
+        ax['Phi_error'].legend(loc='upper right')
 
         ax['H_error'].set_title('Hamiltonian Error')
-        ax['H_error'].plot(ts, exp_data[5,:] - pred_data[5,:])
+        ax['H_error'].plot(ts, exp_data[5,:] - pred_data[5,:], color=cmap(0))
         ax['H_error'].set_xlabel('Time [$s$]')
         ax['H_error'].set_ylabel('Hamiltonian')
 
         plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
         if show: plt.show()
-        plt.close()    
+        plt.close()
+    elif system_name == 'Alternator':
+        fig = plt.figure(layout="constrained", figsize=(20,10))
+        # fig.suptitle(f'{prefix}')
+
+        layout = [['Phi', 'p', 'theta', 'H'],
+                  ['Phi_error', 'p_error', 'theta_error', 'H_error']]
+        ax = fig.subplot_mosaic(layout)
+
+        ax['Phi'].set_title('$\Phi$')
+        ax['Phi'].plot(ts, pred_data[0,:].T, color=cmap(0), ls='-', label='pred $\phi_{Rf}$')
+        ax['Phi'].plot(ts, exp_data[0,:].T, color=cmap(0), ls='--', label='exp $\phi_{Rf}$')
+        ax['Phi'].plot(ts, pred_data[1,:].T, color=cmap(1), ls='-', label='pred $\phi_{Rkd}$')
+        ax['Phi'].plot(ts, exp_data[1,:].T, color=cmap(1), ls='--', label='exp $\phi_{Rkd}$')
+        ax['Phi'].plot(ts, pred_data[2,:].T, color=cmap(2), ls='-', label='pred $\phi_{Rkq}$')
+        ax['Phi'].plot(ts, exp_data[2,:].T, color=cmap(2), ls='--', label='exp $\phi_{Rkq}$')
+        ax['Phi'].plot(ts, pred_data[3,:].T, color=cmap(3), ls='-', label='pred $\phi_{Sa}$')
+        ax['Phi'].plot(ts, exp_data[3,:].T, color=cmap(3), ls='--', label='exp $\phi_{Sa}$')
+        ax['Phi'].plot(ts, pred_data[4,:].T, color=cmap(4), ls='-', label='pred $\phi_{Sb}$')
+        ax['Phi'].plot(ts, exp_data[4,:].T, color=cmap(4), ls='--', label='exp $\phi_{Sb}$')
+        ax['Phi'].plot(ts, pred_data[5,:].T, color=cmap(5), ls='-', label='pred $\phi_{Sc}$')
+        ax['Phi'].plot(ts, exp_data[5,:].T, color=cmap(5), ls='--', label='exp $\phi_{Sc}$')
+        ax['Phi'].set_xlabel('Time [$s$]')
+        ax['Phi'].set_ylabel('$\Phi$')
+        ax['Phi'].legend(loc='upper right')
+
+        ax['p'].set_title('$p$')
+        ax['p'].plot(ts, pred_data[6,:], color=cmap(0), ls='-', label='pred $p$')
+        ax['p'].plot(ts, exp_data[6,:], color=cmap(0), ls='--', label='exp $p$')
+        ax['p'].set_xlabel('Time [$s$]')
+        ax['p'].set_ylabel('Rotor momentum $p$')
+        ax['p'].legend(loc='upper right')
+
+        ax['theta'].set_title(r'$\theta$')
+        ax['theta'].plot(ts, pred_data[7,:], color=cmap(0), ls='-', label='pred $\theta$')
+        ax['theta'].plot(ts, exp_data[7,:], color=cmap(0), ls='--', label='exp $\theta$')
+        ax['theta'].set_xlabel('Time [$s$]')
+        ax['theta'].set_ylabel(r'Rotor angle $\theta$')
+        ax['theta'].legend(loc='upper right')
+
+        ax['H'].set_title('Hamiltonian')
+        ax['H'].plot(ts, pred_data[8,:], color=cmap(0), ls='-', label='predicted')
+        ax['H'].plot(ts, exp_data[8,:], color=cmap(0), ls='--', label='expected')
+        ax['H'].set_xlabel('Time [$s$]')
+        ax['H'].set_ylabel('Hamiltonian')
+        ax['H'].legend(loc='upper right')
+    
+
+        ax['Phi_error'].set_title('$\Phi$ Error')
+        ax['Phi_error'].plot(ts, exp_data[0,:].T - pred_data[0,:].T, color=cmap(0), ls='-', label='exp $\phi_{Rf}$')
+        ax['Phi_error'].plot(ts, exp_data[1,:].T - pred_data[1,:].T, color=cmap(1), ls='-', label='exp $\phi_{Rkd}$')
+        ax['Phi_error'].plot(ts, exp_data[2,:].T - pred_data[2,:].T, color=cmap(2), ls='-', label='exp $\phi_{Rkq}$')
+        ax['Phi_error'].plot(ts, exp_data[3,:].T - pred_data[3,:].T, color=cmap(3), ls='-', label='exp $\phi_{Sa}$')
+        ax['Phi_error'].plot(ts, exp_data[4,:].T - pred_data[4,:].T, color=cmap(4), ls='-', label='exp $\phi_{Sb}$')
+        ax['Phi_error'].plot(ts, exp_data[5,:].T - pred_data[5,:].T, color=cmap(5), ls='-', label='exp $\phi_{Sc}$')
+        ax['Phi_error'].set_xlabel('Time [$s$]')
+        ax['Phi_error'].set_ylabel('$\Phi$')
+        ax['Phi_error'].legend(loc='upper right')
+
+        ax['p_error'].set_title('$p$ Error')
+        ax['p_error'].plot(ts, exp_data[6,:] - pred_data[6,:])
+        ax['p_error'].set_xlabel('Time [$s$]')
+        ax['p_error'].set_ylabel('Rotor momentum $p$')
+
+        ax['theta_error'].set_title(r'$\theta$ Error')
+        ax['theta_error'].plot(ts, exp_data[7,:] - pred_data[7,:], color=cmap(0), ls='-')
+        ax['theta_error'].set_xlabel('Time [$s$]')
+        ax['theta_error'].set_ylabel(r'$\theta$')
+
+        ax['H_error'].set_title('Hamiltonian Error')
+        ax['H_error'].plot(ts, exp_data[8,:] - pred_data[8,:], color=cmap(0), ls='-')
+        ax['H_error'].set_xlabel('Time [$s$]')
+        ax['H_error'].set_ylabel('Hamiltonian')
+
+        fig.tight_layout()
+
+        plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
+        if show: plt.show()
+        plt.close()
+
     plt.close()
