@@ -33,7 +33,8 @@ def transfer(config):
 
     graph_builder = create_graph_builder(config.eval_system_name)
     eval_gb = graph_builder(paths.evaluation_data_path)
-    net.edge_idxs = get_edge_idxs(config.eval_system_name)
+    net.edge_idxs = eval_gb.edge_idxs
+    net.node_idxs = eval_gb.node_idxs
 
     if not training_params_1.learn_matrices:
         J, R, g = get_pH_matrices(config.eval_system_name)

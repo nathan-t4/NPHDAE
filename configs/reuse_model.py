@@ -39,7 +39,8 @@ def get_reuse_model_config(args):
     config.net_params_1.graph_from_state = None # will set later
     config.net_params_1.J = None # will set later
     config.net_params_1.g = None # will set later
-    config.net_params_1.edge_idxs = None
+    config.net_params_1.edge_idxs = None # will set later
+    config.net_params_1.node_idxs = None # will set later
     config.net_params_1.include_idxs = None
     config.net_params_1.integration_method = 'adam_bashforth'
     config.net_params_1.dt = 0.01

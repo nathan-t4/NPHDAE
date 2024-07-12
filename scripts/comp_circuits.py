@@ -112,11 +112,16 @@ def compose(config):
     net_one = create_net(config.net_one_name, net_params_1)
     net_two = create_net(config.net_two_name, net_params_2)
 
-    net_one.graph_from_state = create_graph_builder(config.net_one_name)('results/LC1_data/train_200_700.pkl').get_graph_from_state
-    net_two.graph_from_state = create_graph_builder(config.net_two_name)('results/LC1_data/train_200_700.pkl').get_graph_from_state
+    gb_one = create_graph_builder(config.net_one_name)(paths.training_data_one)
+    gb_two = create_graph_builder(config.net_two_name)(paths.training_data_two)
 
-    net_one.edge_idxs = get_edge_idxs(config.net_one_name)
-    net_two.edge_idxs = get_edge_idxs(config.net_two_name)
+    net_one.graph_from_state = gb_one.get_graph_from_state
+    net_two.graph_from_state = gb_two.get_graph_from_state
+
+    net_one.edge_idxs = gb_one.edge_idxs
+    net_one.node_idxs = gb_one.node_idxs
+    net_two.edge_idxs = gb_two.edge_idxs
+    net_two.node_idxs = gb_two.node_idxs
     net_two.include_idxs = np.array([0,1])
 
     init_control = eval_gb._control[0,0]

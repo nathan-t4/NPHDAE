@@ -34,13 +34,14 @@ def get_lc1_config(args):
 
     config.net_params = ml_collections.ConfigDict()
     config.net_params.edge_idxs = None
+    config.net_params.node_idxs = None
     config.net_params.include_idxs = None
     config.net_params.graph_from_state = None # will set later
-    config.net_params.J = None # will set later
-    config.net_params.R = None # will set later
-    config.net_params.g = None # will set later
+    # config.net_params.J = None # will set later
+    # config.net_params.R = None # will set later
+    # config.net_params.g = None # will set later
     config.net_params.learn_nodes = True
-    config.net_params.integration_method = 'adam_bashforth'
+    config.net_params.integration_method = 'BDF' # 'adam_bashforth'
     config.net_params.dt = 0.01
     config.net_params.T = 2
     config.net_params.num_mp_steps = 1

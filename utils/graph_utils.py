@@ -1,6 +1,9 @@
 import flax
+import jax
 import jraph
+import numpy as np
 import jax.numpy as jnp
+# from scipy.optimize._numdiff import approx_derivative
 
 def add_edges(graph, undirected_edges, self_loops):
     if undirected_edges:
@@ -45,3 +48,45 @@ def check_dictionary(dictionary, condition):
         cond = cond and (jnp.all(condition(array)))
 
     return cond
+
+def incidence_matrices_from_graph(graph, edge_types=None):
+    # return (AC, AR, AL, AV, AI)
+    # edge_type_labeling = ('C', 'R', 'L', 'V', 'I')
+    AC = []
+    AR = []
+    AL = []
+    AV = []
+    AI = []
+    A = [AC, AR, AL, AV, AI]
+    edge_types = [0, 2, 0]
+
+    for i, edge_feat in enumerate(graph.edges):
+        label = edge_types[i]
+        # edge_type = edge_type_labeling[label]
+        sender_idx = graph.senders[i]
+        receiver_idx = graph.receivers[i]
+        Ai = np.zeros((len(graph.nodes)))
+        Ai[sender_idx] = -1
+        Ai[receiver_idx] = 1
+        A[label].append(Ai)
+
+    A = [jnp.array(a).T if len(a) > 0 else None for a in A]
+    AC, AR, AL, AV, AI = A
+    splits = jnp.array([len(AC.T), 
+                       len(AC.T) + len(AL.T), 
+                       len(AC.T) + len(AL.T) + len(AC)])
+    
+    return A, splits
+
+def jac(t, y, yp, F, f=None):
+    n = len(y)
+    z = jnp.concatenate((y, yp))
+
+    def fun_composite(t, z):
+        y, yp = z[:n], z[n:]
+        return F(t, y, yp)
+    
+    J = jax.jacfwd(lambda z: fun_composite(t, z))(z)
+    J = J.reshape((n, 2 * n))
+    Jy, Jyp = J[:, :n], J[:, n:]
+    return Jy, Jyp

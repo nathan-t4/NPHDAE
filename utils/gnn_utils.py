@@ -7,6 +7,10 @@ import matplotlib.pyplot as plt
 
 from typing import Dict, Any
 
+"""
+    TODO: remove
+"""
+
 def get_edge_idxs(name):
     match name:
         case 'LC1':

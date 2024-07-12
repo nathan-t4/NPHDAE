@@ -31,7 +31,7 @@ def create_net(name, net_params):
     if name == 'MassSpring':
         return MassSpringGNS(**net_params)
     else:
-        return PHGNS(**net_params)
+        return PHGNS2(**net_params)
     
 def create_graph_builder(name, training_params=None, net_params=None):
     if name == 'MassSpring':

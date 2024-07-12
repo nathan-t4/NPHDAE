@@ -33,10 +33,11 @@ def get_alternator_config(args):
     config.optimizer_params.learning_rate = 0.0001
 
     config.net_params = ml_collections.ConfigDict()
-    config.net_params.edge_idxs = None
+    config.net_params.edge_idxs = None # will set later
+    config.net_params.node_idxs = None # will set later
     config.net_params.graph_from_state = None # will set later
     config.net_params.J = None # will set later
-    config.net_params.R = None
+    config.net_params.R = None # will set later
     config.net_params.g = None # will set later
     config.net_params.learn_nodes = True
     config.net_params.integration_method = 'adam_bashforth'

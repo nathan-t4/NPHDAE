@@ -23,6 +23,8 @@ def get_comp_gnn_config(args):
     config.paths.ckpt_two_step = 38
     config.paths.ckpt_two_dir = 'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model'
     config.paths.coupled_lc_data_path = 'results/CoupledLC_data/val_5_1500_constant_params.pkl'
+    config.paths.training_data_one = 'results/LC1_data/train_200_700_constant_params.pkl'
+    config.paths.training_data_two = 'results/LC1_data/train_200_700_constant_params.pkl'
 
     config.optimizer_params_1 = ml_collections.ConfigDict()
     config.optimizer_params_1.learning_rate = 1e-4
@@ -33,6 +35,7 @@ def get_comp_gnn_config(args):
     config.net_params_1.R = None
     config.net_params_1.g = None
     config.net_params_1.edge_idxs = None
+    config.net_params_1.node_idxs = None
     config.net_params_1.include_idxs = None
     config.net_params_1.integration_method = 'adam_bashforth'
     config.net_params_1.dt = 0.01
@@ -58,6 +61,7 @@ def get_comp_gnn_config(args):
     config.net_params_2.R = None
     config.net_params_2.g = None
     config.net_params_2.edge_idxs = None
+    config.net_params_2.node_idxs = None
     config.net_params_2.include_idxs = None
     config.net_params_2.integration_method = 'adam_bashforth'
     config.net_params_2.dt = 0.01

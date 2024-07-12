@@ -58,11 +58,11 @@ def eval(config: ml_collections.ConfigDict):
     t0 = 0
     init_control = eval_gb._control[0, 0]
 
-    # net_params.system_params = train_gb.system_params
     net_params.training = False
     net_params.graph_from_state = train_gb.get_graph_from_state
     net_params.include_idxs = None
-    net_params.edge_idxs = get_edge_idxs(name)
+    net_params.edge_idxs = train_gb.edge_idxs
+    net_params.node_idxs = train_gb.node_idxs
 
     if not training_params.learn_matrices:
         net_params.J = train_gb.J
@@ -223,13 +223,14 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     net_params.training = True
     net_params.graph_from_state = train_gb.get_graph_from_state
     net_params.include_idxs = None
-    net_params.edge_idxs = get_edge_idxs(name)
+    net_params.edge_idxs = train_gb.edge_idxs
+    net_params.node_idxs = train_gb.node_idxs
     t0 = 0
 
-    if not training_params.learn_matrices:
-        net_params.J = train_gb.J
-        net_params.R = train_gb.R
-        net_params.g = train_gb.g
+    # if not training_params.learn_matrices:
+    #     net_params.J = train_gb.J
+    #     net_params.R = train_gb.R
+    #     net_params.g = train_gb.g
 
     if name == 'MassSpring':
         net_params.norm_stats = train_gb._norm_stats
@@ -337,7 +338,8 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 batch_data = (batch_pos, batch_vel, batch_control)
 
             graphs = train_gb.get_graph_batch(trajs, t0s)
-            loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data)
+            # states = train_gb.get_state_batch(trajs, t0s) # TODO
+            loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data) # TODO: replace graphs with states
             state = state.apply_gradients(grads=grads)
             return state, loss
         

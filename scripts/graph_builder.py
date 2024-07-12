@@ -365,6 +365,8 @@ class LC1GraphBuilder(GraphBuilder):
         self._H = 0.5 * (self._Q1**2 / self.C + self._Q3**2 / self.C_prime + self._Phi1**2 / self.L)
         self._control = jnp.array(u).squeeze()
 
+        self.edge_idxs = np.array([[0,2]])
+        self.node_idxs = None
         self.J = jnp.array([[0, 1, 0],
                             [-1, 0, 1],
                             [0, -1, 0]])
@@ -420,9 +422,12 @@ class LC1GraphBuilder(GraphBuilder):
         self.receivers = jnp.array([1, 2, 2])
 
     def get_graph_from_state(self, state, control=None, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
+        # Q1 = state[0]
+        # Phi1 = state[1]
+        # Q3 = state[2]
         Q1 = state[0]
-        Phi1 = state[1]
-        Q3 = state[2]
+        Q3 = state[1]
+        Phi1 = state[2]
         nodes = nodes
         if set_nodes:
             V2 = Q1 / system_params['C']
@@ -475,6 +480,20 @@ class LC1GraphBuilder(GraphBuilder):
         _, graphs = jax.lax.scan(f, None, (traj_idxs, t0s))
         
         return graphs
+    
+    def get_state(self, traj_idx, t) -> jnp.ndarray:
+        return jnp.array([self._Q1[traj_idx, t],
+                          self._Q3[traj_idx, t],
+                          self._Phi1[traj_idx, t],
+                          [0],
+                          self._V2[traj_idx, t],
+                          self._V3[traj_idx, t]])
+    
+    def get_state_batch(self, traj_idxs, t0s) -> jnp.ndarray:
+        def f(carry, idxs):
+            return carry, self.get_state(*idxs)
+        
+        _, states = jax.lax.scan(f, None, (traj_idxs, t0s))
     
     def tree_flatten(self):
         children = ()
@@ -691,6 +710,8 @@ class CoupledLCGraphBuilder(GraphBuilder):
 
         self._H = 0.5 * (self._Q1 ** 2 / self.system_params['C'] + self._Q2 ** 2 / self.system_params['C'] + self._Q3 ** 2 / self.system_params['C_prime'] + self._Phi1 ** 2 / self.system_params['L'] + self._Phi2 ** 2 / self.system_params['L'])
 
+        self.edge_idxs = np.array([[0,2,3]])
+        self.node_idxs = None
         self.J = jnp.array([[0, 1, 0, 0, 0],
                             [-1, 0, 1, 0, 0],
                             [0, -1, 0, 0, -1],
@@ -881,6 +902,9 @@ class AlternatorGraphBuilder(GraphBuilder):
             self.system_params['L_kkd'],
             self.system_params['L_kkq'],
         )).squeeze()
+
+        self.edge_idxs = np.array([[0,1,2,3,4,5], [6,None,None,None,None,None]])
+        self.node_idxs = None
 
         self.J = jnp.array([[0, 0, 0, 0, 0, 0, 0, 0],
                             [0, 0, 0, 0, 0, 0, 0, 0],

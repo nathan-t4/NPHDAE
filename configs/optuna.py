@@ -40,6 +40,7 @@ def get_optuna_cfg(name, trial) -> ml_collections.ConfigDict:
     config.net_params.R = None
     config.net_params.g = None
     config.net_params.edge_idxs = None
+    config.net_params.node_idxs = None
     config.net_params.include_idxs = None
     config.net_params.integration_method = 'adam_bashforth'
     # config.net_params.num_mp_steps = trial.suggest_int('num_mp_steps', 1, 2, log=True)

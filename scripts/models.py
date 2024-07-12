@@ -230,11 +230,12 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
         are processed with the n-th decoder.
         All other edges are processed with the last decoder.
     """
-    edge_idxs: list
+    edge_idxs: Sequence
+    node_idxs: Sequence
     encoder_edge_fns: Sequence[Callable]
-    encoder_node_fn: Callable
+    encoder_node_fns: Sequence[Callable]
     decoder_edge_fns: Sequence[Callable]
-    decoder_node_fn: Callable
+    decoder_node_fns: Sequence[Callable]
     decoder_postprocessor: Callable
 
     num_mp_steps: int
@@ -255,9 +256,9 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
 
     @nn.compact    
     def __call__(self, graph, aux_data, rng):   
-        def HeterogeneousGraphMapFeatures(embed_edge_fns = Sequence[Callable],
-                                       embed_node_fn = None,
-                                       embed_global_fn = None):
+        def HeterogeneousGraphMapFeatures(embed_edge_fns: Sequence[Callable] = None,
+                                          embed_node_fns: Sequence[Callable] = None,
+                                          embed_global_fn: Callable = None):
             """
                 This function processes each edge independently, but the nodes are processed altogether.
                 So the edges are effectively batched, while the nodes are not.
@@ -274,10 +275,8 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
 
             def Embed(graph):
                 """
-                1. differentiate edges_one and edges_two
-                2. apply embed_edge_fn_1 on edges_one and embed_edge_fn_2 on edges_two (in place?)
-                3. replace graph edges with new edges, nodes with new nodes, and globals with new globals
-                4. return graph
+                    Differentiate edges and nodes by type, 
+                    and apply the correct mapping function for each edge and node feature.
                 """
                 new_edges = None
                 for i in range(len(graph.edges)):
@@ -294,33 +293,33 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
                     else:
                         new_edges = jnp.concatenate((new_edges, new_edge))
 
-                # new_nodes = None
-                # for i in range(len(graph.nodes)):
-                #     new_node = None
-                #     node_type = np.where(self.node_idxs == i)[0]
+                new_nodes = None
+                for i in range(len(graph.nodes)):
+                    new_node = None
+                    node_type = np.where(self.node_idxs == i)[0]
 
-                #     node_type = None if node_type.shape[0] == 0 else node_type
-                #     if node_type is not None:
-                #         new_node = embed_node_fns[node_type.item()](graph.nodes[i])
-                #     else:
-                #         new_node = embed_node_fns[-1](graph.nodes[i])
-                #     if new_nodes is None:
-                #         new_nodes = new_node
-                #     else:
-                #         new_nodes = jnp.concatenate((new_nodes, new_node))
+                    node_type = None if node_type.shape[0] == 0 else node_type
+                    if node_type is not None:
+                        new_node = embed_node_fns[node_type.item()](graph.nodes[i])
+                    else:
+                        new_node = embed_node_fns[-1](graph.nodes[i])
+                    if new_nodes is None:
+                        new_nodes = new_node
+                    else:
+                        new_nodes = jnp.concatenate((new_nodes, new_node))
 
-                return graph._replace(nodes=embed_node_fn(graph.nodes),
+                return graph._replace(nodes=new_nodes.reshape(graph.nodes.shape[0], -1),
                                       edges=new_edges.reshape(graph.edges.shape[0], -1),
                                       globals=embed_globals_fn(graph.globals))    
             return Embed
         
         encoder = HeterogeneousGraphMapFeatures(
-            embed_node_fn=self.encoder_node_fn,
+            embed_node_fns=self.encoder_node_fns,
             embed_edge_fns=self.encoder_edge_fns,
         )  
 
         decoder = HeterogeneousGraphMapFeatures(
-            embed_node_fn=self.decoder_node_fn,
+            embed_node_fns=self.decoder_node_fns,
             embed_edge_fns=self.decoder_edge_fns,
         )
 

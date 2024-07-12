@@ -12,6 +12,8 @@ from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
 from scripts.models import MLP, vmapMLP, GraphNetworkSimulator, HeterogeneousGraphNetworkSimulator
+from scipy_dae.integrate import solve_dae
+import time
 
 class MassSpringGNS(nn.Module):
     # Decoder post-processor parameters
@@ -137,6 +139,7 @@ class PHGNS(nn.Module):
 
     # Graph Network parameters
     edge_idxs: Array
+    node_idxs: Array
     include_idxs: Array
     num_mp_steps: int
     learn_nodes: bool
@@ -163,30 +166,40 @@ class PHGNS(nn.Module):
         '''
         edge_output_size = 1
         node_output_size = 1
-        num_edge_types = len(self.edge_idxs.shape) + 1
-        encoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * (self.hidden_layers),
-                                  with_layer_norm=self.layer_norm, 
-                                  activation=self.activation, 
-                                  name='enc_node') # TODO: GraphMapFeatures only batches edges not nodes... 
+        num_edge_types = 1 if self.edge_idxs is None else (len(self.edge_idxs) + 1)
+        num_node_types = 1 if self.node_idxs is None else (len(self.node_idxs) + 1)
+        # encoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * (self.hidden_layers),
+        #                           with_layer_norm=self.layer_norm, 
+        #                           activation=self.activation, 
+        #                           name='enc_node') # TODO: GraphMapFeatures only batches edges not nodes... 
 
         encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                 with_layer_norm=self.layer_norm, 
                                 activation=self.activation, 
                                 name=f'enc_edge_{i}') for i in range(num_edge_types)]
+        
+        encoder_node_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'enc_node_{i}') for i in range(num_node_types)]
 
-        decoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size],
-                                  activation=self.activation, 
-                                  name='dec_node')
+        # decoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size],
+        #                           activation=self.activation, 
+        #                           name='dec_node')
         
         decoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
                                 activation=self.activation, 
                                 name=f'dec_edge_{i}') for i in range(num_edge_types)]
+        decoder_node_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size], 
+                                activation=self.activation, 
+                                name=f'dec_node_{i}') for i in range(num_node_types)]
 
         net = HeterogeneousGraphNetworkSimulator(
-            edge_idxs=np.array(self.edge_idxs),
-            encoder_node_fn=encoder_node_fn,
+            edge_idxs=self.edge_idxs,
+            node_idxs=self.node_idxs,
+            encoder_node_fns=encoder_node_fns,
             encoder_edge_fns=encoder_edge_fns,
-            decoder_node_fn=decoder_node_fn,
+            decoder_node_fns=decoder_node_fns,
             decoder_edge_fns=decoder_edge_fns,
             decoder_postprocessor=lambda x, _: x, # identity decoder post-processor
             num_mp_steps=self.num_mp_steps,
@@ -258,6 +271,198 @@ class PHGNS(nn.Module):
                 next_state = integrator_factory(self.integration_method)(dynamics_function, cur_state, 0.0, self.dt, self.T)
             else: # single-step integration scheme
                 next_state = integrator_factory(self.integration_method)(dynamics_function, cur_state, 0.0, self.dt)
+            
+            next_globals = jnp.array(H)
+            graph = self.graph_from_state(state=next_state, 
+                                          control=control, 
+                                          system_params=False, 
+                                          set_nodes=False,
+                                          set_ground_and_control=True, 
+                                          nodes=graph.nodes, 
+                                          globals=next_globals)
+            return graph
+
+        aux_data = H, state
+        processed_graph = decoder_postprocessor(processed_graph, aux_data)
+        
+        return processed_graph
+
+class PHGNS2(nn.Module):
+    # Decoder post-processor parameters
+    graph_from_state: Callable
+    integration_method: str
+    dt: float
+    T: int
+
+    # Graph Network parameters
+    edge_idxs: Array
+    node_idxs: Array
+    include_idxs: Array
+    num_mp_steps: int
+    learn_nodes: bool
+    use_edge_model: bool
+    use_global_model: bool
+    shared_params: bool
+    
+    # Encoder/Decoder MLP parameters
+    layer_norm: bool
+    latent_size: int
+    hidden_layers: int
+    activation: str 
+    dropout_rate: float
+    training: bool
+
+    # Graph parameters
+    noise_std: float
+
+    @nn.compact
+    def __call__(self, graph, control, rng):
+        edge_output_size = 1
+        node_output_size = 1
+        num_edge_types = 1 if self.edge_idxs is None else (len(self.edge_idxs) + 1)
+        num_node_types = 1 if self.node_idxs is None else (len(self.node_idxs) + 1)
+
+        encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'enc_edge_{i}') for i in range(num_edge_types)]
+        
+        encoder_node_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'enc_node_{i}') for i in range(num_node_types)]
+        
+        decoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+                                activation=self.activation, 
+                                name=f'dec_edge_{i}') for i in range(num_edge_types)]
+        decoder_node_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size], 
+                                activation=self.activation, 
+                                name=f'dec_node_{i}') for i in range(num_node_types)]
+
+        net = HeterogeneousGraphNetworkSimulator(
+            edge_idxs=self.edge_idxs,
+            node_idxs=self.node_idxs,
+            encoder_node_fns=encoder_node_fns,
+            encoder_edge_fns=encoder_edge_fns,
+            decoder_node_fns=decoder_node_fns,
+            decoder_edge_fns=decoder_edge_fns,
+            decoder_postprocessor=lambda x, _: x, # identity decoder post-processor
+            num_mp_steps=self.num_mp_steps,
+            shared_params=self.shared_params,
+            learn_nodes=self.learn_nodes,
+            use_edge_model=self.use_edge_model,
+            use_global_model=self.use_global_model,
+            dt=self.dt,
+            T=self.T,
+            latent_size=self.latent_size,
+            hidden_layers=self.hidden_layers,
+            activation=self.activation,
+            dropout_rate=self.dropout_rate,
+            training=self.training,
+            layer_norm=self.layer_norm,
+            name='GNN',
+        )
+        edges_shape = graph.edges.shape
+        cur_nodes = graph.nodes
+        state = jnp.concatenate((graph.edges[jnp.array([0, 2]), 0], # capacitor indices
+                                 graph.edges[jnp.array([1]), 0], # inductor indices
+                                 graph.nodes.squeeze()) # node voltages
+                                 ) # TODO: no voltage source indices
+        if self.training: 
+            rng, edges_rng = jax.random.split(rng)
+            edges_noise = self.noise_std * jax.random.normal(edges_rng, edges_shape)
+            noisy_edges = graph.edges + edges_noise
+            new_edges = jnp.array(noisy_edges).reshape(edges_shape)
+            graph = graph._replace(edges=new_edges)
+
+        def H_from_state(x):
+            graph = self.graph_from_state(state=x, control=control, system_params=False, set_nodes=False, set_ground_and_control=False, nodes=cur_nodes, globals=None)
+            aux_data = None
+            processed_graph = net(graph, aux_data, rng)
+            if self.include_idxs is None:
+                H = jnp.sum(processed_graph.edges)
+            else:
+                H = jnp.sum(processed_graph.edges[self.include_idxs])
+            return H, processed_graph
+        
+        H, processed_graph = H_from_state(state)
+
+        # AC, AR, AL, AV, AI = incidence_matrices_from_graph(graph)
+        # Nnode = len(graph.nodes)
+        # Nl = len(AL.T)
+        # J = jnp.block([[jnp.zeros((Nnode, Nnode)), -AL, jnp.zeros(), -AV],
+        #                [AL.T, jnp.zeros(), jnp.zeros(), jnp.zeros()],
+        #                [jnp.zeros(), jnp.zeros(), jnp.zeros(), jnp.zeros()],
+        #                [AV.T, jnp.zeros(), jnp.zeros(), jnp.zeros()]])
+        # R = jnp.block()
+        # g = jnp.block([[-AI, jnp.zeros()],
+        #                [jnp.zeros(), jnp.zeros()],
+        #                [jnp.zeros(), jnp.zeros()],
+        #                [jnp.zeros(), -jnp.eye()]])
+
+        def decoder_postprocessor(graph: jraph.GraphsTuple, aux_data):
+            H, cur_state = aux_data
+            As, splits = incidence_matrices_from_graph(graph)
+            AC, AR, AL, AV, AI = As
+            N_nodes = len(graph.nodes)
+            AC = AC if AC is not None else jnp.zeros((N_nodes, 1))
+            AR = AR if AR is not None else jnp.zeros((N_nodes, 1))
+            AL = AL if AL is not None else jnp.zeros((N_nodes, 1))
+            AV = AV if AV is not None else jnp.zeros((N_nodes, 1))
+            AI = AI if AI is not None else jnp.zeros((N_nodes, 1))
+            # i, v = control
+            i = jnp.zeros((1,)) # TODO: for now
+            v = jnp.zeros((1,)) # TODO: for now
+
+            g = lambda e : (AR.T @ e) / 1.0 # 1.0 is resistance R
+
+            def f(x, t):
+                q, phi, e, jv = jnp.split(x, splits)
+                dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+                dH0 = dH[jnp.arange(splits[0])]
+                dH1 = dH[jnp.arange(splits[0], splits[1])]
+                # dH0 = q
+                # dH1 = phi
+                F0 = -AL @ dH1 - AI @ i - AR @ g(e) # - AV @ jv # TODO: jv is []
+                F1 = AL.T @ e
+                F2 = -(AC.T @ e - dH0)                    # algebraic equation (indices of capacitors)
+                F3 = AV.T @ e - v                         # algebraic equation
+                return jnp.concatenate((F0, F1, F2))  # x dot # TODO: excluding F3
+            
+            def dynamics_function(t, x, x_dot):       
+                x = jnp.nan_to_num(x)
+                x_dot = jnp.nan_to_num(x_dot)
+                q, phi, e, jv = jnp.split(x, splits)
+                qp, phip, ep, jvp = jnp.split(x_dot, splits)
+                Nnode = len(AC)
+                Nq = len(AC.T)
+                Nphi = len(phip)
+                Ne = len(e)
+                Nv = len(jv)
+                E = jnp.block([[AC, jnp.zeros((Nnode, Nphi)), jnp.zeros((Nnode, Ne))], # jnp.zeros((Nq, Nv))],
+                               [jnp.zeros((Nphi, Nq)), jnp.eye(Nphi), jnp.zeros((Nphi, Ne))], # jnp.zeros((Nphi, Nv))],
+                               [jnp.zeros((1, Nq)), jnp.zeros((1, Nphi)), jnp.zeros((1, Ne))], # jnp.zeros((1, Nv))],
+                               [jnp.zeros((1, Nq)), jnp.zeros((1, Nphi)), jnp.zeros((1, Ne))]]) #jnp.zeros(1, Nv)]])
+                jax.debug.print('{}', E @ x_dot - f(x, t))
+                return E @ x_dot - f(x, t)
+
+            t = 0.0 # TODO
+            # cur_state_dot = f(cur_state, t) # t = 0.0
+            I = jnp.sin(t)
+            cur_state_dot = jnp.array([I, -I, cur_state[-1]-cur_state[-2], 0, I, -I])
+            # integration_method can only be Radau or BDF
+            jax.debug.print('state dot {}', cur_state_dot)
+            jax.debug.print('Test initial conditions {}', dynamics_function(t, cur_state, cur_state_dot))
+            t_span = (t, t + self.dt)
+            start_time = time.time()
+            sol = solve_dae(dynamics_function, 
+                            t_span, 
+                            cur_state, cur_state_dot, 
+                            method=self.integration_method,
+                            jac=partial(jac, F=dynamics_function))
+            end_time = time.time()
+            jax.debug.print('integrator time: {}', end_time - start_time)
+            next_state = sol.y[:,-1]
             
             next_globals = jnp.array(H)
             graph = self.graph_from_state(state=next_state, 
