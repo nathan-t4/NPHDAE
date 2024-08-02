@@ -24,7 +24,7 @@ def get_lc1_config(args):
     config.training_params.learn_matrices = False
     config.training_params.net_name = 'GNS'
     config.training_params.loss_function = 'state'
-    config.training_params.num_epochs = 50
+    config.training_params.num_epochs = 100
     config.training_params.min_epochs = 50
     config.training_params.batch_size = 2
     config.training_params.rollout_timesteps = 1500
@@ -41,9 +41,9 @@ def get_lc1_config(args):
     # config.net_params.R = None # will set later
     # config.net_params.g = None # will set later
     config.net_params.learn_nodes = True
-    config.net_params.integration_method = 'BDF' # 'adam_bashforth'
+    config.net_params.integration_method = 'adam_bashforth' # 'adam_bashforth'
     config.net_params.dt = 0.01
-    config.net_params.T = 2
+    config.net_params.T = 1
     config.net_params.num_mp_steps = 1
     config.net_params.noise_std = 1e-5
     config.net_params.latent_size = 4
@@ -56,5 +56,6 @@ def get_lc1_config(args):
     config.net_params.dropout_rate = 0.5
 
     config.trial_name =  f'{strftime("%m%d-%H%M")}_T={config.net_params.T}_learn_node'
+
 
     return config

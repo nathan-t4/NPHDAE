@@ -20,6 +20,32 @@ class TrainMetrics(metrics.Collection):
 class EvalMetrics(metrics.Collection):
     loss: metrics.Average.from_output('loss')
 
+def setup_dirs(config):
+    training_params = config.training_params
+    paths = config.paths
+    if paths.dir is None:
+        config.paths.dir = os.path.join(
+            os.curdir, 
+            f'results/{training_params.net_name}/{config.system_name}/{config.trial_name}')
+        paths.dir = config.paths.dir
+    
+    log_dir = os.path.join(paths.dir, 'log')
+    plot_dir = os.path.join(paths.dir, 'plots')
+    checkpoint_dir = os.path.join(paths.dir, 'checkpoint')
+    checkpoint_dir = os.path.join(checkpoint_dir, 'best_model')
+    checkpoint_dir = os.path.abspath(checkpoint_dir)
+
+    if not os.path.isdir(checkpoint_dir):
+        os.makedirs(checkpoint_dir)
+
+    dirs = {
+        'log': log_dir,
+        'plot': plot_dir,
+        'ckpt': checkpoint_dir,
+    }
+
+    return dirs
+
 def set_name(config):
     if 'mass_spring' in config.system_name:
         name = 'MassSpring'
@@ -54,6 +80,13 @@ def create_graph_builder(name, training_params=None, net_params=None):
         return AlternatorGraphBuilder
     else:
         raise NotImplementedError(f'Graph builder not implemented for system {name}')
+    
+def random_batches(batch_size: int, min: int, max: int, rng: jax.Array):
+    """ Return random permutation of jnp.arange(min, max) in batches of batch_size """
+    steps_per_epoch = (max - min) // batch_size
+    perms = jax.random.permutation(rng, max - min)
+    perms = perms[: steps_per_epoch * batch_size].reshape(-1,batch_size)
+    return perms
 
 def add_prefix_to_keys(result: Dict[str, Any], prefix: str) -> Dict[str, Any]:
   """Adds a prefix to the keys of a dict, returning a new dict."""

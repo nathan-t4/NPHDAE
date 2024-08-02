@@ -6,6 +6,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from typing import Dict, Any
+from functools import partial
 
 """
     TODO: remove
@@ -83,3 +84,50 @@ def get_g(name):
             return jnp.zeros((8,2))
         case _:
             raise NotImplementedError(f"g matrix not set for system {name}")
+        
+
+def fwd_solver(f, z_init):
+    def cond_fun(carry):
+        z_prev, z = carry
+        return jnp.linalg.norm(z_prev - z) > 1e-5
+
+    def body_fun(carry):
+        _, z = carry
+        return z, f(z)
+
+    init_carry = (z_init, f(z_init))
+    _, z_star = jax.lax.while_loop(cond_fun, body_fun, init_carry)
+    return z_star
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(0, 1))
+def fixed_point_layer(solver, f, params, x):
+    z_star = solver(lambda z: f(params, x, z), z_init=jnp.zeros_like(x))
+    return z_star
+
+def fixed_point_layer_fwd(solver, f, params, x):
+    z_star = fixed_point_layer(solver, f, params, x)
+    return z_star, (params, x, z_star)
+
+def fixed_point_layer_bwd(solver, f, res, z_star_bar):
+    params, x, z_star = res
+    _, vjp_a = jax.vjp(lambda params, x: f(params, x, z_star), params, x)
+    _, vjp_z = jax.vjp(lambda z: f(params, x, z), z_star)
+    return vjp_a(solver(lambda u: vjp_z(u)[0] + z_star_bar,
+                      z_init=jnp.zeros_like(z_star)))
+
+def get_nonzero_row_indices(array):
+    def f(carry, row):
+        nonzero_row = sum(jnp.abs(row))
+        return carry, nonzero_row
+    _, row_abs_sums = jax.lax.scan(f, None, array[:])
+    nonzero_rows_mask = jnp.nonzero(row_abs_sums)
+    return jnp.arange(len(array))[nonzero_rows_mask]
+
+def get_zero_row_indices(array):
+    def f(carry, row):
+        nonzero_row = sum(jnp.abs(row))
+        return carry, nonzero_row
+    _, row_abs_sums = jax.lax.scan(f, None, array[:])
+    zero_rows_mask = jnp.where(row_abs_sums == 0)
+    return jnp.arange(len(array))[zero_rows_mask]

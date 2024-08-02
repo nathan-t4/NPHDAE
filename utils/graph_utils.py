@@ -72,7 +72,7 @@ def incidence_matrices_from_graph(graph, edge_types=None):
 
     A = [jnp.array(a).T if len(a) > 0 else None for a in A]
     AC, AR, AL, AV, AI = A
-    splits = jnp.array([len(AC.T), 
+    splits = np.array([len(AC.T), 
                        len(AC.T) + len(AL.T), 
                        len(AC.T) + len(AL.T) + len(AC)])
     

@@ -17,7 +17,7 @@ cma==3.2.2
 colorlog==6.8.2
 colorlover==0.3.0
 comm==0.2.2
--e git+ssh://git@github.com/nathan-t4/compgnn.git@3323c144584692aecd87c4ae74ead0fb79437cd0#egg=compgnn
+-e git+ssh://git@github.com/nathan-t4/compgnn.git@c2600c3ee27a48f5e0b4b462e136a6b75715ef59#egg=compgnn
 contextlib2==21.6.0
 contourpy==1.2.1
 cufflinks==0.17.3
