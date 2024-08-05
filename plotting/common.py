@@ -39,7 +39,7 @@ def load_model(experiment_save_path):
     with open(run_file_str, 'r') as f:
         run = json.load(f)
 
-    artifacts_path = os.path.abspath(os.path.join(experiment_save_path, run['artifacts'][0]))
+    artifacts_path = os.path.abspath(os.path.join(experiment_save_path, 'model_params.pkl'))
     with open(artifacts_path, 'rb') as f:
         params = pickle.load(f)
     

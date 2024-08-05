@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from common import load_config_file, load_dataset, load_model, load_metrics
 import argparse
 
-exp_file_name = '2024-08-04_23-12-37_train_phdae_rlc'
+exp_file_name = '2024-08-05_10-07-12_train_phdae_rlc'
 sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 
 config = load_config_file(sacred_save_path)
@@ -18,12 +18,12 @@ results = load_metrics(sacred_save_path)
 
 test_dataset = datasets['test_dataset']
 
-traj_len = 500
+traj_len = 10
 initial_state = test_dataset['outputs'][0, :]
 true_traj = test_dataset['outputs'][0:traj_len, :]
-predicted_traj_and_control = model.predict_trajectory(params, initial_state=initial_state, 
+predicted_traj = model.predict_trajectory(params, initial_state=initial_state, 
                                             num_steps=traj_len)
-predicted_traj = predicted_traj_and_control['state_trajectory']
+predicted_traj = predicted_traj['state_trajectory']
 
 # Generate a predicted trajectory
 fontsize = 15
@@ -38,14 +38,9 @@ ax.set_xlabel('Time [s]', fontsize=fontsize)
 ax.set_ylabel(r'$x$ $[m]$', fontsize=fontsize)
 
 ax = fig.add_subplot(212)
-ax.plot(T, predicted_traj[:,1], color='blue', linewidth=3, label='Predicted Dynamics')
 ax.plot(T, true_traj[:,1], color='black', linewidth=3, label='True Dynamics')
+ax.plot(T, predicted_traj[:,1], color='blue', linewidth=3, label='Predicted Dynamics')
 ax.set_xlabel('Time [s]', fontsize=fontsize)
 ax.set_ylabel(r'$\frac{dx}{dt}$ $[\frac{m}{s}]$', fontsize=fontsize)
 
-plt.show()
-
-fig = plt.figure()
-ax = fig.add_subplot(111)
-ax.plot(T, predicted_control[:,0], color='blue', linewidth=3, label='Predicted Control')
-plt.show()
+plt.savefig('phndae_predicted_trajectory.png')

@@ -10,6 +10,8 @@ import sacred
 from .common import get_params_struct, choose_nonlinearity
 import jax.numpy as jnp
 from helpers.model_factory import get_model_factory
+from jax.experimental.ode import odeint
+
 
 class PHNDAE():
 
@@ -101,20 +103,45 @@ class PHNDAE():
         #     return phi
         # self.grad_H_func = jax.jit(grad_H_func)
 
+        # # Define the R function for the resistors
+        # self.rng_key, subkey = jax.random.split(self.rng_key)
+        # r_net = get_model_factory(self.model_setup['r_net_setup']).create_model(subkey)
+        # init_params['r_func'] = r_net.init_params
+
+        # num_resistors = self.num_resistors
+        # def r_func(delta_V, params=None):
+        #     R = lambda x : jnp.sum(r_net.forward(params=params, x=x))
+        #     delta_V = jnp.reshape(delta_V, (num_resistors, 1))
+        #     return jax.vmap(R, 0)(delta_V).reshape((num_resistors,))
+        # self.r_func = jax.jit(r_func)
+
         def r_func(delta_V, params=None):
             return delta_V / 1.0
-        self.r_func = jax.jit(r_func)
         init_params['r_func_params'] = None
+        self.r_func = jax.jit(r_func)
     
+        # # Define the Q function for the capacitors
+        # self.rng_key, subkey = jax.random.split(self.rng_key)
+        # q_net = get_model_factory(self.model_setup['q_net_setup']).create_model(subkey)
+        # init_params['q_func'] = q_net.init_params
+
+        # num_capacitors = self.num_capacitors
+        # def q_func(delta_V, params=None):
+        #     Q = lambda x : jnp.sum(q_net.forward(params=params, x=x))
+        #     delta_V = jnp.reshape(delta_V, (num_capacitors, 1))
+        #     return jax.vmap(Q, 0)(delta_V).reshape((num_capacitors,))
+        # self.q_func = jax.jit(q_func)
+
         def q_func(delta_V, params=None):
             return 1.0 * delta_V
-        self.q_func = jax.jit(q_func)
         init_params['q_func_params'] = None
-        
+        self.q_func = jax.jit(q_func)
+
+        freq = self.model_setup['u_func_freq']
         def u_func(t, params=None):
-            return jnp.array(self.model_setup['u_func'](t, params))
+            return jnp.array([jnp.sin(freq * t)])
         self.u_func = jax.jit(u_func)
-        init_params['u_func_params'] = None
+        init_params['u_func_params'] = None # Don't make frequency a parameter here, otherwise training will try and optimize it.
 
         self.init_params = init_params
 
@@ -157,10 +184,12 @@ class PHNDAE():
         """
         times = jnp.arange(0, num_steps * self.dt, self.dt)
 
-        traj = self.dae.solver.solve_dae(initial_state, times, params)
+        sol = odeint(self.dae.solver.f_coupled_system, initial_state, times, params)
+
+        # traj = self.dae.solver.solve_dae(initial_state, times, params)
 
         trajectory = {
-            'state_trajectory' : jnp.array(traj),
+            'state_trajectory' : jnp.array(sol),
             'times' : jnp.array(times),
         }
 

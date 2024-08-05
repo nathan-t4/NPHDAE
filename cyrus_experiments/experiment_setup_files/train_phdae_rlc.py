@@ -32,11 +32,29 @@ exp_config = {
                 'activation': 'tanh',
             },
         },
-        'u_func' : lambda t, params : [jnp.sin(30 * t)],
+        'r_net_setup' : {
+            'model_type' : 'mlp',
+            'input_dim' : 1,
+            'output_dim': 1,
+            'nn_setup_params': {
+                'output_sizes': [32, 32, 1],
+                'activation': 'relu',
+            },
+        },
+        'q_net_setup' : {
+            'model_type' : 'mlp',
+            'input_dim' : 1,
+            'output_dim': 1,
+            'nn_setup_params': {
+                'output_sizes': [32, 32, 1],
+                'activation': 'relu',
+            },
+        },
+        'u_func_freq' : 30.0,
     },
     'trainer_setup' : {
         'trainer_type' : 'sgd',
-        'num_training_steps': 5000,
+        'num_training_steps': 20000,
         'minibatch_size': 32,
         'loss_setup' : {
             'loss_function_type' : 'l2_loss',

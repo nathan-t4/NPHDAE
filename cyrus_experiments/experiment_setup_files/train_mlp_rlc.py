@@ -22,7 +22,7 @@ exp_config = {
     },
     'trainer_setup' : {
         'trainer_type' : 'sgd',
-        'num_training_steps': 2000,
+        'num_training_steps': 20000,
         'minibatch_size': 32,
         'loss_setup' : {
             'loss_function_type' : 'l2_loss',

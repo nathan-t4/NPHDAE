@@ -10,3 +10,4 @@ results/
 runs/
 temp_data/
 *.pkl
+.vscode/
