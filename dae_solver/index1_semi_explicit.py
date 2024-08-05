@@ -87,11 +87,11 @@ class DAESolver():
         Warning that this method does not check for consistency of the algebraic states.
         """
         k1 = self.f_coupled_system(z0, t0, params)
-        k2 = self.f_coupled_system(z0 + delta_t/2 * k1, t0 + delta_t, params)
-        k3 = self.f_coupled_system(z0 + delta_t/2 * k2, t0 + delta_t, params)
+        k2 = self.f_coupled_system(z0 + delta_t/2 * k1, t0 + delta_t/2, params)
+        k3 = self.f_coupled_system(z0 + delta_t/2 * k2, t0 + delta_t/2, params)
         k4 = self.f_coupled_system(z0 + delta_t * k3, t0 + delta_t, params)
 
-        return z0 + delta_t/6 + (k1 + 2 * k2 + 2 * k3 + k4)
+        return z0 + delta_t/6 * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
 def main():

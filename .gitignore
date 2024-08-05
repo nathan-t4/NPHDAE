@@ -6,3 +6,6 @@ __pycache__
 log/
 results/
 *.png
+
+runs/
+temp_data/
