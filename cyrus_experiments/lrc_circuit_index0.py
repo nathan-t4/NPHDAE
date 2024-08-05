@@ -80,51 +80,50 @@ def main():
 
     z0 = jnp.concatenate((diff_vars_init, alg_vars_init))
     T = jnp.linspace(0, 1.5, 1000)
-
-    # def f_solve_alg_eq(y):
-    #     return g(diff_vars_init, y, t0)
-    
-    # alg_vars_init = fsolve(f_solve_alg_eq, alg_vars_init)
-
-    # def gx(x,y,t):
-    #     gg = lambda xx : g(xx, y, t)
-    #     return jax.jacfwd(gg)(x)
-    
-    # def gy(x,y,t):
-    #     gg = lambda yy : g(x, yy, t)
-    #     return jax.jacfwd(gg)(y)
-    
-    # # def gx_f_jvp(x,y,t):
-    # #     gg = lambda xx : g(xx, y, t)
-    # #     return jax.jvp(gg, x, f(x,y,t))
-    
-    # def gt(x,y,t):
-    #     gg = lambda tt : g(x,y,tt)
-    #     return jax.jacfwd(gg)(t)
-    
-    # def construct_b(x,y,t):
-    #     return jnp.matmul(gx(x,y,t), f(x,y,t)) + gt(x,y,t)
-    
-    # def ydot(x,y,t):
-    #     return - jnp.linalg.solve(gy(x,y,t), construct_b(x,y,t))
-    
-    # def f_coupled_system(z, t):
-    #     x = z[0:2]
-    #     y = z[2::]
-
-    #     xp = f(x,y,t)
-    #     yp = ydot(x,y,t)
-
-    #     return jnp.concatenate((xp, yp))
-
-    # sol = odeint(f_coupled_system, z0, T)
+    dt = T[2] - T[1]
 
     solver = DAESolver(f, g, 2, 4)
-    sol = solver.solve_dae(z0, T, params=None)
+    # sol = solver.solve_dae(z0, T, params=None)
+
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111)
+    # ax.plot(sol[:,5])
+    # plt.show()
+
+    sol = solver.solve_dae(z0, T, None)
+
+    g_vals = []
+    for t_ind in range(sol.shape[0]):
+        t = T[t_ind]
+        z = sol[t_ind, :]
+        x = z[0:2]
+        y = z[2::]
+        g_vals.append(solver.g(x,y,t,None))
+
+    g_vals = jnp.array(g_vals)
+
+    print(g_vals)
 
     fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.plot(sol[:,5])
+    ax = fig.add_subplot(211)
+    ax.plot(sol[:,2])
+    ax = fig.add_subplot(212)
+    ax.plot([sol[t_ind, 2] - jnp.sin(30 * t_ind * dt) for t_ind in range(len(T))])
+    plt.show()
+
+    fig = plt.figure()
+    ax = fig.add_subplot(411)
+    ax.plot(g_vals[:, 0])
+
+    ax = fig.add_subplot(412)
+    ax.plot(g_vals[:, 1])
+
+    ax = fig.add_subplot(413)
+    ax.plot(g_vals[:, 2])
+
+    ax = fig.add_subplot(414)
+    ax.plot(g_vals[:, 3])
+
     plt.show()
 
 if __name__ == "__main__":

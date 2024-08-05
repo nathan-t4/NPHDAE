@@ -39,7 +39,7 @@ class DAESolver():
             return jax.jacfwd(gg)(y)
         
         def gt(x,y,t,params):
-            gg = lambda tt : self.g(x,y,tt, params)
+            gg = lambda tt : self.g(x,y,tt,params)
             return jax.jacfwd(gg)(t)
         
         def construct_b(x,y,t,params):

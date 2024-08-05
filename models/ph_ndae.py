@@ -99,38 +99,38 @@ class PHNDAE():
         self.H_net = H_net
         self.grad_H_func = jax.jit(grad_H_func)
 
-        # def grad_H_func(phi, params):
-        #     return phi
-        # self.grad_H_func = jax.jit(grad_H_func)
+        def grad_H_func(phi, params):
+            return phi
+        self.grad_H_func = jax.jit(grad_H_func)
 
-        # # Define the R function for the resistors
-        # self.rng_key, subkey = jax.random.split(self.rng_key)
-        # r_net = get_model_factory(self.model_setup['r_net_setup']).create_model(subkey)
-        # init_params['r_func'] = r_net.init_params
+        # Define the R function for the resistors
+        self.rng_key, subkey = jax.random.split(self.rng_key)
+        r_net = get_model_factory(self.model_setup['r_net_setup']).create_model(subkey)
+        init_params['r_func'] = r_net.init_params
 
-        # num_resistors = self.num_resistors
-        # def r_func(delta_V, params=None):
-        #     R = lambda x : jnp.sum(r_net.forward(params=params, x=x))
-        #     delta_V = jnp.reshape(delta_V, (num_resistors, 1))
-        #     return jax.vmap(R, 0)(delta_V).reshape((num_resistors,))
-        # self.r_func = jax.jit(r_func)
+        num_resistors = self.num_resistors
+        def r_func(delta_V, params=None):
+            R = lambda x : jnp.sum(r_net.forward(params=params, x=x))
+            delta_V = jnp.reshape(delta_V, (num_resistors, 1))
+            return jax.vmap(R, 0)(delta_V).reshape((num_resistors,))
+        self.r_func = jax.jit(r_func)
 
         def r_func(delta_V, params=None):
             return delta_V / 1.0
         init_params['r_func_params'] = None
         self.r_func = jax.jit(r_func)
     
-        # # Define the Q function for the capacitors
-        # self.rng_key, subkey = jax.random.split(self.rng_key)
-        # q_net = get_model_factory(self.model_setup['q_net_setup']).create_model(subkey)
-        # init_params['q_func'] = q_net.init_params
+        # Define the Q function for the capacitors
+        self.rng_key, subkey = jax.random.split(self.rng_key)
+        q_net = get_model_factory(self.model_setup['q_net_setup']).create_model(subkey)
+        init_params['q_func'] = q_net.init_params
 
-        # num_capacitors = self.num_capacitors
-        # def q_func(delta_V, params=None):
-        #     Q = lambda x : jnp.sum(q_net.forward(params=params, x=x))
-        #     delta_V = jnp.reshape(delta_V, (num_capacitors, 1))
-        #     return jax.vmap(Q, 0)(delta_V).reshape((num_capacitors,))
-        # self.q_func = jax.jit(q_func)
+        num_capacitors = self.num_capacitors
+        def q_func(delta_V, params=None):
+            Q = lambda x : jnp.sum(q_net.forward(params=params, x=x))
+            delta_V = jnp.reshape(delta_V, (num_capacitors, 1))
+            return jax.vmap(Q, 0)(delta_V).reshape((num_capacitors,))
+        self.q_func = jax.jit(q_func)
 
         def q_func(delta_V, params=None):
             return 1.0 * delta_V
@@ -161,9 +161,22 @@ class PHNDAE():
             t = z[-1]
             z = z[:-1]
             return self.dae.solver.solve_dae_one_timestep_rk4(z, t, self.dt, params)
-
+        
         self.forward = jax.jit(forward)
         self.forward = jax.vmap(forward, in_axes=(None, 0))
+
+        def forward_g(params, z):
+            t = z[-1]
+            z = z[:-1]
+
+            x = z[0:self.num_differential_vars]
+            y = z[self.num_differential_vars::]
+            g = self.dae.g
+
+            return g(x, y, t, params)
+        
+        self.forward_g = jax.jit(forward_g)
+        self.forward_g = jax.vmap(forward_g, in_axes=(None, 0))
 
     def predict_trajectory(self,
                             params,
