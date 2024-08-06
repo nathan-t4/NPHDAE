@@ -177,32 +177,32 @@ class PHNDAE():
         self.forward_g = jax.vmap(forward_g, in_axes=(None, 0))
         self.init_params = init_params
 
-    def predict_trajectory(self,
-                            params,
-                            initial_state : jnp.ndarray,
-                            num_steps : int,
-                            rng_key : jax.random.PRNGKey = jax.random.PRNGKey(0),):        
-        """
-        Predict the system trajectory from an initial state.
+    # def predict_trajectory(self,
+    #                         params,
+    #                         initial_state : jnp.ndarray,
+    #                         num_steps : int,
+    #                         rng_key : jax.random.PRNGKey = jax.random.PRNGKey(0),):        
+    #     """
+    #     Predict the system trajectory from an initial state.
         
-        Parameters
-        ----------
-        params :
-            An instantiation of the network parameters.
-        initial_state :
-            An array representing the system initial state.
-        num_steps : 
-            Number of steps to include in trajectory.
-        """
-        times = jnp.arange(0, num_steps * self.dt, self.dt)
+    #     Parameters
+    #     ----------
+    #     params :
+    #         An instantiation of the network parameters.
+    #     initial_state :
+    #         An array representing the system initial state.
+    #     num_steps : 
+    #         Number of steps to include in trajectory.
+    #     """
+    #     times = jnp.arange(0, num_steps * self.dt, self.dt)
 
-        sol = odeint(self.dae.solver.f_coupled_system, initial_state, times, params)
+    #     sol = odeint(self.dae.solver.f_coupled_system, initial_state, times, params)
 
-        # traj = self.dae.solver.solve_dae(initial_state, times, params)
+    #     # traj = self.dae.solver.solve_dae(initial_state, times, params)
 
-        trajectory = {
-            'state_trajectory' : jnp.array(sol),
-            'times' : jnp.array(times),
-        }
+    #     trajectory = {
+    #         'state_trajectory' : jnp.array(sol),
+    #         'times' : jnp.array(times),
+    #     }
 
-        return trajectory
+    #     return trajectory

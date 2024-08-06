@@ -193,7 +193,7 @@ class PHDAE():
         return E, J, z_vec, diss, B
 
     def construct_dae_solver(self):
-        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_differential_vars)
+        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars)
 
     def solve(self, z0, T, params, tol=1e-6):
         return self.solver.solve_dae(z0, T, params, tol)

@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 exp_file_name = '2024-08-05_17-23-01_train_phdae_rlc'
 exp_file_name = '2024-08-06_11-18-03_train_phdae_rlc'
-exp_file_name = '2024-08-06_12-03-04_train_mlp_rlc'
+# exp_file_name = '2024-08-06_12-03-04_train_mlp_rlc'
 sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 
 config = load_config_file(sacred_save_path)

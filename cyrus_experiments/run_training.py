@@ -13,7 +13,7 @@ from sacred.observers import FileStorageObserver
 import datetime
 
 sys.path.append('.')
-from cyrus_experiments.experiment_setup_files.train_mlp_rlc import exp_config
+from cyrus_experiments.experiment_setup_files.train_node_rlc import exp_config
 
 exp_name = exp_config['exp_name']
 now = datetime.datetime.now()
