@@ -6,6 +6,7 @@ sys.path.append('../')
 data_path = os.path.abspath(os.path.join(os.path.curdir, '..', 'environments', 'rlc_dae_data'))
 data_file_name = 'train_RLC_DAE_2024-08-04-18-31-33.pkl'
 data_file_name = 'RLC_DAE_2024-08-06-11-05-02.pkl'
+data_file_name = 'DGU_DAE_2024-08-06-15-47-18.pkl'
 
 with open(os.path.join(data_path, data_file_name), 'rb') as f:
     dataset = pickle.load(f)
@@ -49,4 +50,4 @@ ax1.plot(dataset['timesteps'][traj_ind, 0:num_timesteps], dataset['state_traject
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('jv')
 
-plt.show()
+plt.savefig('data_trajectory.png')
