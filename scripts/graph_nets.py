@@ -12,11 +12,8 @@ from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
 from scripts.models import MLP, vmapMLP, GraphNetworkSimulator, HeterogeneousGraphNetworkSimulator
-from scipy_dae.integrate import solve_dae
-from diffrax import diffeqsolve, ODETerm, ImplicitEuler
-import scipy
-import time
 from utils.gnn_utils import *
+from dae_solver.index1_semi_explicit import DAESolver
 
 class MassSpringGNS(nn.Module):
     # Decoder post-processor parameters
@@ -171,10 +168,6 @@ class PHGNS(nn.Module):
         node_output_size = 1
         num_edge_types = 1 if self.edge_idxs is None else (len(self.edge_idxs) + 1)
         num_node_types = 1 if self.node_idxs is None else (len(self.node_idxs) + 1)
-        # encoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * (self.hidden_layers),
-        #                           with_layer_norm=self.layer_norm, 
-        #                           activation=self.activation, 
-        #                           name='enc_node') # TODO: GraphMapFeatures only batches edges not nodes... 
 
         encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                 with_layer_norm=self.layer_norm, 
@@ -186,10 +179,6 @@ class PHGNS(nn.Module):
                                 activation=self.activation, 
                                 name=f'enc_node_{i}') for i in range(num_node_types)]
 
-        # decoder_node_fn = vmapMLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size],
-        #                           activation=self.activation, 
-        #                           name='dec_node')
-        
         decoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
                                 activation=self.activation, 
                                 name=f'dec_edge_{i}') for i in range(num_edge_types)]
@@ -237,7 +226,7 @@ class PHGNS(nn.Module):
             if self.include_idxs is None:
                 H = jnp.sum(processed_graph.edges)
             else:
-                H = jnp.sum(processed_graph.edges[self.include_idxs])
+                H = jnp.dot(self.include_idxs, processed_graph.edges)
             return H, processed_graph
         
         H, processed_graph = H_from_state(state)
@@ -290,9 +279,10 @@ class PHGNS(nn.Module):
         
         return processed_graph
 
-class PHGNS2(nn.Module):
+class PHGNS_NDAE(nn.Module):
     # Decoder post-processor parameters
     graph_from_state: Callable
+    state_from_graph: Callable
     integration_method: str
     dt: float
     T: int
@@ -303,6 +293,8 @@ class PHGNS2(nn.Module):
     include_idxs: Array
     incidence_matrices: Array
     splits: Array
+    differential_vars: Array
+    algebraic_vars: Array
     num_mp_steps: int
     learn_nodes: bool
     use_edge_model: bool
@@ -335,7 +327,7 @@ class PHGNS2(nn.Module):
                         [jnp.zeros((1, Nq)), jnp.zeros((1, Nphi)), jnp.zeros((1, Ne))]])
         
         if Nv != 0:
-            extra_col = jnp.r_[jnp.zeros((Nq, Nv)), jnp.zeros((Nphi, Nv)), jnp.zeros((1, Nv)), jnp.zeros(1, Nv)]
+            extra_col = jnp.r_[jnp.zeros((Nnode, Nv)), jnp.zeros((Nphi, Nv)), jnp.zeros((1, Nv)), jnp.zeros((1, Nv))]
             E = jnp.concatenate((E, extra_col), axis=1)
             
         # J = jnp.block([[jnp.zeros((Ne, Ne)), -AL, jnp.zeros((Ne,)), -AV],
@@ -351,17 +343,15 @@ class PHGNS2(nn.Module):
         P, L, U = jax.scipy.linalg.lu(E)
         self.P_inv = jnp.linalg.inv(P)
         self.L_inv = jnp.linalg.inv(L)
-        # self.differential_vars = get_nonzero_row_indices(U)
-        # self.algebraic_vars = get_zero_row_indices(U)
-        self.differential_vars = jnp.array([0, 1, 2]) # TODO: automate
-        self.algebraic_vars = jnp.array([3, 4, 5]) # TODO: automate
+        # self.differential_vars = get_nonzero_row_indices(U) # TODO: make jit-able
+        # self.algebraic_vars = get_zero_row_indices(U) # TODO: make jit-able
         U_nonzero = U[self.differential_vars][:,self.differential_vars]
         self.U_nonzero_inv = jnp.linalg.inv(U_nonzero)
 
         edge_output_size = 1
         node_output_size = 1
-        num_edge_types = 1 if self.edge_idxs is None else (len(self.edge_idxs) + 1)
-        num_node_types = 1 if self.node_idxs is None else (len(self.node_idxs) + 1)
+        num_edge_types = 5 # TODO: num of two-terminal components
+        num_node_types = 1 # TODO: num of node types
 
         encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                 with_layer_norm=self.layer_norm, 
@@ -403,64 +393,86 @@ class PHGNS2(nn.Module):
             layer_norm=self.layer_norm,
             name='GNN',
         )
-
-    def __call__(self, graph, control, rng):
-        # TODO: what shape should control be? (num_voltage_sources + num_current_sources)
-        edges_shape = graph.edges.shape
-        cur_nodes = graph.nodes
-        state = jnp.concatenate((graph.edges[jnp.array([0, 2]), 0], # capacitor indices
-                                 graph.edges[jnp.array([1]), 0], # inductor indices
-                                 graph.nodes.squeeze()) # node voltages
-                               ) # TODO: no voltage source indices
-        # state = self.get_state_from_graph(graph) # TODO
+    def __call__(self, graph, control, t, rng):
+        state = self.state_from_graph(graph)
+        # Add noise to training
         if self.training: 
+            edges_shape = graph.edges.shape
             rng, edges_rng = jax.random.split(rng)
             edges_noise = self.noise_std * jax.random.normal(edges_rng, edges_shape)
             noisy_edges = graph.edges + edges_noise
             new_edges = jnp.array(noisy_edges).reshape(edges_shape)
             graph = graph._replace(edges=new_edges)
 
+        # Explicitly set node voltage according to control for RLC circuit
+        v = control[1]
+        new_nodes = graph.nodes
+        new_nodes = new_nodes.at[0].set(0)
+        new_nodes = new_nodes.at[1].set(v)
+        graph = graph._replace(nodes=new_nodes)
+
         def H_from_state(x):
-            graph = self.graph_from_state(state=x, control=control, system_params=False, set_nodes=False, set_ground_and_control=False, nodes=cur_nodes, globals=None)
-            aux_data = None
-            processed_graph = self.net(graph, aux_data, rng)
-            if self.include_idxs is None: # TODO: Change indexes to only differential (energy storing) states
-                H = jnp.sum(processed_graph.edges) # TODO: change sequence of edges to [q, phi]
+            e = x[self.splits[1]:self.splits[2]]
+            e = e.reshape(-1,1)
+            graph = self.graph_from_state(state=x, control=control, system_params=False, set_nodes=False, set_ground_and_control=False, nodes=e, globals=None)
+            processed_graph = self.net(graph, t, rng) # TODO: testing if aux_data = t is better
+            if self.include_idxs is None:
+                H = jnp.sum(processed_graph.edges)
             else:
-                energy_indices = jnp.unique(jnp.concatenate((self.include_idxs, self.differential_vars)))
-                H = jnp.sum(processed_graph.edges[energy_indices])
+                H = jnp.dot(self.include_idxs, processed_graph.edges).squeeze()
             return H, processed_graph
         
         def decoder_postprocessor(cur_state):
+            # TODO: learn resistances, capacitances, and inductances as parameter
+
             H, processed_graph = H_from_state(cur_state)
             AC, AR, AL, AV, AI = self.incidence_matrices
             N_nodes = len(processed_graph.nodes)
+            has_voltage_sources = AV is not None
             AC = AC if AC is not None else jnp.zeros((N_nodes, 1))
             AR = AR if AR is not None else jnp.zeros((N_nodes, 1))
             AL = AL if AL is not None else jnp.zeros((N_nodes, 1))
             AV = AV if AV is not None else jnp.zeros((N_nodes, 1))
             AI = AI if AI is not None else jnp.zeros((N_nodes, 1))
-            # i, v = control
-            i = jnp.zeros((1,)) # TODO: for now
-            v = jnp.zeros((1,)) # TODO: for now
-
-            g = lambda e : (AR.T @ e) / 1.0 # 1.0 is resistance R
-            e_indices = self.algebraic_vars - len(self.differential_vars)
-            next_y = processed_graph.nodes[e_indices].squeeze() # train weights by minimizing algebraic residual
-            
+            ext_i = control[0:len(AI.T)] # number of current sources
+            ext_v = control[len(AI.T):len(AI.T)+len(AV.T)] # number of voltage sources
+            g = lambda e : (AR.T @ e) / 1.0 # 1.0 is resistance R # TODO: add system_params!
+            # next_y = get_algebraic_states(processed_graph)
+            # next_y = processed_graph.nodes[e_indices].squeeze()
+            next_e = processed_graph.nodes.squeeze()
+            next_e = next_e.at[0].set(0)
+            next_e = next_e.at[1].set(ext_v.squeeze())
+            next_jv = processed_graph.edges[0]
+            next_y = jnp.r_[next_e, next_jv] # Fix control and append jv
+            # next_y = next_e
+            # TODO: make sure update functions (e.g. update_node_fn) takes control as input too!
             def f(x, t):
                 q = x[0:self.splits[0]]
                 phi = x[self.splits[0]:self.splits[1]]
                 e = x[self.splits[1]: self.splits[2]]
-                jv = x[self.splits[2]:len(cur_state)]
+                jv = x[self.splits[2]:len(x)]
                 dH, _ = jax.grad(H_from_state, has_aux=True)(x)
                 dH0 = dH[jnp.arange(self.splits[0])]
                 dH1 = dH[jnp.arange(self.splits[0], self.splits[1])]
-                F0 = -AL @ dH1 - AI @ i - AR @ g(e) - (AV @ jv if len(jv) > 0 else 0)
+                F0 = -AL @ dH1 - AI @ ext_i - AR @ g(e) - (AV @ jv if has_voltage_sources else 0)
                 F1 = AL.T @ e
                 F2 = -(AC.T @ e - dH0)
-                F3 = AV.T @ e - v                    
-                return jnp.stack([F0, F1, F2, F3]) if len(jv) > 0 else jnp.concatenate((F0, F1, F2))
+                F3 = AV.T @ e - ext_v
+                return jnp.concatenate((F0, F1, F2, F3)) if has_voltage_sources else jnp.concatenate((F0, F1, F2))
+            
+            def dae(x, y, t, params):
+                q = x[0]
+                phi = x[1]
+                e = y[:3]
+                jv = y[3:]
+                dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+                dH0 = jnp.array([dH[0]])
+                dH1 = jnp.array([dH[1]])
+                F0 = -AL @ dH1 - AI @ ext_i - AR @ g(e) - (AV @ jv if len(jv) > 0 else 0)
+                F1 = AL.T @ e
+                F2 = -(AC.T @ e - dH0)
+                F3 = AV.T @ e - ext_v
+                return jnp.concatenate((F0, F1, F2, F3)) if len(jv) > 0 else jnp.concatenate((F0, F1, F2))
             
             def dynamics_function(x, t): # t, x, aux_data 
                 '''
@@ -474,38 +486,32 @@ class PHGNS2(nn.Module):
                     # The above only needs to be done on the first forward pass
                     x_dot = U_nonzero^{-1} @ (L^{-1} @ P^{-1} @ (J @ z - r))[nonzero_indices]
                 '''
-                # updated_state = np.empty(len(cur_state))
-                # updated_state[differential_vars] = x
-                # updated_state[algebraic_vars] = next_y
-                # updated_state = jnp.array(updated_state)
                 updated_state = jnp.concatenate((x, next_y))
-                differential_eqs = self.U_nonzero_inv @ (self.L_inv @ self.P_inv @ (f(updated_state, t)))[self.differential_vars]
+                differential_eqs = self.U_nonzero_inv @ (self.L_inv @ self.P_inv @ f(updated_state, t))[self.differential_vars]
                 return differential_eqs
             
-            def get_residual(x, t):
-                equations = f(x, t) # state_dot
-                residual = jnp.abs(equations[self.algebraic_vars])
-                return residual
+            def get_residuals(x, t):
+                equations = f(x, t)
+                residuals = jnp.abs(equations[self.algebraic_vars])
+                return residuals
 
-            t = 0.0
             cur_x = cur_state[self.differential_vars]
             if self.integration_method == 'adam_bashforth':
-                next_x = integrator_factory(self.integration_method)(dynamics_function, cur_x, t, self.dt, self.T)
-                # next_state = np.empty(len(cur_state))
-                # next_state[differential_vars] = next_x
-                # next_state[algebraic_vars] = next_y
-                # next_state = jnp.array(next_state)
-                next_state = jnp.concatenate((next_x, next_y)) # TODO: replace
-            else:
-                raise NotImplementedError()
-            residual = get_residual(next_state, t)
-            
-            next_globals = jnp.concatenate((jnp.array([H]), residual))
+                integrator = integrator_factory(self.integration_method)
+                next_x = integrator(dynamics_function, cur_x, t, self.dt, self.T)
+                next_state = jnp.concatenate((next_x, next_y))
+            elif self.integration_method == 'dae':
+                f_test = lambda x, y, t, params: dae(x, y, t, params)[self.differential_vars]
+                g_test = lambda x, y, t, params: dae(x, y, t, params)[self.algebraic_vars]
+                solver = DAESolver(f_test, g_test, len(self.differential_vars), len(self.algebraic_vars))
+                next_state = solver.solve_dae_one_timestep_rk4(cur_state, t, self.dt, self.splits)
+            residuals = get_residuals(next_state, t)
+            next_globals = jnp.concatenate((jnp.array([H]), residuals))
             graph = self.graph_from_state(state=next_state, 
                                           control=control, 
                                           system_params=False, 
                                           set_nodes=False,
-                                          set_ground_and_control=True, # TODO: Was TRUE
+                                          set_ground_and_control=True,
                                           nodes=processed_graph.nodes, 
                                           globals=next_globals)
             
@@ -676,7 +682,7 @@ class CompLCGNS(nn.Module):
 
             The subsystems inputs and outputs are related somehow...
             
-            When composing, we add artificial voltage sources at every point where we 'merge nodes'
+            When composing, we add artificial voltage sources at every point where we 'merge nodes' (now it is add edges)
                 - the artificial voltage sources goes between the merged node and ground
                 - this basically places an additional constraint on the whole system. This constraint is placed on the node voltages 'e'
                 - OR these artificial voltage sources adds multiple new constraints. One constraint per each merging
@@ -690,7 +696,40 @@ class CompLCGNS(nn.Module):
                 - KCL (current_in = current_out)
                 - state-voltage relations (e.g. V = Q/C)
 
+            parameterize next algebraic state predictor to take in input (current / voltage)
 
+            before training subsystem GNNs, already decide which nodes are open for connection, and add a virtual voltage source (that varies) during training.
+
+            AlgebraicStatePredictor: (x, y) -> y'
+
+            GNN1: (x1, y1) -> (H1, x1', y1')
+            GNN2: (x2, y2) -> (H2, x2', y2')
+            CGNN: (xc, yc) -> (Hc, xc', yc')
+            xc = [x1, x2]
+            yc = [y1, y2]
+            Hc = H1 + H2
+
+            Previously...
+            - predict H1, H2
+            - get Hc = H1 + H2
+            - integrate coupled port-Hamiltonian equation (w/ known interconnection matrix C) to get next state
+
+            This time...
+            - is interconnection matrix known?
+            - can predict H1, H2 and get Hc = H1 + H2
+            - know the port-Hamiltonian equations of the composite system?
+            - BUT cannot integrate directly bc pH equations is a DAE!
+
+            The above is predicting by considering the subsystem as a whole...
+        '''
+        '''
+            1. get predicted H from GNN1 and GNN2 (H = H1 + H2)
+            2. construct z
+            3. solve entire system to get lambda_0
+            4. dynamic iteration scheme
+                a. solve subsystems using lambda from previous iteration using ndae solver
+                b. solve last subsystem subject using dae solver
+                c. return to a
         '''
         senders1 = graph1.senders
         receivers1 = graph1.receivers

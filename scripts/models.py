@@ -147,6 +147,9 @@ class GraphNetworkSimulator(nn.Module):
 
     @nn.compact    
     def __call__(self, graph, aux_data, rng):   
+        if aux_data is not None:
+            graph = graph._replace(globals=jnp.array([aux_data]))
+        
         encoder = jraph.GraphMapFeatures(
             embed_edge_fn=self.encoder_node_fn,
             embed_node_fn=self.encoder_edge_fn,
@@ -159,8 +162,8 @@ class GraphNetworkSimulator(nn.Module):
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
-            # input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
-            input = jnp.concatenate((nodes, senders, receivers), axis=1)
+            input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
+            # input = jnp.concatenate((nodes, senders, receivers), axis=1)
             model = MLP(feature_sizes=node_feature_sizes, 
                         activation=self.activation, 
                         dropout_rate=self.dropout_rate, 
@@ -170,8 +173,8 @@ class GraphNetworkSimulator(nn.Module):
 
         def update_edge_fn(edges, senders, receivers, globals_):
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
-            # input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
-            input = jnp.concatenate((edges, senders, receivers), axis=1)
+            input = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
+            # input = jnp.concatenate((edges, senders, receivers), axis=1)
             model = MLP(feature_sizes=edge_feature_sizes,
                         activation=self.activation,
                         dropout_rate=self.dropout_rate, 
@@ -266,10 +269,9 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
                 just MLP for the edge encoders/decoders.
             """
             identity = lambda x : x
-            # TODO:
+            # TODO: if i NOT in self.edge_idxs then embed_edge_fns[i] = identity
             # for i in range(len(embed_edge_fns)):
             #     embed_edge_fns[i] = embed_edge_fns[i] if embed_edge_fns[i] else identity
-
             # embed_nodes_fn = embed_node_fn if embed_node_fn else identity
             embed_globals_fn = embed_global_fn if embed_global_fn else identity
 
@@ -280,14 +282,7 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
                 """
                 new_edges = None
                 for i in range(len(graph.edges)):
-                    new_edge = None
-                    edge_type = np.where(self.edge_idxs == i)[0]
-                    # Check if i is not in self.edge_idxs
-                    edge_type = None if edge_type.shape[0] == 0 else edge_type
-                    if edge_type is not None:
-                        new_edge = embed_edge_fns[edge_type.item()](graph.edges[i])
-                    else:
-                        new_edge = embed_edge_fns[-1](graph.edges[i])
+                    new_edge = embed_edge_fns[self.edge_idxs[i]](graph.edges[i])
                     if new_edges is None:
                         new_edges = new_edge
                     else:
@@ -295,14 +290,7 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
 
                 new_nodes = None
                 for i in range(len(graph.nodes)):
-                    new_node = None
-                    node_type = np.where(self.node_idxs == i)[0]
-
-                    node_type = None if node_type.shape[0] == 0 else node_type
-                    if node_type is not None:
-                        new_node = embed_node_fns[node_type.item()](graph.nodes[i])
-                    else:
-                        new_node = embed_node_fns[-1](graph.nodes[i])
+                    new_node = embed_node_fns[0](graph.nodes[i]) # use same embed function for all nodes
                     if new_nodes is None:
                         new_nodes = new_node
                     else:
@@ -312,6 +300,11 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
                                       edges=new_edges.reshape(graph.edges.shape[0], -1),
                                       globals=embed_globals_fn(graph.globals))    
             return Embed
+        
+        use_global_model = self.use_global_model
+        if aux_data is not None:
+            graph = graph._replace(globals=jnp.array([aux_data]).reshape(-1,1))
+            use_global_model = True
         
         encoder = HeterogeneousGraphMapFeatures(
             embed_node_fns=self.encoder_node_fns,
@@ -325,7 +318,7 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
 
         def update_node_fn(nodes, senders, receivers, globals_):
             node_feature_sizes = [self.latent_size] * self.hidden_layers
-            if self.use_global_model:
+            if use_global_model:
                 input = jnp.concatenate((nodes, senders, receivers, globals_), axis=1)
             elif self.learn_nodes:
                 input = jnp.concatenate((senders, receivers), axis=1)
@@ -342,7 +335,7 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
 
         def update_edge_fn(edges, senders, receivers, globals_):
             edge_feature_sizes = [self.latent_size] * self.hidden_layers
-            if self.use_global_model:
+            if use_global_model:
                 inputs = jnp.concatenate((edges, senders, receivers, globals_), axis=1)
             else:
                 inputs = jnp.concatenate((edges, senders, receivers), axis=1)

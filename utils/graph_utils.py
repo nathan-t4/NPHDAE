@@ -50,19 +50,16 @@ def check_dictionary(dictionary, condition):
     return cond
 
 def incidence_matrices_from_graph(graph, edge_types=None):
-    # return (AC, AR, AL, AV, AI)
-    # edge_type_labeling = ('C', 'R', 'L', 'V', 'I')
+    ''' Return the incidence matrices of the given graph: (AC, AR, AL, AV, AI) '''
     AC = []
     AR = []
     AL = []
     AV = []
     AI = []
     A = [AC, AR, AL, AV, AI]
-    edge_types = [0, 2, 0]
 
-    for i, edge_feat in enumerate(graph.edges):
+    for i in range(len(graph.edges)):
         label = edge_types[i]
-        # edge_type = edge_type_labeling[label]
         sender_idx = graph.senders[i]
         receiver_idx = graph.receivers[i]
         Ai = np.zeros((len(graph.nodes)))
@@ -72,9 +69,10 @@ def incidence_matrices_from_graph(graph, edge_types=None):
 
     A = [jnp.array(a).T if len(a) > 0 else None for a in A]
     AC, AR, AL, AV, AI = A
-    splits = np.array([len(AC.T), 
-                       len(AC.T) + len(AL.T), 
-                       len(AC.T) + len(AL.T) + len(AC)])
+    splits = np.array([len(AC.T), # q
+                       len(AC.T) + len(AL.T), # q, phi
+                       len(AC.T) + len(AL.T) + len(AC), # q, phi, e
+                      ]) 
     
     return A, splits
 
