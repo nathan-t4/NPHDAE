@@ -44,7 +44,7 @@ class PHDAE():
         self.num_differential_vars = self.num_capacitors + self.num_inductors
 
         # There is an algebraic variable for the voltage at each node, and for the current through each voltage source
-        self.num_algebraic_vars = self.num_nodes + 1
+        self.num_algebraic_vars = self.num_nodes + self.num_voltage_sources 
 
         self.AC = AC
         self.AR = AR
@@ -129,7 +129,7 @@ class PHDAE():
     def construct_matrix_equations(self, x, y, t, params):
         q = x[0:self.num_capacitors]
         phi = x[self.num_capacitors::]
-        print('num nodes', self.num_nodes)
+
         e = y[0:self.num_nodes]
         jv = y[self.num_nodes::]
 
@@ -163,7 +163,7 @@ class PHDAE():
         J = J.at[0:self.num_nodes, self.num_nodes:(self.num_nodes + self.num_inductors)].set(-self.AL)
         J = J.at[
             0:(self.num_nodes),
-            (self.num_nodes + self.num_inductors + self.num_capacitors - 1)::
+            (self.num_nodes + self.num_inductors + self.num_capacitors)::
             ].set(-self.AV)
     
         # second row of equations of J
@@ -193,85 +193,26 @@ class PHDAE():
         return E, J, z_vec, diss, B
 
     def construct_dae_solver(self):
-        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars)
+        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_differential_vars)
 
     def solve(self, z0, T, params, tol=1e-6):
         return self.solver.solve_dae(z0, T, params, tol)
     
 if __name__ == "__main__":
-    # AC = jnp.array([[0.0], [0.0], [1.0]])
-    # AR = jnp.array([[1.0], [-1.0], [0.0]])
-    # AL = jnp.array([[0.0], [1.0], [-1.0]])
-    # AV = jnp.array([[1.0], [0.0], [0.0]])
-    # AI = jnp.array([[0.0], [0.0], [0.0]])
+    AC = jnp.array([[0.0], [0.0], [1.0]])
+    AR = jnp.array([[1.0], [-1.0], [0.0]])
+    AL = jnp.array([[0.0], [1.0], [-1.0]])
+    AV = jnp.array([[1.0], [0.0], [0.0]])
+    AI = jnp.array([[0.0], [0.0], [0.0]])
 
-    # R = 1
-    # L = 1
-    # C = 1
+    R = 1
+    L = 1
+    C = 1
 
-    # x0 = jnp.array([0.0, 0.0])
-    # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
-    # z0 = jnp.concatenate((x0, y0))
-    # T = jnp.linspace(0, 1.5, 1000)
-
-    # def r_func(delta_V, params=None):
-    #     return delta_V / R
-    
-    # def q_func(delta_V, params=None):
-    #     return C * delta_V
-    
-    # def grad_H_func(phi, params=None):
-    #     return phi / L
-    
-    # def u_func(t, params):
-    #     return jnp.array([jnp.sin(30 * t)])
-
-    #################################################
-    # For DC microgrid
-    AC = jnp.array([[0.0, 0.0], 
-                    [0.0, 0.0], 
-                    [1.0, 0.0], 
-                    [0.0, 0.0],         
-                    [0.0, 1.0], 
-                    [0.0, 0.0], 
-                    [0.0, 0.0]])
-    AR = jnp.array([[-1.0, 0.0, 0.0], 
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, -1.0, 0.0],
-                    [0.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [0.0, 0.0, -1.0]])
-    AL = jnp.array([[0.0, 0.0, 0.0],
-                    [-1.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, -1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [0.0, 0.0, -1.0]])
-    AV = jnp.array([[1.0, 0.0], 
-                    [0.0, 0.0], 
-                    [0.0, 0.0], 
-                    [0.0, 0.0],         
-                    [0.0, 0.0], 
-                    [0.0, 0.0], 
-                    [0.0, 1.0]])
-    AI = jnp.array([[0.0, 0.0], 
-                    [0.0, 0.0], 
-                    [-1.0, 0.0], 
-                    [0.0, 0.0],         
-                    [0.0, -1.0], 
-                    [0.0, 0.0], 
-                    [0.0, 0.0]])
-    
-    R = jnp.array([0.2, 0.05, 0.2])
-    L = jnp.array([1.8e-6, 1.8e-9, 1.8e-6])
-    C = jnp.array([2.2e-6, 2.2e-6])
-
-    # x0 = jnp.array([0.0, 0.0])
-    # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
-    # z0 = jnp.concatenate((x0, y0))
-    # T = jnp.linspace(0, 1.5, 1000)
+    x0 = jnp.array([0.0, 0.0])
+    y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
+    z0 = jnp.concatenate((x0, y0))
+    T = jnp.linspace(0, 1.5, 1000)
 
     def r_func(delta_V, params=None):
         return delta_V / R
@@ -283,11 +224,7 @@ if __name__ == "__main__":
         return phi / L
     
     def u_func(t, params):
-        return jnp.array([0.8, 1.1, 100, 100])
-    
-    z0 = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0])
-    T = jnp.linspace(0, 1.5, 1000)    
-    #################################################
+        return jnp.array([jnp.sin(30 * t)])
     
     dae = PHDAE(AC, AR, AL, AV, AI, grad_H_func=grad_H_func, q_func=q_func, r_func=r_func, u_func=u_func)
 
