@@ -53,34 +53,9 @@ def set_name(config):
         name = config.system_name
     return name
 
-def create_net(name, net_params):
-    if name == 'MassSpring':
-        return MassSpringGNS(**net_params)
-    else:
-        return PHGNS2(**net_params)
-    
-def create_graph_builder(name, training_params=None, net_params=None):
-    if name == 'MassSpring':
-        params = {
-            'add_undirected_edges': training_params.add_undirected_edges, 
-            'add_self_loops': training_params.add_self_loops,
-            'vel_history': net_params.vel_history,
-            'control_history': net_params.control_history,
-        }
-        return partial(MSDGraphBuilder, **params)
-    elif name == 'LC':
-        return LCGraphBuilder
-    elif name == 'LC1':
-        return LC1GraphBuilder
-    elif name == 'LC2':
-        return LC2GraphBuilder
-    elif name == 'CoupledLC':
-        return CoupledLCGraphBuilder
-    elif name == 'Alternator':
-        return AlternatorGraphBuilder
-    else:
-        raise NotImplementedError(f'Graph builder not implemented for system {name}')
-    
+def create_net(net_params):
+    return PHGNS_NDAE(**net_params)
+
 def random_batches(batch_size: int, min: int, max: int, rng: jax.Array):
     """ Return random permutation of jnp.arange(min, max) in batches of batch_size """
     steps_per_epoch = (max - min) // batch_size
@@ -126,54 +101,7 @@ def plot_evaluation_curves(
     cmap = cm.tab10
 
     system_name = aux_data['name']
-    if system_name == 'MassSpring':
-        m = jnp.round(aux_data[0], 3)
-        k = jnp.round(aux_data[1], 3)
-        b = jnp.round(aux_data[2], 3)
-
-        q0 = jnp.round(exp_data[0,0], 3)
-        a0 = jnp.round(exp_data[1,0], 3)
-
-        N = len(m)
-        # title = f"{prefix}: Mass {i} \n $m_{i}$ = " + "{:.2f},".format(m[i]) + f" $k_{i}$ = " + "{:.2f},".format(k[i]) + f" $b_{i}$ = " + "{:.2f}".format(b[i])
-        fig = plt.figure(layout="constrained", figsize=(20,10))
-        fig.suptitle(f'{prefix}')
-    
-        layout = []
-        for i in range(N):
-            layout.append([f'q{i}', f'qdd{i}', f'q{i}_error', f'qdd{i}_error'])
-        ax = fig.subplot_mosaic(layout)
-
-        for i in range(N):
-            ax[f'q{i}'].set_title(f'{i} Position')
-            ax[f'q{i}'].plot(ts, pred_data[0,:,i], label='predicted')
-            ax[f'q{i}'].plot(ts, exp_data[0,:,i], label='expected')
-            ax[f'q{i}'].set_xlabel('Time [$s$]')
-            ax[f'q{i}'].set_ylabel('Position [$m$]')
-            ax[f'q{i}'].legend()
-
-            ax[f'qdd{i}'].set_title(f'{i} Acceleration')
-            ax[f'qdd{i}'].plot(ts, pred_data[1,:,i], label='predicted')
-            ax[f'qdd{i}'].plot(ts, exp_data[1,:,i], label='expected')
-            ax[f'qdd{i}'].set_xlabel('Time [$s$]')
-            ax[f'qdd{i}'].set_ylabel(r'Acceleration [$\mu m/s^2$]')
-            ax[f'qdd{i}'].legend()
-        
-            ax[f'q{i}_error'].set_title(f'{i} Position Error')
-            ax[f'q{i}_error'].plot(ts, exp_data[0,:,i] - pred_data[0,:,i])
-            ax[f'q{i}_error'].set_xlabel('Time [$s$]')
-            ax[f'q{i}_error'].set_ylabel('Position [$m$]')
-
-            ax[f'qdd{i}_error'].set_title(f'{i} Acceleration Error')
-            ax[f'qdd{i}_error'].plot(ts, exp_data[1,:,i] - pred_data[1,:,i])
-            ax[f'qdd{i}_error'].set_xlabel('Time [$s$]')
-            ax[f'qdd{i}_error'].set_ylabel(r'Acceleration [$\mu m/s^2$]')
-
-        plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
-        if show: plt.show()
-        plt.close()
-    
-    elif system_name == 'LC':
+    if system_name == 'LC':
         fig = plt.figure(layout="constrained", figsize=(20,10))
         fig.suptitle(f'{prefix}')
 
@@ -246,8 +174,8 @@ def plot_evaluation_curves(
         ax['Phi'].legend()
 
         ax['H'].set_title('Hamiltonian')
-        ax['H'].plot(ts, pred_data[3,:], color=cmap(0), ls='-', label='predicted')
-        ax['H'].plot(ts, exp_data[3,:], color=cmap(0), ls='--', label='expected')
+        ax['H'].plot(ts, pred_data[-2,:], color=cmap(0), ls='-', label='predicted')
+        ax['H'].plot(ts, exp_data[-2,:], color=cmap(0), ls='--', label='expected')
         ax['H'].set_xlabel('Time [$s$]')
         ax['H'].set_ylabel('Hamiltonian')
         ax['H'].legend()
@@ -264,7 +192,7 @@ def plot_evaluation_curves(
         ax['Phi_error'].set_ylabel('$\Phi_1$')
 
         ax['H_error'].set_title('Hamiltonian Error')
-        ax['H_error'].plot(ts, exp_data[3,:] - pred_data[3,:], color=cmap(0), ls='-')
+        ax['H_error'].plot(ts, exp_data[-2,:] - pred_data[-2,:], color=cmap(0), ls='-')
         ax['H_error'].set_xlabel('Time [$s$]')
         ax['H_error'].set_ylabel('Hamiltonian')
 
@@ -315,6 +243,33 @@ def plot_evaluation_curves(
         ax['H_error'].plot(ts, exp_data[2,:] - pred_data[2,:])
         ax['H_error'].set_xlabel('Time [$s$]')
         ax['H_error'].set_ylabel('Hamiltonian')
+
+        plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
+        if show: plt.show()
+        plt.close()
+
+    elif system_name == 'RLC':
+        fig = plt.figure(layout="constrained", figsize=(20,10))
+        fig.suptitle(f'{prefix}')
+
+        layout = [['Q', 'Phi', 'V1', 'V2', 'V3', 'V4', 'jv', 'H'],
+                  ['Q_error', 'Phi_error', 'V1_error', 'V2_error', 'V3_error', 'V4_error', 'jv_error', 'H_error']]
+        ax = fig.subplot_mosaic(layout)
+
+        values_to_plot = ('Q', 'Phi', 'V1', 'V2', 'V3', 'V4', 'jv', 'H')
+
+        for i,v in enumerate(values_to_plot):
+            ax[v].set_title(f'${v}$')
+            ax[v].plot(ts, pred_data[i,:], color=cmap(0), ls='-', label=f'pred ${v}$')
+            ax[v].plot(ts, exp_data[i,:], color=cmap(0), ls='--', label=f'exp ${v}$')
+            ax[v].set_xlabel('Time [$s$]')
+            ax[v].set_ylabel(f'${v}$')
+            ax[v].legend()
+
+            ax[f'{v}_error'].set_title(f'${v}$ Error')
+            ax[f'{v}_error'].plot(ts, exp_data[i,:] - pred_data[i,:], color=cmap(0), ls='-')
+            ax[f'{v}_error'].set_xlabel('Time [$s$]')
+            ax[f'{v}_error'].set_ylabel(f'${v}$')
 
         plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
         if show: plt.show()

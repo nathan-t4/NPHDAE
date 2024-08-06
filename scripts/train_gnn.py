@@ -69,7 +69,7 @@ def eval(config: ml_collections.ConfigDict):
         net_params.R = train_gb.R
         net_params.g = train_gb.g
 
-    eval_net = create_net(name, net_params)
+    eval_net = create_net(net_params)
     eval_net.training = False
     time_offset = eval_net.T
     init_graph = eval_gb.get_graph(traj_idx=0, t=t0)
@@ -90,8 +90,9 @@ def eval(config: ml_collections.ConfigDict):
     state = ckpt_mngr.restore(paths.ckpt_step, args=ocp.args.StandardRestore(state))
 
     def rollout(eval_state: TrainState, traj_idx: int, ti: int = 0):
-        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(training_params.rollout_timesteps + 1, eval_net.T))
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, eval_net.T))) * eval_net.T
+        tf = jnp.floor_divide(training_params.rollout_timesteps + 1, eval_net.T)
+        tf_idxs = ti + jnp.arange(1, tf)
+        tf_idxs = tf_idxs * eval_net.T
         t0_idxs = tf_idxs - net_params.T
         ts = tf_idxs * eval_net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
@@ -156,7 +157,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     net_params = config.net_params
     paths = config.paths
 
-    name = set_name(config)
+    name = config.system_name
     restore = True if paths.dir else False
     dirs = setup_dirs(config)
 
@@ -174,9 +175,12 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     ### Update net_params 
     net_params.training = True
     net_params.graph_from_state = train_gb.get_graph_from_state
-    net_params.include_idxs = None
+    net_params.state_from_graph = train_gb.get_state_from_graph
+    net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs
     net_params.node_idxs = train_gb.node_idxs
+    net_params.differential_vars = train_gb.differential_vars
+    net_params.algebraic_vars = train_gb.algebraic_vars
     # if not training_params.learn_matrices:
     #     net_params.J = train_gb.J
     #     net_params.R = train_gb.R
@@ -189,10 +193,10 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     init_control = train_gb.get_control(0, t0)
     # Initialize training network
     init_graph = train_gb.get_graph(0, t0)
-    net_params.incidence_matrices, net_params.splits = incidence_matrices_from_graph(init_graph)
-    net = create_net(name, net_params)
-    params = net.init(init_rng, init_graph, init_control, net_rng)
-    batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, None))
+    net_params.incidence_matrices, net_params.splits = incidence_matrices_from_graph(init_graph, train_gb.edge_idxs) # Remember to check incidence matrices before training
+    net = create_net(net_params)
+    params = net.init(init_rng, init_graph, init_control, t0, net_rng)
+    batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, 0, None))
     ############################################################
 
     # logging.log(logging.INFO, f"Number of parameters {num_parameters(params)}")
@@ -208,22 +212,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
         rng, net_rng = jax.random.split(rng)
 
         def loss_fn(params, batch_graphs, batch_data):
-            if name == 'LC1' and loss_function == 'state':
-                batch_control = jnp.array(batch_data[0])
-                differential_state_targets = jnp.stack(batch_data[1:4])
-                algebraic_state_targets = jnp.stack(batch_data[4:7])
-                # residual_targets = jnp.array(batch_data[-1])
-                pred_graphs = state.apply_fn(
-                    params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng}
-                )
-                predictions = train_gb.get_batch_pred_data(pred_graphs)
-                differential_state_predictions = jnp.array(predictions[0:3])
-                algebraic_state_predictions = jnp.array(predictions[3:6])
-                # residual_predictions = predictions[-1].squeeze() # TODO: MSE on algebraic states instead on minimizing residual?
-                loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
-                     + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean()
-                    #  + optax.squared_error(residual_predictions, residual_targets).mean()
-            elif name == 'LC2' and loss_function == 'state':
+            if name == 'LC2':
                 batch_control = jnp.array(batch_data[0])
                 Q = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi = jnp.array(batch_data[2]).reshape(-1,1)
@@ -231,7 +220,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 predictions_e = pred_graphs.edges[:,:,0].squeeze()
                 targets_e = jnp.concatenate((Q, Phi),axis=1).squeeze() # order is the same as LC2 graph edges
                 loss = optax.squared_error(predictions_e, targets_e).mean() # MSE
-            elif name == 'CoupledLC' and loss_function == 'state':
+            elif name == 'CoupledLC':
                 batch_control = jnp.array(batch_data[0])
                 Q1 = jnp.array(batch_data[1]).reshape(-1,1)
                 Phi1 = jnp.array(batch_data[2]).reshape(-1,1)
@@ -242,21 +231,35 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                 predictions_e = pred_graphs.edges[:,:,0].squeeze()
                 targets_e = jnp.concatenate((Q1, Phi1, Q3, Q2, Phi2),axis=1).squeeze()
                 loss = optax.squared_error(predictions_e, targets_e).mean()
-            elif name == 'Alternator' and loss_function == 'state':
+            elif name == 'Alternator':
                 batch_control = jnp.array(batch_data[0])
                 pred_graphs = state.apply_fn(params, batch_graphs, batch_control, net_rng, rngs={'dropout': dropout_rng})
                 predictions_e = pred_graphs.edges[:,:,0].squeeze()
                 targets_e = [data.reshape(-1, 1) for data in batch_data[1:-1]] # excluding control and H
                 targets_e = jnp.concatenate(targets_e, axis=1).squeeze()
-                loss = optax.squared_error(predictions_e, targets_e).mean()
+                loss = optax.squared_error(predictions_e, targets_e).mean()               
+            else:
+                batch_control = jnp.array(batch_data[0])
+                t = batch_data[1]
+                differential_state_targets = jnp.stack(batch_data[2:2+len(train_gb.differential_vars)])
+                algebraic_state_targets = jnp.stack(batch_data[2+len(train_gb.differential_vars):2+len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
+                pred_graphs = state.apply_fn(
+                    params, batch_graphs, batch_control, t, net_rng, rngs={'dropout': dropout_rng}
+                )
+                predictions = train_gb.get_batch_pred_data(pred_graphs)
+                differential_state_predictions = jnp.array(predictions[0:len(train_gb.differential_vars)])
+                algebraic_state_predictions = jnp.array(predictions[len(train_gb.differential_vars):len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
+                loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
+                        + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean()
             return loss
 
-        def train_batch(state, trajs, t0s):
-            tfs = t0s + net_params.T
-            batch_control = train_gb.get_control(trajs, t0s)
-            batch_exp_data = train_gb.get_exp_data(trajs, tfs)
-            batch_data = (batch_control, *batch_exp_data)            
-            graphs = train_gb.get_graph_batch(trajs, t0s)
+        def train_batch(state, trajs, t0_idxs):
+            tf_idxs = t0_idxs + net_params.T
+            batch_control = train_gb.get_control(trajs, t0_idxs)
+            t0s = t0_idxs * net_params.dt
+            batch_exp_data = train_gb.get_exp_data(trajs, tf_idxs)
+            batch_data = (batch_control, t0s, *batch_exp_data)            
+            graphs = train_gb.get_graph_batch(trajs, t0_idxs)
             loss, grads = jax.value_and_grad(loss_fn)(state.params, graphs, batch_data)
             state = state.apply_gradients(grads=grads)
             return state, loss
@@ -268,8 +271,9 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
         return state, TrainMetrics.single_from_model_output(loss=train_loss)
 
     def rollout(eval_state: TrainState, traj_idx: int, ti: int = 0):
-        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(training_params.rollout_timesteps + 1, net.T))
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, net.T))) * net.T
+        tf = jnp.floor_divide(training_params.rollout_timesteps + 1, net.T)
+        tf_idxs = ti + jnp.arange(1, tf)
+        tf_idxs = tf_idxs * net.T
         t0_idxs = tf_idxs - net_params.T
         ts = tf_idxs * net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
@@ -277,13 +281,14 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
         exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
         get_pred_data = eval_gb.get_pred_data
         
-        def forward_pass(graph, control):           
-            graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(config.seed))
+        def forward_pass(graph, inputs):  
+            control, t = inputs         
+            graph = eval_state.apply_fn(eval_state.params, graph, control, t, jax.random.key(config.seed))
             pred_data = get_pred_data(graph)
             graph = graph._replace(globals=None)
             return graph, pred_data
 
-        final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
+        final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
         
         losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
@@ -309,7 +314,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     if restore: state = ckpt_mngr.restore(paths.ckpt_step, args=ocp.args.StandardRestore(state))
 
     # Create evaluation network
-    eval_net = create_net(name, net_params)
+    eval_net = create_net(net_params)
     eval_net.training = False
     eval_state = state.replace(apply_fn=eval_net.apply)
 
@@ -347,9 +352,6 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
             train_metrics = train_metrics.merge(metrics_update)
 
         print(f'Epoch {epoch}: ' + 'loss = {:.15}'.format(train_metrics.compute()["loss"]))
-
-        # for hook in hooks:
-        #     hook(epoch)
 
         is_last_step = (epoch == final_epoch - 1)
 

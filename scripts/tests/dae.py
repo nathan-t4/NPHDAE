@@ -6,6 +6,7 @@ import time
 from functools import partial
 from scipy_dae.integrate import solve_dae, consistent_initial_conditions
 from scipy.optimize._numdiff import approx_derivative
+from scipy.optimize import fsolve
 
 def F(t, y, yp, u, A, system_data, splits):
     """Define implicit system of differential algebraic equations."""
@@ -120,7 +121,7 @@ splits = np.array([len(AC.T),
                    len(AC.T) + len(AL.T),
                    len(AC.T) + len(AL.T) + len(AC)])
 y0, yp0 = init_conditions
-func = partial(F, A=A, system_data=system_data, u=u, splits=splits)
+func = partial(F, u=u, A=A, system_data=system_data, splits=splits)
 jac = partial(jac, u=u, A=A, system_data=system_data, splits=splits)
 f0 = func(0.0, y0, yp0)
 print(f"f0: {f0}")
@@ -134,6 +135,10 @@ print(f"rank(Jyp0): {np.linalg.matrix_rank(Jyp0)}")
 print(f"rank(J0):   {np.linalg.matrix_rank(J0)}")
 print(f"J0.shape: {J0.shape}")
 # print('IC test', )
+test = partial(F, u=u, A=A, system_data=system_data, splits=splits, y=y0, t=0.0)
+print(test(yp0))
+yp0 = fsolve(test, yp0)
+print('yp0', yp0)
 # y0, yp0, fnorm = consistent_initial_conditions(func, jac, t0, y0, yp0)
 
 # solve DAE
