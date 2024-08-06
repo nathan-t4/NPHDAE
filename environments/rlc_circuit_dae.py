@@ -149,15 +149,78 @@ class RLC_PH_DAE():
         return dataset
 
 if __name__ == '__main__':
-    AC = jnp.array([[0.0], [0.0], [1.0]])
-    AR = jnp.array([[1.0], [-1.0], [0.0]])
-    AL = jnp.array([[0.0], [1.0], [-1.0]])
-    AV = jnp.array([[1.0], [0.0], [0.0]])
-    AI = jnp.array([[0.0], [0.0], [0.0]])
+    #################################################
+    # For RLC circuit
+    # AC = jnp.array([[0.0], [0.0], [1.0]])
+    # AR = jnp.array([[1.0], [-1.0], [0.0]])
+    # AL = jnp.array([[0.0], [1.0], [-1.0]])
+    # AV = jnp.array([[1.0], [0.0], [0.0]])
+    # AI = jnp.array([[0.0], [0.0], [0.0]])
 
-    R = 1
-    L = 1
-    C = 1
+    # R = 1
+    # L = 1
+    # C = 1
+
+    # x0 = jnp.array([0.0, 0.0])
+    # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
+    # z0 = jnp.concatenate((x0, y0))
+    # T = jnp.linspace(0, 1.5, 1000)
+
+    # def r_func(delta_V, params=None):
+    #     return delta_V / R
+    
+    # def q_func(delta_V, params=None):
+    #     return C * delta_V
+    
+    # def grad_H_func(phi, params=None):
+    #     return phi / L
+    
+    # def u_func(t, params):
+    #     return jnp.array([jnp.sin(30 * t)])
+    
+    #################################################
+
+    #################################################
+    # For DC microgrid
+    AC = jnp.array([[0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [1.0, 0.0], 
+                    [0.0, 0.0],         
+                    [0.0, 1.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0]])
+    AR = jnp.array([[-1.0, 0.0, 0.0], 
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, -1.0]])
+    AL = jnp.array([[0.0, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, -1.0]])
+    AV = jnp.array([[1.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0],         
+                    [0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, 1.0]])
+    AI = jnp.array([[0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [-1.0, 0.0], 
+                    [0.0, 0.0],         
+                    [0.0, -1.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0]])
+    
+    R = jnp.array([0.2, 0.05, 0.2])
+    L = jnp.array([1.8e-6, 1.8e-9, 1.8e-6])
+    C = jnp.array([2.2e-6, 2.2e-6])
 
     # x0 = jnp.array([0.0, 0.0])
     # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
@@ -174,7 +237,10 @@ if __name__ == '__main__':
         return phi / L
     
     def u_func(t, params):
-        return jnp.array([jnp.sin(30 * t)])
+        return jnp.array([0.8, 1.1, 100, 100])
+    
+    #################################################
+
     
     # seed = 42 # for training
     seed = 41 # for testing
@@ -188,8 +254,8 @@ if __name__ == '__main__':
     t = time.time()
     print('starting simulation')
     dataset = env.gen_dataset(
-        z0_init_lb=jnp.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0]),
-        z0_init_ub=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+        z0_init_lb=jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        z0_init_ub=jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0]),
         trajectory_num_steps=200, # 1000 for training, 200 for testing.
         num_trajectories=50, # 500 for training, 50 for testing
         save_str=save_dir,
