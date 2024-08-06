@@ -37,35 +37,41 @@ dae = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
 sol = dae.solve(z0, T, None)
 
 g_vals = []
+g_vals_squared = []
 for t_ind in range(sol.shape[0]):
     t = T[t_ind]
     z = sol[t_ind, :]
     x = z[0:2]
     y = z[2::]
     g_vals.append(dae.solver.g(x,y,t,None))
+    g_vals_squared.append(jnp.sum(dae.solver.g(x,y,t,None)**2))
 
 g_vals = jnp.array(g_vals)
+g_vals_squared = jnp.array(g_vals_squared)
 
 print(g_vals)
 
-fig = plt.figure()
-ax = fig.add_subplot(211)
-ax.plot(sol[:,2])
-ax = fig.add_subplot(212)
-ax.plot([sol[t_ind, 2] - u_func(t_ind * dt, None) for t_ind in range(len(T))])
-plt.show()
+# fig = plt.figure()
+# ax = fig.add_subplot(211)
+# ax.plot(sol[:,2])
+# ax = fig.add_subplot(212)
+# ax.plot([sol[t_ind, 2] - u_func(t_ind * dt, None) for t_ind in range(len(T))])
+
+# fig = plt.figure()
+# ax = fig.add_subplot(411)
+# ax.plot(g_vals[:, 0])
+
+# ax = fig.add_subplot(412)
+# ax.plot(g_vals[:, 1])
+
+# ax = fig.add_subplot(413)
+# ax.plot(g_vals[:, 2])
+
+# ax = fig.add_subplot(414)
+# ax.plot(g_vals[:, 3])
 
 fig = plt.figure()
-ax = fig.add_subplot(411)
-ax.plot(g_vals[:, 0])
+ax = fig.add_subplot(111)
+ax.plot(g_vals_squared)
 
-ax = fig.add_subplot(412)
-ax.plot(g_vals[:, 1])
-
-ax = fig.add_subplot(413)
-ax.plot(g_vals[:, 2])
-
-ax = fig.add_subplot(414)
-ax.plot(g_vals[:, 3])
-
-plt.show()
+plt.savefig('g_for_true_rlc.png')

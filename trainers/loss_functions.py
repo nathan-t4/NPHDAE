@@ -49,7 +49,7 @@ def l2_and_g_loss_constructor(model, loss_function_setup):
             y : jnp.ndarray) -> jnp.float32:
 
         out = forward(params, x)
-        out_g = forward_g(params, x)
+        out_g = forward_g(params, x) # TODO: Check if this is wrong.
         num_datapoints = x.shape[0]
         
         data_loss = pen_l2 * jnp.sum((out - y)**2) / num_datapoints

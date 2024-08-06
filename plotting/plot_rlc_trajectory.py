@@ -5,11 +5,14 @@ sys.path.append('../')
 
 data_path = os.path.abspath(os.path.join(os.path.curdir, '..', 'environments', 'rlc_dae_data'))
 data_file_name = 'train_RLC_DAE_2024-08-04-18-31-33.pkl'
+data_file_name = 'RLC_DAE_2024-08-06-11-05-02.pkl'
 
 with open(os.path.join(data_path, data_file_name), 'rb') as f:
     dataset = pickle.load(f)
 
-print(dataset)
+for traj in range(dataset['state_trajectories'].shape[0]):
+    if (dataset['state_trajectories'][traj, 0, 2::] == 0).all():
+        print('Traj {} BAD'.format(traj))
 
 traj_ind = 100
 num_timesteps = 1000

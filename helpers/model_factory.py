@@ -37,9 +37,20 @@ class MlpFactory(ModelFactory):
         return MLP(rng_key=rng_key,
                 model_setup=self.model_setup)
 
+
+class TimeDependentNodeFactory(ModelFactory):
+    """Factory that creates a vanilla time-dependent neural ODE."""
+
+    def create_model(self, rng_key : jax.random.PRNGKey):
+        """Instantiate a vanilla time-dependent neural ODE."""
+        from models.time_dependent_neural_ode import TimeDependentNODE
+        return TimeDependentNODE(rng_key=rng_key,
+                    model_setup=self.model_setup)
+
 model_factories = {
     'phndae' : PHNDAE_Factory,
     'mlp' : MlpFactory,
+    'time_dependent_node' : TimeDependentNodeFactory,
 }
 
 def get_model_factory(model_setup):

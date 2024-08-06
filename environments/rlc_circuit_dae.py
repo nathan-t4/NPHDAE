@@ -159,10 +159,10 @@ if __name__ == '__main__':
     L = 1
     C = 1
 
-    x0 = jnp.array([0.0, 0.0])
-    y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
-    z0 = jnp.concatenate((x0, y0))
-    T = jnp.linspace(0, 1.5, 1000)
+    # x0 = jnp.array([0.0, 0.0])
+    # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
+    # z0 = jnp.concatenate((x0, y0))
+    # T = jnp.linspace(0, 1.5, 1000)
 
     def r_func(delta_V, params=None):
         return delta_V / R
@@ -176,7 +176,9 @@ if __name__ == '__main__':
     def u_func(t, params):
         return jnp.array([jnp.sin(30 * t)])
     
-    env = RLC_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
+    # seed = 42 # for training
+    seed = 41 # for testing
+    env = RLC_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.01)
 
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'rlc_dae_data'))
@@ -188,9 +190,8 @@ if __name__ == '__main__':
     dataset = env.gen_dataset(
         z0_init_lb=jnp.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0]),
         z0_init_ub=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
-        trajectory_num_steps=1000, # 1000 for training, 100 for testing.
-        num_trajectories=500, # 500 for training, 20 for testing
+        trajectory_num_steps=200, # 1000 for training, 200 for testing.
+        num_trajectories=50, # 500 for training, 50 for testing
         save_str=save_dir,
-        dt=0.01
     )
     print(time.time() - t)

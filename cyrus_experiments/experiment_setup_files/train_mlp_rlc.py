@@ -5,11 +5,9 @@ exp_config = {
     },
     'dataset_setup' : {
         'dataset_type' : 'trajectory_timesteps_in_input',
-        'train_dataset_file_name' : 'train_RLC_DAE_2024-08-04-18-31-33.pkl',
-        'test_dataset_file_name' : 'test_RLC_DAE_2024-08-04-18-32-05.pkl',
+        'train_dataset_file_name' : 'train_RLC_DAE_2024-08-06-11-05-02.pkl',
+        'test_dataset_file_name' : 'test_RLC_DAE_2024-08-06-11-16-46.pkl',
         'dataset_path' : '../environments/rlc_dae_data',
-        'num_training_trajectories' : 100,
-        'num_testing_trajectories' : 20,
     },
     'model_setup' : {
         'model_type' : 'mlp',
@@ -22,8 +20,8 @@ exp_config = {
     },
     'trainer_setup' : {
         'trainer_type' : 'sgd',
-        'num_training_steps': 20000,
-        'minibatch_size': 32,
+        'num_training_steps': 30000,
+        'minibatch_size': 128,
         'loss_setup' : {
             'loss_function_type' : 'l2_loss',
             'pen_l2_nn_params' : 1e-8,

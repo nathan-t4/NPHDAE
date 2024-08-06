@@ -2,6 +2,8 @@ import jax
 import jax.numpy as jnp
 from math import prod
 
+
+
 def choose_nonlinearity(nonlinearity):
     if nonlinearity == 'relu':
         return jax.nn.relu

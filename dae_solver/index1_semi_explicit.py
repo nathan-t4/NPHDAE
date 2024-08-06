@@ -62,7 +62,7 @@ class DAESolver():
         self.y_dot = y_dot
         self.f_coupled_system = f_coupled_system
 
-    def solve_dae(self, z0, T, params, y0_tol=1e-6):
+    def solve_dae(self, z0, T, params, y0_tol=1e-9):
         """
         Solve the DAE
         """
@@ -70,9 +70,13 @@ class DAESolver():
         x0 = z0[0:self.num_diff_vars]
         y0 = z0[self.num_diff_vars::]
 
-        y0new = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0)
+        y0new, infodict, ier, mesg = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0, full_output=True)
         
-        if not jnp.abs(y0new - y0).all() < y0_tol:
+        if ier != 1:
+            # throw an error if the algebraic states are not consistent.
+            raise ValueError("Initial algebraic states were inconsistent. fsolve returned {}".format(mesg))
+
+        if not (jnp.abs(y0new - y0) < y0_tol).all():
             print("Initial algebraic states {} were inconsistent. New initial algebraic state values are {}".format(y0, y0new))
             y0 = y0new
             z0 = jnp.concatenate((x0, y0))

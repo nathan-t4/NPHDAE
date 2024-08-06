@@ -99,9 +99,9 @@ class PHNDAE():
         self.H_net = H_net
         self.grad_H_func = jax.jit(grad_H_func)
 
-        def grad_H_func(phi, params):
-            return phi
-        self.grad_H_func = jax.jit(grad_H_func)
+        # def grad_H_func(phi, params):
+        #     return phi
+        # self.grad_H_func = jax.jit(grad_H_func)
 
         # Define the R function for the resistors
         self.rng_key, subkey = jax.random.split(self.rng_key)
@@ -115,10 +115,10 @@ class PHNDAE():
             return jax.vmap(R, 0)(delta_V).reshape((num_resistors,))
         self.r_func = jax.jit(r_func)
 
-        def r_func(delta_V, params=None):
-            return delta_V / 1.0
-        init_params['r_func_params'] = None
-        self.r_func = jax.jit(r_func)
+        # def r_func(delta_V, params=None):
+        #     return delta_V / 1.0
+        # init_params['r_func_params'] = None
+        # self.r_func = jax.jit(r_func)
     
         # Define the Q function for the capacitors
         self.rng_key, subkey = jax.random.split(self.rng_key)
@@ -132,18 +132,16 @@ class PHNDAE():
             return jax.vmap(Q, 0)(delta_V).reshape((num_capacitors,))
         self.q_func = jax.jit(q_func)
 
-        def q_func(delta_V, params=None):
-            return 1.0 * delta_V
-        init_params['q_func_params'] = None
-        self.q_func = jax.jit(q_func)
+        # def q_func(delta_V, params=None):
+        #     return 1.0 * delta_V
+        # init_params['q_func_params'] = None
+        # self.q_func = jax.jit(q_func)
 
         freq = self.model_setup['u_func_freq']
         def u_func(t, params=None):
             return jnp.array([jnp.sin(freq * t)])
         self.u_func = jax.jit(u_func)
         init_params['u_func_params'] = None # Don't make frequency a parameter here, otherwise training will try and optimize it.
-
-        self.init_params = init_params
 
         self.dae = PHDAE(
             self.AC, 
@@ -177,6 +175,7 @@ class PHNDAE():
         
         self.forward_g = jax.jit(forward_g)
         self.forward_g = jax.vmap(forward_g, in_axes=(None, 0))
+        self.init_params = init_params
 
     def predict_trajectory(self,
                             params,
