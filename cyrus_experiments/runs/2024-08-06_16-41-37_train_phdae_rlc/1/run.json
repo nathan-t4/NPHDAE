@@ -1,0 +1,86 @@
+{
+  "artifacts": [
+    "model_params.pkl"
+  ],
+  "command": "main",
+  "experiment": {
+    "base_dir": "/home/cyrusneary/Documents/research/code/compgnn/cyrus_experiments",
+    "dependencies": [
+      "jax==0.4.31",
+      "numpy==1.26.4",
+      "sacred==0.8.5"
+    ],
+    "mainfile": "run_training.py",
+    "name": "2024-08-06_16-41-37_train_phdae_rlc",
+    "repositories": [
+      {
+        "commit": "3e61daeaa0706a498ca8ca5089969a8ae8a34277",
+        "dirty": true,
+        "url": "https://github.com/nathan-t4/compgnn.git"
+      }
+    ],
+    "sources": [
+      [
+        "run_training.py",
+        "_sources/run_training_83bf46e4de3553bd5567bc3c72884453.py"
+      ]
+    ]
+  },
+  "heartbeat": "2024-08-06T21:44:46.753564",
+  "host": {
+    "ENV": {},
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900K",
+    "gpus": {
+      "driver_version": "545.29.06",
+      "gpus": [
+        {
+          "model": "NVIDIA RTX A4000",
+          "persistence_mode": false,
+          "total_memory": 16376
+        }
+      ]
+    },
+    "hostname": "asg-a66243",
+    "os": [
+      "Linux",
+      "Linux-6.5.0-45-generic-x86_64-with-glibc2.35"
+    ],
+    "python_version": "3.12.4"
+  },
+  "meta": {
+    "command": "main",
+    "config_updates": {},
+    "named_configs": [],
+    "options": {
+      "--beat-interval": null,
+      "--capture": null,
+      "--comment": null,
+      "--debug": false,
+      "--enforce_clean": false,
+      "--file_storage": null,
+      "--force": false,
+      "--help": false,
+      "--id": null,
+      "--loglevel": null,
+      "--mongo_db": null,
+      "--name": null,
+      "--pdb": false,
+      "--print-config": false,
+      "--priority": null,
+      "--queue": false,
+      "--s3": null,
+      "--sql": null,
+      "--tiny_db": null,
+      "--unobserved": false,
+      "COMMAND": null,
+      "UPDATE": [],
+      "help": false,
+      "with": false
+    }
+  },
+  "resources": [],
+  "result": null,
+  "start_time": "2024-08-06T21:41:38.269113",
+  "status": "COMPLETED",
+  "stop_time": "2024-08-06T21:44:46.751288"
+}

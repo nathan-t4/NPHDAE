@@ -1,0 +1,39 @@
+{
+  "dataset_setup": {
+    "dataset_path": "../environments/rlc_dae_data",
+    "dataset_type": "trajectory_timesteps_in_input",
+    "test_dataset_file_name": "test_RLC_DAE_2024-08-06-11-16-46.pkl",
+    "train_dataset_file_name": "train_RLC_DAE_2024-08-06-11-05-02.pkl"
+  },
+  "exp_name": "train_mlp_rlc",
+  "exp_setup": {
+    "seed": 1
+  },
+  "model_setup": {
+    "input_dim": 7,
+    "model_type": "mlp",
+    "nn_setup_params": {
+      "activation": "relu",
+      "output_sizes": [
+        64,
+        64,
+        6
+      ]
+    },
+    "output_dim": 6
+  },
+  "seed": 619658736,
+  "trainer_setup": {
+    "loss_setup": {
+      "loss_function_type": "l2_loss",
+      "pen_l2_nn_params": 1e-08
+    },
+    "minibatch_size": 128,
+    "num_training_steps": 30000,
+    "optimizer_setup": {
+      "learning_rate": 0.0001,
+      "name": "adam"
+    },
+    "trainer_type": "sgd"
+  }
+}

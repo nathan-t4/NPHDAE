@@ -1,0 +1,129 @@
+{
+  "dataset_setup": {
+    "dataset_path": "../environments/rlc_dae_data",
+    "dataset_type": "trajectory_timesteps_in_input",
+    "test_dataset_file_name": "test_RLC_DAE_2024-08-06-11-16-46.pkl",
+    "train_dataset_file_name": "train_RLC_DAE_2024-08-06-11-05-02.pkl"
+  },
+  "exp_name": "train_phdae_rlc",
+  "exp_setup": {
+    "seed": 1
+  },
+  "model_setup": {
+    "AC": [
+      [
+        0.0
+      ],
+      [
+        0.0
+      ],
+      [
+        1.0
+      ]
+    ],
+    "AI": [
+      [
+        0.0
+      ],
+      [
+        0.0
+      ],
+      [
+        0.0
+      ]
+    ],
+    "AL": [
+      [
+        0.0
+      ],
+      [
+        1.0
+      ],
+      [
+        -1.0
+      ]
+    ],
+    "AR": [
+      [
+        1.0
+      ],
+      [
+        -1.0
+      ],
+      [
+        0.0
+      ]
+    ],
+    "AV": [
+      [
+        1.0
+      ],
+      [
+        0.0
+      ],
+      [
+        0.0
+      ]
+    ],
+    "H_net_setup": {
+      "input_dim": 1,
+      "model_type": "mlp",
+      "nn_setup_params": {
+        "activation": "tanh",
+        "output_sizes": [
+          32,
+          32,
+          1
+        ]
+      },
+      "output_dim": 1
+    },
+    "dt": 0.01,
+    "input_dim": 7,
+    "model_type": "phndae",
+    "output_dim": 6,
+    "q_net_setup": {
+      "input_dim": 1,
+      "model_type": "mlp",
+      "nn_setup_params": {
+        "activation": "relu",
+        "output_sizes": [
+          32,
+          32,
+          1
+        ]
+      },
+      "output_dim": 1
+    },
+    "r_net_setup": {
+      "input_dim": 1,
+      "model_type": "mlp",
+      "nn_setup_params": {
+        "activation": "relu",
+        "output_sizes": [
+          32,
+          32,
+          1
+        ]
+      },
+      "output_dim": 1
+    },
+    "u_func_freq": 30.0
+  },
+  "seed": 596906923,
+  "trainer_setup": {
+    "loss_setup": {
+      "loss_function_type": "l2_and_g_loss",
+      "pen_g": 0.01,
+      "pen_l2": 1,
+      "pen_l2_nn_params": 1e-08
+    },
+    "minibatch_size": 128,
+    "num_training_steps": 30000,
+    "optimizer_setup": {
+      "learning_rate": 0.0001,
+      "name": "adam"
+    },
+    "trainer_type": "sgd"
+  }
+}
