@@ -106,7 +106,6 @@ sol = composite_dae.solve(z0, T, params_list=[None, None, None])
 
 print(sol.shape)
 
-
 from plotting.common import compute_g_vals_along_traj
 gnorm, gval = compute_g_vals_along_traj(composite_dae.solver.g, [None, None, None], sol, T, num_diff_vars=5)
 

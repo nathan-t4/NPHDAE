@@ -15,8 +15,11 @@ exp_file_name = '2024-08-05_17-23-01_train_phdae_rlc'
 exp_file_name = '2024-08-06_11-18-03_train_phdae_rlc'
 # exp_file_name = '2024-08-06_12-03-04_train_mlp_rlc'
 exp_file_name = '2024-08-06_16-41-37_train_phdae_rlc'
-exp_file_name = '2024-08-06_18-40-56_train_phdae_dgu'
+# exp_file_name = '2024-08-06_18-40-56_train_phdae_dgu'
 sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
+
+phndae_color = (12/255, 212/255, 82/255)
+mlp_color = (224/255, 95/255, 21/255)
 
 config = load_config_file(sacred_save_path)
 test_dataset_name = config['dataset_setup']['test_dataset_file_name']
@@ -82,7 +85,7 @@ predicted_traj = predicted_trajectories[traj_to_plot]
 true_traj = test_dataset['state_trajectories'][traj_to_plot, :, :]
 
 T = 0.01 * np.arange(0, traj_len)
-fig = plt.figure(figsize=(10,10))
+fig = plt.figure(figsize=(10,4))
 
 ax1 = fig.add_subplot(321)
 ax1.plot(T, predicted_traj[:,0], color='blue', linewidth=3, label='Predicted Dynamics')
@@ -128,7 +131,7 @@ g_vals = []
 for traj_ind in range(predict_trajectories.shape[0]):
     predicted_traj = predict_trajectories[traj_ind]
     timesteps = predicted_timesteps[traj_ind]
-    gnorm, gval = compute_g_vals_along_traj(true_dae.solver.g, params, predicted_traj, timesteps)
+    gnorm, gval = compute_g_vals_along_traj(true_dae.solver.g, params, predicted_traj, timesteps, num_diff_vars=2)
     g_vals_norm.append(gnorm)
     g_vals.append(gval)
 g_vals_norm = jnp.array(g_vals_norm)
@@ -162,14 +165,15 @@ median = jnp.median(g_vals_norm, axis=0)
 percentile_25 = jnp.percentile(g_vals_norm, 25, axis=0)
 percentile_75 = jnp.percentile(g_vals_norm, 75, axis=0)
 
-fig = plt.figure()
+fig = plt.figure(figsize=(10,4))
 ax = fig.add_subplot(111)
-ax.plot(median)
-ax.fill_between(range(len(median)), percentile_25, percentile_75, alpha=0.5)
-ax.set_xlabel('Time [s]')
-ax.set_ylabel('||g||')
+ax.plot(median, color=phndae_color, linewidth=5)
+ax.fill_between(range(len(median)), percentile_25, percentile_75, alpha=0.3, color=phndae_color)
+# ax.set_xlabel('Time [s]')
+# ax.set_ylabel('||g||')
+ax.grid()
 
-plt.savefig('g_norm_for_true_rlc.png')
+plt.savefig('g_norm_for_true_rlc.png', dpi=600)
 
 # Now plot prediction errors.
 traj_errs = []
@@ -185,11 +189,12 @@ median = jnp.median(traj_errs, axis=0)
 percentile_25 = jnp.percentile(traj_errs, 25, axis=0)
 percentile_75 = jnp.percentile(traj_errs, 75, axis=0)
 
-fig = plt.figure()
+fig = plt.figure(figsize=(10,4))
 ax = fig.add_subplot(111)
-ax.plot(median)
-ax.fill_between(range(len(median)), percentile_25, percentile_75, alpha=0.5)
-ax.set_xlabel('Time [s]')
-ax.set_ylabel('Trajectory Error')
+ax.plot(median, color=phndae_color, linewidth=5)
+ax.fill_between(range(len(median)), percentile_25, percentile_75, alpha=0.3, color=phndae_color)
+# ax.set_xlabel('Time [s]')
+# ax.set_ylabel('Trajectory Error')
+ax.grid()
 
-plt.savefig('phndae_trajectory_error.png')
+plt.savefig('phndae_trajectory_error.png', dpi=600)
