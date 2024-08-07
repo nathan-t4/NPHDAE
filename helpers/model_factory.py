@@ -46,11 +46,21 @@ class TimeDependentNodeFactory(ModelFactory):
         from models.time_dependent_neural_ode import TimeDependentNODE
         return TimeDependentNODE(rng_key=rng_key,
                     model_setup=self.model_setup)
+    
+class DGUPHNDAEFactory(ModelFactory):
+    """Factory that creates a DGU PHNDAE model."""
+
+    def create_model(self, rng_key : jax.random.PRNGKey):
+        """Instantiate a DGU PHNDAE model."""
+        from model_instances.dgu_phndae import DGU_PHNDAE
+        return DGU_PHNDAE(rng_key=rng_key,
+                    model_setup=self.model_setup)
 
 model_factories = {
     'phndae' : PHNDAE_Factory,
     'mlp' : MlpFactory,
     'time_dependent_node' : TimeDependentNodeFactory,
+    'dgu_phndae' : DGUPHNDAEFactory,
 }
 
 def get_model_factory(model_setup):

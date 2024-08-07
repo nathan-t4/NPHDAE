@@ -140,10 +140,19 @@ class CompositePHDAE():
 
             u_output_list = []
             for subsystem_ind in range(self.num_subsystems):
-                if self.ph_dae_list[subsystem_ind].num_voltage_sources > 0  or self.ph_dae_list[subsystem_ind].num_current_sources > 0:
+                num_subsystem_current_sources = self.ph_dae_list[subsystem_ind].num_current_sources
+                if num_subsystem_current_sources > 0:
                     _, _, _, u_func_params_of_subsystem = self.extract_params(params_list[subsystem_ind])
-                    u_output_of_subsystem = self.ph_dae_list[subsystem_ind].u_func(t, u_func_params_of_subsystem)
-                    u_output_list.append(u_output_of_subsystem)
+                    current_u_output_of_subsystem = self.ph_dae_list[subsystem_ind].u_func(t, u_func_params_of_subsystem)[0:num_subsystem_current_sources]
+                    u_output_list.append(current_u_output_of_subsystem)
+            for subsystem_ind in range(self.num_subsystems):
+                num_subsystem_voltage_sources = self.ph_dae_list[subsystem_ind].num_voltage_sources
+                num_subsystem_current_sources = self.ph_dae_list[subsystem_ind].num_current_sources
+                if num_subsystem_voltage_sources > 0:
+                    _, _, _, u_func_params_of_subsystem = self.extract_params(params_list[subsystem_ind])
+                    voltage_u_output_of_subsystem = self.ph_dae_list[subsystem_ind].u_func(t, u_func_params_of_subsystem)[num_subsystem_current_sources::]
+                    u_output_list.append(voltage_u_output_of_subsystem)
+
             u_output = jnp.concatenate(u_output_list)
 
             rhs = jnp.linalg.matmul(J, z_vec) - diss + jnp.linalg.matmul(B, u_output)

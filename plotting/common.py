@@ -84,13 +84,13 @@ def predict_trajectory(model, params, initial_state, num_steps, dt, t_init=0.0):
         timesteps.append(timesteps[-1] + dt)
     return jnp.array(predicted_traj), jnp.array(timesteps)
 
-def compute_g_vals_along_traj(g, params, traj, timesteps):
+def compute_g_vals_along_traj(g, params, traj, timesteps, num_diff_vars):
     g_vals = []
     for t_ind in range(traj.shape[0]):
         t = timesteps[t_ind]
         z = traj[t_ind, :]
-        x = z[0:2]
-        y = z[2::]
+        x = z[0:num_diff_vars]
+        y = z[num_diff_vars::]
         g_vals.append(g(x,y,t,params))
 
     g_vals = jnp.array(g_vals)

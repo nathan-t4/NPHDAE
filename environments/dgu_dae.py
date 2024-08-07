@@ -157,9 +157,9 @@ if __name__ == '__main__':
     AV = jnp.array([[1.0], [0.0], [0.0]])
     AI = jnp.array([[0.0], [0.0], [-1.0]])
 
-    R = 0.2
-    L = 1.8e-3
-    C = 2.2e-3
+    R = 1
+    L = 1
+    C = 1
 
     # x0 = jnp.array([0.0, 0.0])
     # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
@@ -176,10 +176,10 @@ if __name__ == '__main__':
         return phi / L
     
     def u_func(t, params):
-        return jnp.array([0.8, 100 * jnp.sin(3 * t)])
+        return jnp.array([0.1, 1.0])
     
-    # seed = 42 # for training
-    seed = 41 # for testing
+    seed = 42 # for testing
+    # seed = 41 # for training
     env = DGU_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.01)
 
     curdir = os.path.abspath(os.path.curdir)
@@ -192,8 +192,8 @@ if __name__ == '__main__':
     dataset = env.gen_dataset(
         z0_init_lb=jnp.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0]),
         z0_init_ub=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
-        trajectory_num_steps=1000, # 1000 for training, 200 for testing.
-        num_trajectories=2, # 500 for training, 50 for testing
+        trajectory_num_steps=200, # 1000 for training, 200 for testing.
+        num_trajectories=50, # 500 for training, 50 for testing
         save_str=save_dir,
     )
 

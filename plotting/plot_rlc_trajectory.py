@@ -3,10 +3,10 @@ import pickle
 import sys, os
 sys.path.append('../')
 
-data_path = os.path.abspath(os.path.join(os.path.curdir, '..', 'environments', 'rlc_dae_data'))
+data_path = os.path.abspath(os.path.join(os.path.curdir, '..', 'environments', 'dgu_dae_data'))
 data_file_name = 'train_RLC_DAE_2024-08-04-18-31-33.pkl'
 data_file_name = 'RLC_DAE_2024-08-06-11-05-02.pkl'
-data_file_name = 'DGU_DAE_2024-08-06-15-47-18.pkl'
+data_file_name = 'train_bogos_components_DGU_DAE_2024-08-06-17-19-27.pkl'
 
 with open(os.path.join(data_path, data_file_name), 'rb') as f:
     dataset = pickle.load(f)

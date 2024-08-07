@@ -110,7 +110,7 @@ class PHDAE():
         self.g = jax.jit(g)
 
     def construct_E_matrix(self):
-        return jax.scipy.linalg.block_diag(self.AC, jnp.eye(self.num_inductors), jnp.zeros((self.num_capacitors, self.num_nodes)), jnp.zeros(self.num_voltage_sources))
+        return jax.scipy.linalg.block_diag(self.AC, jnp.eye(self.num_inductors), jnp.zeros((self.num_capacitors, self.num_nodes)), jnp.zeros((self.num_voltage_sources, self.num_voltage_sources)))
     
     def get_diffeq_indexes_in_output_vector(self):
         """
@@ -233,6 +233,6 @@ if __name__ == "__main__":
     fig = plt.figure()
     ax = fig.add_subplot(111)
     ax.plot(sol[:,5])
-    plt.show()
+    plt.savefig('rlc_dae.png')
 
     print(sol)
