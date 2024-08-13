@@ -1,81 +1,15 @@
-"""
-    Test composition of circuits 1 and 2 to get coupled lc circuit
-
-    How to compose:
-    - Concatenate states of circuits 1 and 2 to get state of coupled lc circuit
-    - Predict Hamiltonian of circuits 1 and 2 from respective GNS
-        - make sure nodes of circuits are correct, then edges of GNS predict energy.
-    - Add Hamiltonian and use PH dynamics to get next state (decoder)
-
-    Pipeline
-    - load trained models GNS1 and GNS2 for circuits 1 and 2
-    - decompose an initial coupled lc graph into graph1 and graph2
-    - feed into CompGNS to get next_graph1 and next_graph2
-    - repeat for # of rollout timesteps
-    - compare results from CompGNS vs expected results
-"""
-
 import os
 import jax
 import optax
 from flax.training.train_state import TrainState
 import orbax.checkpoint as ocp
 
-from scripts.graph_nets import CompLCGNS
+from scripts.model_instances.comp_nets import CompLCGNS
 from configs.comp_circuits import get_comp_gnn_config
+from helpers.graph_builder_factory import gb_factory
 from utils.train_utils import *
 from utils.gnn_utils import *
-
-def decompose_coupled_lc_graph(lc_graph):
-    """
-    nodes = jnp.array([[0], [V2], [V3]])
-    edges = jnp.array([[Q1], [Phi1], [Q3])
-    senders = jnp.array([0, 1, 0])
-    receivers = jnp.array([1, 2, 2])
-
-    nodes = jnp.array([[0], [V4], [V3]])
-    edges = jnp.array([[Q2], [Phi2], [Q3]])
-    senders = jnp.array([0, 1, 0])
-    receivers = jnp.array([1, 2, 2])
-
-    nodes = jnp.array([[0], [V2], [V3], [V4]])
-    edges = jnp.array([[Q1], [Phi1], [Q3], [Q2], [Phi2]])
-    senders = jnp.array([0, 1, 0, 3, 0])
-    receivers = jnp.array([1, 2, 2, 2, 3])
-    """
-    Q1, Phi1, Q3, Q2, Phi2 = lc_graph.edges
-    zero, V2, V3, V4 = lc_graph.nodes
-    nodes_1 = jnp.array([[0], V2, V3]) # [[0], [V2], [V3]]
-    edges_1 = jnp.array([Q1, Phi1, Q3]) # [[Q1], [Phi1], [Q3]] 
-    n_node_1 = jnp.array([len(nodes_1)])
-    n_edge_1 = jnp.array([len(edges_1)])
-    senders_1 = jnp.array([0, 1, 0])
-    receivers_1 = jnp.array([1, 2, 2])
-
-    graph_1 = jraph.GraphsTuple(nodes=nodes_1,
-                                edges=edges_1,
-                                globals=None,
-                                senders=senders_1,
-                                receivers=receivers_1,
-                                n_node=n_node_1,
-                                n_edge=n_edge_1)
-
-    nodes_2 = jnp.array([[0], V4, V3]) # [0, [V4], [V3]]
-    edges_2 = jnp.array([Q2, Phi2, Q3]) # [[Q2], [Phi2], [Q3]] 
-    n_node_2 = jnp.array([len(nodes_2)])
-    n_edge_2 = jnp.array([len(edges_2)])
-    senders_2 = jnp.array([0, 1, 0])
-    receivers_2 = jnp.array([1, 2, 2])
-
-    graph_2 = jraph.GraphsTuple(nodes=nodes_2,
-                                edges=edges_2,
-                                globals=None,
-                                senders=senders_2,
-                                receivers=receivers_2,
-                                n_node=n_node_2,
-                                n_edge=n_edge_2)
-
-    return graph_1, graph_2
+from utils.comp_utils import *
 
 def compose(config):
     net_params_1 = config.net_params_1
@@ -91,20 +25,9 @@ def compose(config):
     rng = jax.random.key(config.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
-    graph_builder = create_graph_builder('CoupledLC')
+    graph_builder = gb_factory('CoupledLC')
 
     eval_gb = graph_builder(paths.coupled_lc_data_path)
-    
-    if not config.learn_matrices_one:
-        J1, R1, g1 = get_pH_matrices(config.net_one_name)
-        net_params_1.J = J1
-        net_params_1.R = R1
-        net_params_1.g = g1
-    if not config.learn_matrices_two:
-        J2, R2, g2 = get_pH_matrices(config.net_two_name)
-        net_params_2.J = J2
-        net_params_2.R = R2
-        net_params_2.g = g2
 
     net_params_1.training = False
     net_params_2.training = False
@@ -112,8 +35,8 @@ def compose(config):
     net_one = create_net(config.net_one_name, net_params_1)
     net_two = create_net(config.net_two_name, net_params_2)
 
-    gb_one = create_graph_builder(config.net_one_name)(paths.training_data_one)
-    gb_two = create_graph_builder(config.net_two_name)(paths.training_data_two)
+    gb_one = gb_factory(config.net_one_name)(paths.training_data_one)
+    gb_two = gb_factory(config.net_two_name)(paths.training_data_two)
 
     net_one.graph_from_state = gb_one.get_graph_from_state
     net_two.graph_from_state = gb_two.get_graph_from_state
@@ -124,13 +47,19 @@ def compose(config):
     net_two.node_idxs = gb_two.node_idxs
     net_two.include_idxs = np.array([0,1])
 
+    system_one_config = get_system_config(gb_one.get_graph(0, 0))
+    system_two_config = get_system_config(gb_two.get_graph(0, 0))
+
+    init_graph = eval_gb.get_graph(traj_idx=0, t=0)
+    init_graph_one, init_graph_two = explicit_unbatch_graph(init_graph, system_one_config, system_two_config)
+
     init_control = eval_gb._control[0,0]
+    init_control_one = init_control[:system_one_config['num_volt_sources']+system_one_config['num_cur_sources']]
+    init_control_two = init_control[system_one_config['num_volt_sources']+system_one_config['num_cur_sources']:]
 
-    init_graph_one, init_graph_two = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx=0, t=0))
+    params_one = net_one.init(init_rng, init_graph_one, init_control_one, net_rng)
 
-    params_one = net_one.init(init_rng, init_graph_one, init_control[jnp.array([0,1,2])], net_rng)
-
-    params_two = net_two.init(init_rng, init_graph_two, init_control[jnp.array([3,4,2])], net_rng)
+    params_two = net_two.init(init_rng, init_graph_two, init_control_two, net_rng)
 
     tx_one = optax.adam(**config.optimizer_params_1)
 
@@ -174,8 +103,22 @@ def compose(config):
     integrator = net_one.integration_method
 
     # Initialize composite GNS
-    net = CompLCGNS(integrator, eval_gb._dt, T, state_one, state_two)
-    params = net.init(init_rng, init_graph_one, init_graph_two, net_rng)
+    comp_net_config = {
+        'integration_method': integrator,
+        'dt': dt,
+        'T': T,
+        'state_one': state_one,
+        'state_two': state_two,
+        'graph_to_state_one': gb_one.graph_to_state,
+        'graph_to_state_two': gb_two.graph_to_state,
+        'state_to_graph_one': gb_one.state_to_graph,
+        'state_to_graph_two': gb_two.state_to_graph,
+        'system_one_config': system_one_config,
+        'system_two_config': system_two_config,
+    }
+
+    net = CompLCGNS(**comp_net_config)
+    params = net.init(init_rng, init_graph, init_control, net_rng)
     tx = optax.adam(1e-3)
 
     state = TrainState.create(
@@ -185,41 +128,29 @@ def compose(config):
     )
 
     def rollout(state, traj_idx, ti = 0):
-        tf_idxs = ti + jnp.arange(1, jnp.floor_divide(config.rollout_timesteps + 1, T))
-        tf_idxs = jnp.unique(tf_idxs.clip(min=ti + 1, max=jnp.floor_divide(eval_gb._num_timesteps + 1, T))) * T
+        tf = jnp.floor_divide(config.rollout_timesteps + 1, net.T)
+        tf_idxs = ti + jnp.arange(1, tf)
+        tf_idxs = tf_idxs * T
         t0_idxs = tf_idxs - T
-        ts = tf_idxs * dt
-        graphs = decompose_coupled_lc_graph(eval_gb.get_graph(traj_idx, ti)) 
-
-        controls = t0_idxs # used as 'length' for scan loop
-        exp_Q1 = eval_gb._Q1[traj_idx, tf_idxs]
-        exp_Phi1 = eval_gb._Phi1[traj_idx, tf_idxs]
-        exp_Q3 = eval_gb._Q3[traj_idx, tf_idxs]
-        exp_Q2 = eval_gb._Q2[traj_idx, tf_idxs]
-        exp_Phi2 = eval_gb._Phi2[traj_idx, tf_idxs]
-        exp_H = eval_gb._H[traj_idx, tf_idxs]
-        exp_data = (exp_Q1, exp_Phi1, exp_Q3, exp_Q2, exp_Phi2, exp_H)
-
-        def forward_pass(graphs, control):
-            graph_one, graph_two = graphs
-            next_graph_one, next_graph_two = state.apply_fn(state.params, graph_one, graph_two, jax.random.key(0))
-            pred_Q1 = (next_graph_one.edges[0,0]).squeeze()
-            pred_Phi1 = (next_graph_one.edges[1,0]).squeeze()
-            pred_Q3 = (next_graph_one.edges[2,0]).squeeze()
-            pred_Q2 = (next_graph_two.edges[0,0]).squeeze()
-            pred_Phi2 = (next_graph_two.edges[1,0]).squeeze()
-            pred_H = (next_graph_one.globals).squeeze() + (next_graph_two.globals).squeeze()
-            
-            next_graph_one = next_graph_one._replace(globals=None)
-            next_graph_two = next_graph_two._replace(globals=None)
-
-            return (next_graph_one, next_graph_two), (pred_Q1, pred_Phi1, pred_Q3, pred_Q2, pred_Phi2, pred_H)
+        ts = tf_idxs * net.dt
+        graph = eval_gb.get_graph(traj_idx, ti)
+        controls = eval_gb.get_control(traj_idx, t0_idxs)
+        exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
+        get_pred_data = eval_gb.get_pred_data
         
-        (_, __), pred_data = jax.lax.scan(forward_pass, graphs, controls)
+        def forward_pass(graph, inputs):  
+            control, t = inputs         
+            graph = state.apply_fn(state.params, graph, control, t, jax.random.key(config.seed))
+            pred_data = get_pred_data(graph)
+            graph = graph._replace(globals=None)
+            return graph, pred_data
 
-        losses = [jnp.sum(optax.l2_loss(pred_data[i], exp_data[i])) for i in range(len(exp_data))]
+        _, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
+        
+        losses = [
+            jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+        ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        
         return ts, np.array(pred_data), np.array(exp_data), eval_metrics
     
     print("Evaluating composition")

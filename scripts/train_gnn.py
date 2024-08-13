@@ -16,8 +16,8 @@ import orbax.checkpoint as ocp
 
 from timeit import default_timer
 from argparse import ArgumentParser
-from scripts.models import *
-from scripts.graph_nets import *
+from scripts.models.gnn import *
+from scripts.model_instances.ph_gns import *
 from utils.train_utils import *
 from utils.data_utils import *
 from utils.jax_utils import *
@@ -25,9 +25,6 @@ from utils.gnn_utils import *
 
 from helpers.graph_builder_factory import gb_factory
 from helpers.config_factory import config_factory
-
-# from absl import logging
-# logging.set_verbosity(logging.INFO)
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
 
@@ -38,6 +35,7 @@ def eval(config: ml_collections.ConfigDict):
     paths = config.paths
     
     name = set_name(config)
+    dirs = setup_dirs(config)
     dirs['log'] = os.path.join(paths.dir, 'log')
     dirs['ckpt'] = os.path.join(paths.dir, 'checkpoint')
     plot_dir = os.path.join(paths.dir, 'eval_plots')
@@ -112,10 +110,7 @@ def eval(config: ml_collections.ConfigDict):
         jax.debug.print('Inference time {} [sec] for {} passes', end - start, len(ts))
         losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        aux_data = {
-            'name': name,
-        }
-        return ts, np.array(pred_data), np.array(exp_data), aux_data, eval_metrics
+        return ts, np.array(pred_data), np.array(exp_data), eval_metrics
         
     trajs_size = train_gb._num_timesteps
     ts_size = train_gb._num_timesteps - t0
@@ -126,13 +121,13 @@ def eval(config: ml_collections.ConfigDict):
     rollout_error_sum = 0
     error_sums = [0] * eval_gb._num_states
     for i in range(eval_gb._num_trajectories):
-        ts, pred_data, exp_data, aux_data, eval_metrics = rollout(state, traj_idx=i)
+        ts, pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
         for j in range(len(error_sums)):
             error_sums[j] += eval_metrics[j].compute()['loss']
         
         error_sums = np.array(error_sums)
         
-        plot_evaluation_curves(ts, pred_data, exp_data, aux_data,
+        plot_evaluation_curves(ts, pred_data, exp_data, name,
                                 plot_dir=plot_dir,
                                 prefix=f'eval_traj_{i}')
         writer.write_scalars(i, add_prefix_to_keys({'loss': error_sums.mean() / eval_gb._num_timesteps}, 'eval'))
@@ -152,7 +147,7 @@ def eval(config: ml_collections.ConfigDict):
     with open(eval_metrics_file, "w") as outfile:
         json.dump(eval_metrics, outfile)
 
-def train(config: ml_collections.ConfigDict, optuna_trial = None):
+def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     training_params = config.training_params
     net_params = config.net_params
     paths = config.paths
@@ -168,46 +163,62 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     writer = metric_writers.create_default_writer(logdir=dirs['log'])
     tx = optax.adam(**config.optimizer_params)
     graph_builder = gb_factory(name)
-    train_gb = graph_builder(paths.training_data_path)
-    eval_gb = graph_builder(paths.evaluation_data_path)
+
+    # Incidence matrices of the system
+    AC = config.AC
+    AR = config.AR
+    AL = config.AL
+    AV = config.AV
+    AI = config.AI
+    # Initialize graph builders - these transform the training data into jraph.GraphsTuples
+    train_gb = graph_builder(paths.training_data_path, AC, AR, AL, AV, AI)
+    eval_gb = graph_builder(paths.evaluation_data_path, AC, AR, AL, AV, AI)
 
     ############################################################
     ### Update net_params 
     net_params.training = True
     net_params.graph_from_state = train_gb.get_graph_from_state
     net_params.state_from_graph = train_gb.get_state_from_graph
+    net_params.alg_vars_from_graph = train_gb.get_alg_vars_from_graph
     net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs
     net_params.node_idxs = train_gb.node_idxs
     net_params.differential_vars = train_gb.differential_vars
     net_params.algebraic_vars = train_gb.algebraic_vars
-    # if not training_params.learn_matrices:
-    #     net_params.J = train_gb.J
-    #     net_params.R = train_gb.R
-    #     net_params.g = train_gb.g
     ############################################################
     
     ############################################################
     ### Initialize network
-    t0 = 0
-    init_control = train_gb.get_control(0, t0)
+    init_control = train_gb.get_control(0, 0)
     # Initialize training network
-    init_graph = train_gb.get_graph(0, t0)
-    net_params.incidence_matrices, net_params.splits = incidence_matrices_from_graph(init_graph, train_gb.edge_idxs) # Remember to check incidence matrices before training
+    init_graph = train_gb.get_graph(0, 0)
+    # Remember to check incidence matrices before training!
+    incidence_matrices = (AC, AR, AL, AV, AI)
+    net_params.system_config = get_system_config(*incidence_matrices) #, edge_types=train_gb.edge_idxs) 
+
+    print('Incidence matrices')
+    print(f"AC: {net_params.system_config['AC']}")
+    print(f"AR: {net_params.system_config['AR']}")
+    print(f"AL: {net_params.system_config['AL']}")
+    print(f"AV: {net_params.system_config['AV']}")
+    print(f"AI: {net_params.system_config['AI']}")
+    print('PH matrices')
+    print(f"E: {net_params.system_config['E']}")
+    print(f"J: {net_params.system_config['J']}")
+    print(f"B: {net_params.system_config['B']}")
+
+    t0 = 0.0
     net = create_net(net_params)
     params = net.init(init_rng, init_graph, init_control, t0, net_rng)
     batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, 0, None))
     ############################################################
-
-    # logging.log(logging.INFO, f"Number of parameters {num_parameters(params)}")
-    print(f"Number of parameters {num_parameters(params)}")
-    
+        
     def train_epoch(state: TrainState, batch_size: int, rng: jax.Array):
         ''' Train one epoch using all trajectories '''     
         loss_function = training_params.loss_function
 
         traj_perms = random_batches(batch_size, 0, train_gb._num_trajectories, rng)
-        t0_perms = random_batches(batch_size, t0, train_gb._num_timesteps-net_params.T, rng) 
+        t0_perms = random_batches(batch_size, 0, train_gb._num_timesteps-net_params.T, rng) 
         dropout_rng = jax.random.split(rng, batch_size)
         rng, net_rng = jax.random.split(rng)
 
@@ -241,16 +252,22 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
             else:
                 batch_control = jnp.array(batch_data[0])
                 t = batch_data[1]
-                differential_state_targets = jnp.stack(batch_data[2:2+len(train_gb.differential_vars)])
-                algebraic_state_targets = jnp.stack(batch_data[2+len(train_gb.differential_vars):2+len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
+                differential_state_targets = batch_data[2]
+                algebraic_state_targets = batch_data[3]
+                # differential_state_targets = jnp.stack(batch_data[2:2+len(train_gb.differential_vars)])
+                # algebraic_state_targets = jnp.stack(batch_data[2+len(train_gb.differential_vars):2+len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
                 pred_graphs = state.apply_fn(
                     params, batch_graphs, batch_control, t, net_rng, rngs={'dropout': dropout_rng}
                 )
                 predictions = train_gb.get_batch_pred_data(pred_graphs)
-                differential_state_predictions = jnp.array(predictions[0:len(train_gb.differential_vars)])
-                algebraic_state_predictions = jnp.array(predictions[len(train_gb.differential_vars):len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
+                # differential_state_predictions = jnp.array(predictions[0:len(train_gb.differential_vars)])
+                # algebraic_state_predictions = jnp.array(predictions[len(train_gb.differential_vars):len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
+                differential_state_predictions = predictions[0]
+                algebraic_state_predictions = predictions[1]
+                residuals = jnp.sum(jnp.abs(predictions[3]))
                 loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
-                        + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean()
+                        + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
+                        + residuals
             return loss
 
         def train_batch(state, trajs, t0_idxs):
@@ -288,14 +305,15 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
             graph = graph._replace(globals=None)
             return graph, pred_data
 
-        final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
+        _, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
         
-        losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
+        losses = [
+            jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+        ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        aux_data = {
-            'name': name,
-        }
-        return ts, np.array(pred_data), np.array(exp_data), aux_data, eval_metrics
+        pred_data = np.concatenate(pred_data, axis=1)
+        exp_data = np.concatenate(exp_data, axis=1)
+        return pred_data, exp_data, eval_metrics
     
     state = TrainState.create(
         apply_fn=batched_apply,
@@ -325,10 +343,9 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
         )
     profiler = periodic_actions.Profile(logdir=dirs['log'])
     hooks = [report_progress, profiler]
-    ts_size = (train_gb._num_timesteps - t0)
+    ts_size = train_gb._num_timesteps
     trajs_size = train_gb._num_trajectories
     steps_per_epoch = int((ts_size * trajs_size) // (training_params.batch_size ** 2))
-
 
     # Setup training epochs
     init_epoch = state.step // steps_per_epoch + 1
@@ -340,11 +357,14 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     train_metrics = None
     min_error = jnp.inf
     ckpt_step = init_epoch
-    # logging.info(f"Start training at epoch {init_epoch}")
-    print(f"Start training at epoch {init_epoch}")
+    print('########################################')
+    print(f"Number of parameters: {num_parameters(params)}")
+    print(f"Training system: {name}")
+    print(f"Saving to {os.path.relpath(dirs['home'])}")
+    print(f"\nStarting training at epoch {init_epoch}")
+    print('########################################')
     for epoch in range(init_epoch, final_epoch):
         rng, train_rng = jax.random.split(rng)
-        # with jax.profiler.StepTraceAnnotation('train', step_num=epoch):
         state, metrics_update = train_epoch(state, training_params.batch_size, train_rng) 
         if train_metrics is None:
             train_metrics = metrics_update
@@ -360,20 +380,23 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
             eval_state = eval_state.replace(params=state.params)
 
             with report_progress.timed('eval'):
-                error_sums = [0] * train_gb._num_states
+                error_sums = [0] * 4
                 num_eval_trajs = 2 # eval_gb._num_trajectories
                 for i in range(num_eval_trajs):
-                    ts, pred_data, exp_data, aux_data, eval_metrics = rollout(eval_state, traj_idx=i)
+                    pred_data, exp_data, eval_metrics = rollout(eval_state, traj_idx=i)
                     for j in range(len(error_sums)):
                         error_sums[j] += eval_metrics[j].compute()['loss']
 
-                    plot_evaluation_curves(ts, pred_data, exp_data, aux_data,
-                                           plot_dir=os.path.join(dirs['plot'], f'traj_{i}'),
-                                           prefix=f'Epoch {epoch}: eval_traj_{i}')
+                    eval_gb.plot(pred_data, exp_data, 
+                                 plot_dir=os.path.join(dirs['plot'], f'traj_{i}'),
+                                 prefix=f'Epoch {epoch}: eval_traj_{i}')
 
                 rollout_error_state = np.array(error_sums) / (num_eval_trajs * eval_gb._num_timesteps)
-                print(f'Epoch {epoch} state errors {rollout_error_state}')
+
+                print('########################################')
+                print(f'Epoch {epoch} evaluation:\n \t Differential state errors {rollout_error_state[0]} \n \t Algebraic states error {rollout_error_state[1]} \n \t Hamiltonian error {rollout_error_state[2]} \n \t Sum residuals {rollout_error_state[3]}')
                 rollout_error = rollout_error_state.mean()
+                print('########################################')
 
                 writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error}, 'eval'))
 
@@ -381,20 +404,10 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                     # Save best model
                     min_error = rollout_error
                     ckpt_step = epoch
-                    # logging.info(f'Saving best model at epoch {epoch}')
                     print(f'Saving best model at epoch {epoch}')
                     with report_progress.timed('checkpoint'):
                         ckpt_mngr.save(epoch, args=ocp.args.StandardSave(state))
                         ckpt_mngr.wait_until_finished()
-                    
-                    if training_params.learn_matrices:
-                        J_triu = jnp.triu(state.params['params']['J']['kernel'])
-                        J = J_triu - J_triu.T
-                        # logging.info(f'upper triangular of J: {J}')
-                        print(f'upper triangular of J: {J}')
-
-                    # if net.g is None: # if training g
-                    #     pass # TODO
 
                 if epoch > training_params.min_epochs: # train for at least 'min_epochs' epochs
                     early_stop = early_stop.update(rollout_error)
@@ -402,8 +415,8 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')
                         training_params.num_epochs = epoch - init_epoch
                         is_last_step = True
-                if optuna_trial:
-                    optuna_trial.report(rollout_error, step=epoch)
+                if optimizing_hparams:
+                    optimizing_hparams.report(rollout_error, step=epoch)
 
         if epoch % config.log_every_steps == 0 or is_last_step:
             writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))
@@ -430,48 +443,7 @@ def train(config: ml_collections.ConfigDict, optuna_trial = None):
     with open(run_params_file, "w") as outfile:
         json.dump(config_js, outfile, indent=4)
 
-    return config if not optuna_trial else config.metrics.min_error
-
-def test_graph_net(config: ml_collections.ConfigDict):
-    """ For testing """
-    training_params = config.training_params
-    net_params = config.net_params
-    rng = jax.random.key(0)
-    rng, init_rng = jax.random.split(rng)
-    batch_size = 1
-    tx = optax.adam(1e-3)
-    gb = MSDGraphBuilder(config.config.training_data_path, 
-                         training_params.add_undirected_edges,
-                         training_params.add_self_loops, 
-                         training_params.vel_history)
-    net_params.normalization_stats = gb._norm_stats
-
-    net = GraphNetworkSimulator(**net_params)
-    init_graph = gb.get_graph_batch(jnp.zeros(training_params.batch_size), 
-                                    jnp.ones(training_params.batch_size, dtype=jnp.int32) * training_params.vel_history + 1)
-    params = net.init(init_rng, init_graph)
-    batched_apply = jax.vmap(net.apply, in_axes=(None,0))
-
-    state = TrainState.create(
-        apply_fn=batched_apply,
-        params=params,
-        tx=tx,
-    )
-
-    batched_graph = pytrees_stack(init_graph)
-    y = jnp.ones((batch_size, gb.n_node, training_params.vel_history+1)) # [batch_size, graph nodes, graph features]
-    def loss_fn(param, graph, targets):
-        pred_graph = state.apply_fn(param, graph)
-        pred_nodes = pred_graph.nodes
-        loss = optax.l2_loss(predictions=pred_nodes, targets=targets).mean()
-        return loss
-    
-    print(loss_fn(state.params, batched_graph, y))
-    
-    grads = jax.grad(loss_fn)(state.params, batched_graph, y)
-    state = state.apply_gradients(grads=grads)
-
-    print(loss_fn(state.params, batched_graph, y))
+    return config.metrics.min_error if optimizing_hparams else config
 
 if __name__ == '__main__':
     parser = ArgumentParser()

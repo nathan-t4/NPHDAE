@@ -158,7 +158,7 @@ class LC1(Environment):
                             [0, 0, 0],
                             [0, 0, -1]])
             
-            return jnp.matmul(J, z) + jnp.matmul(g, control_input)
+            return jnp.matmul(J, z) # + jnp.matmul(g, control_input)
             
         def get_power(state, control_input):
             pass
@@ -268,7 +268,7 @@ class LC2(Environment):
                            [-1, 0]])
             g = jnp.array([[0, 0,],
                            [0, -1]])
-            return jnp.matmul(J, z) + jnp.matmul(g, control_input)
+            return jnp.matmul(J, z) ## + jnp.matmul(g, control_input)
 
         def get_power(state, control_input):
             pass
@@ -418,7 +418,8 @@ def generate_dataset(args, env_seed: int = 501):
                 k = aux_data
                 i = k[0] * jnp.sin(k[1] * t + k[2]) 
                 v = k[3] * jnp.sin(k[4] * t + k[5])
-                return jnp.array([0, v])
+                # return jnp.array([0, v])
+                return jnp.array([])
 
             env.set_control_policy(partial(control_policy, aux_data=k))
 
@@ -428,7 +429,7 @@ def generate_dataset(args, env_seed: int = 501):
 
             def control_policy(state, t, jax_key, aux_data):
                 k = aux_data
-                return jnp.array([0, 0, 0])
+                return jnp.array([])
             
             env.set_control_policy(partial(control_policy, aux_data=k))
 

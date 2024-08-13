@@ -7,84 +7,7 @@ import matplotlib.pyplot as plt
 
 from typing import Dict, Any
 from functools import partial
-
-"""
-    TODO: remove
-"""
-
-def get_edge_idxs(name):
-    match name:
-        case 'LC1':
-            return np.array([[0,2]])
-        case 'LC2':
-            return np.array([[0]])
-        case 'CoupledLC':
-            return np.array([[0,2,3]])
-        case 'Alternator': 
-            return np.array([[0,1,2,3,4,5], [6,None,None,None,None,None]])
-        case _:
-            raise NotImplementedError(f"Edge indices not set for system {name}")
-        
-def get_pH_matrices(name):
-    return (get_J(name), get_R(name), get_g(name))
-
-def get_J(name):
-    match name:
-        case 'LC1':
-            return jnp.array([[0, 1, 0],
-                              [-1, 0, 1],
-                              [0, -1, 0]])
-        case 'LC2':
-            return jnp.array([[0, 1],
-                              [-1, 0]])
-        case 'CoupledLC':
-            return jnp.array([[0, 1, 0, 0, 0],
-                              [-1, 0, 1, 0, 0],
-                              [0, -1, 0, 0, -1],
-                              [0, 0, 0, 0, 1],
-                              [0, 0, 1, -1, 0]])
-        case 'Alternator':
-            return jnp.array([[0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, 0],
-                              [0, 0, 0, 0, 0, 0, 0, -1],
-                              [0, 0, 0, 0, 0, 0, 1, 0]])
-        case _:
-            raise NotImplementedError(f"J matrix not set for system {name}")
-        
-def get_R(name):
-    match name:
-        case 'LC1':
-            return jnp.zeros((3,3))
-        case 'LC2':
-            return jnp.zeros((2,2))
-        case 'CoupledLC':
-            return jnp.zeros((5,5))
-        case 'Alternator':
-            return jax.scipy.linalg.block_diag(jnp.array([0])) # TODO: depends on traj_idx (rm and rr)
-        case _:
-            raise NotImplementedError(f"R matrix not set for system {name}")
-        
-def get_g(name):
-    match name:
-        case 'LC1':
-            return jnp.array([[0, 0, 0],
-                              [0, 0, 0],
-                              [0, 0, -1]])
-        case 'LC2':
-            # return jnp.array([[0, 0],
-            #                   [0,-1]]) 
-            return jnp.zeros((2,2))
-        case 'CoupledLC':
-            return jnp.zeros((5,5))
-        case 'Alternator': 
-            return jnp.zeros((8,2))
-        case _:
-            raise NotImplementedError(f"g matrix not set for system {name}")
-        
+       
 
 def fwd_solver(f, z_init):
     def cond_fun(carry):
@@ -131,3 +54,168 @@ def get_zero_row_indices(array):
     _, row_abs_sums = jax.lax.scan(f, None, array[:])
     zero_rows_mask = jnp.where(row_abs_sums == 0)
     return jnp.arange(len(array))[zero_rows_mask]
+
+def incidence_matrices_from_graph(graph, edge_types=None):
+    ''' Return the incidence matrices of the given graph: (AC, AR, AL, AV, AI) '''
+    AC = []
+    AR = []
+    AL = []
+    AV = []
+    AI = []
+    A = [AC, AR, AL, AV, AI]
+
+    for i in range(len(graph.edges)):
+        label = edge_types[i]
+        sender_idx = graph.senders[i]
+        receiver_idx = graph.receivers[i]
+        Ai = np.zeros((len(graph.nodes)))
+        Ai[sender_idx] = -1
+        Ai[receiver_idx] = 1
+        A[label].append(Ai)
+
+    A = [jnp.array(a).T if len(a) > 0 else None for a in A]
+    return A
+
+def graph_from_incidence_matrices(A):
+    AC, AR, AL, AV, AI = A
+    senders = []
+    receivers = []
+    for a in A:
+        si = jnp.where(a == 1)[0]
+        ri = jnp.where(a == -1)[0]
+        # If a is all zeros then do not append
+        if len(si) > 0: senders.append(si[0])
+        if len(ri) > 0: receivers.append(ri[0])
+
+    senders = jnp.array(senders).squeeze()
+    receivers = jnp.array(receivers).squeeze()
+
+    return senders, receivers
+
+def get_system_config(AC, AR, AL, AV, AI):
+    num_nodes = len(AC)
+    num_capacitors = 0 if (AC == 0.0).all() else len(AC.T)
+    num_inductors = 0 if (AL == 0.0).all() else len(AL.T)
+    num_resistors = 0 if (AR == 0.0).all() else len(AR.T)
+    num_volt_sources = 0 if (AV == 0.0).all() else len(AV.T)
+    num_cur_sources = 0 if (AI == 0.0).all() else len(AI.T)
+    state_dim = num_capacitors + num_inductors + num_nodes + num_volt_sources
+
+    E = jax.scipy.linalg.block_diag(AC, jnp.eye(num_inductors), jnp.zeros((num_capacitors, num_nodes)), jnp.zeros((num_volt_sources, num_volt_sources)))
+
+    J = jnp.zeros((state_dim, state_dim)) 
+
+    # first row of equations of J 
+    J = J.at[0:num_nodes, num_nodes:(num_nodes + num_inductors)].set(-AL) 
+    J = J.at[
+        0:(num_nodes),
+        (num_nodes + num_inductors + num_capacitors)::
+        ].set(-AV)
+
+    # second row of equations of J
+    J = J.at[num_nodes:(num_nodes + num_inductors),
+            0:num_nodes].set(AL.transpose())
+    
+    # Final row of equations of J
+    J = J.at[(num_nodes + num_inductors + num_capacitors)::,
+            0:num_nodes].set(AV.transpose()) 
+    
+    g = lambda e : (AR.T @ e) / 1.0 
+
+    def r(z):
+        e = z[0:num_nodes]
+        uc = z[
+            num_nodes+num_inductors :
+            num_nodes+num_inductors+num_capacitors
+        ]
+
+        curr_through_resistors = jnp.linalg.matmul(AR, g(e))
+        charge_constraint = jnp.matmul(AC.T, e) - uc
+
+        diss = jnp.zeros((state_dim,))
+        diss = diss.at[0:num_nodes].set(curr_through_resistors)
+        diss = diss.at[(num_nodes + num_inductors):(num_nodes + num_inductors + num_capacitors)].set(charge_constraint)
+
+        return diss
+
+    B = jnp.zeros((state_dim, num_cur_sources + num_volt_sources))
+    B = B.at[0:num_nodes, 0:num_cur_sources].set(-AI)
+    B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
+
+    config = {
+        'AC': AC,
+        'AL': AL,
+        'AR': AR,
+        'AV': AV,
+        'AI': AI,
+        'num_nodes': num_nodes,
+        'num_capacitors': num_capacitors,
+        'num_inductors': num_inductors,
+        'num_resistors': num_resistors,
+        'num_volt_sources': num_volt_sources,
+        'num_cur_sources': num_cur_sources,
+        'state_dim': state_dim,
+        'E': E,
+        'J': J,
+        'r': r,
+        'B': B
+    }
+
+    return config
+
+def get_J_matrix(system_config):
+    state_dim = system_config['state_dim']
+    num_nodes = system_config['num_nodes']
+    num_capacitors = system_config['num_capacitors']
+    num_inductors = system_config['num_inductors']
+    AL = system_config['AL']
+    AV = system_config['AV']
+
+    J = jnp.zeros((state_dim, state_dim)) 
+
+    # first row of equations of J 
+    J = J.at[0:num_nodes, num_nodes:(num_nodes + num_inductors)].set(-AL) 
+    J = J.at[
+        0:(num_nodes),
+        (num_nodes + num_inductors + num_capacitors)::
+        ].set(-AV)
+
+    # second row of equations of J
+    J = J.at[num_nodes:(num_nodes + num_inductors),
+            0:num_nodes].set(AL.transpose())
+    
+    # Final row of equations of J
+    J = J.at[(num_nodes + num_inductors + num_capacitors)::,
+            0:num_nodes].set(AV.transpose()) 
+    
+    return J
+
+def get_E_matrix(system_config):
+    num_nodes = system_config['num_nodes']
+    num_capacitors = system_config['num_capacitors']
+    num_inductors = system_config['num_inducotrs']
+    num_volt_sources = system_config['num_volt_sources']
+    AC = system_config['AC']
+    E = jax.scipy.linalg.block_diag(AC, jnp.eye(num_inductors), jnp.zeros((num_capacitors, num_nodes)), jnp.zeros((num_volt_sources, num_volt_sources)))
+    return E
+
+def get_B_bar_matrix(system_config):
+    num_capacitors = system_config['num_capacitors']
+    num_inductors = system_config['num_inductors']
+    num_nodes = system_config['num_nodes']
+    num_volt_sources = system_config['num_volt_sources']
+    num_cur_sources = system_config['num_cur_sources']
+    num_lamb = system_config['num_lamb']
+    state_dim = num_capacitors+num_inductors+num_nodes+num_volt_sources+num_lamb
+    AI = system_config['AI']
+
+    B_bar = jnp.zeros((state_dim, num_cur_sources+num_volt_sources))
+
+    B_bar.at[0:num_nodes, 0:num_cur_sources].set(-AI)
+
+    B_bar.at[
+        num_capacitors+num_inductors+num_nodes : num_capacitors+num_inductors+num_nodes+num_volt_sources,
+        num_cur_sources : num_cur_sources+num_volt_sources
+        ].set(-jnp.eye(num_volt_sources))
+    
+    return B_bar

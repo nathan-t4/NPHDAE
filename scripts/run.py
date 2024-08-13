@@ -1,6 +1,6 @@
 import os
 from scripts.train_gnn import train
-from scripts.comp_circuits import compose
+from scripts.comp_circuits_old import compose
 from scripts.reuse_model import transfer
 from time import strftime
 from argparse import ArgumentParser

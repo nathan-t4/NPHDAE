@@ -9,8 +9,7 @@ from typing import Dict, Any
 from functools import partial
 from clu import metrics
 
-from scripts.graph_builder import *
-from scripts.graph_nets import *
+from scripts.model_instances.ph_gns import *
 
 @flax.struct.dataclass
 class TrainMetrics(metrics.Collection):
@@ -39,6 +38,7 @@ def setup_dirs(config):
         os.makedirs(checkpoint_dir)
 
     dirs = {
+        'home': paths.dir,
         'log': log_dir,
         'plot': plot_dir,
         'ckpt': checkpoint_dir,
@@ -93,14 +93,13 @@ def save_params(work_dir, training_params, net_params):
         json.dump(run_params, outfile)
 
 def plot_evaluation_curves(
-        ts, pred_data, exp_data, aux_data, prefix, plot_dir, show=False
+        ts, pred_data, exp_data, system_name, prefix, plot_dir, show=False
     ):
     if not os.path.isdir(plot_dir):
         os.makedirs(plot_dir)
 
     cmap = cm.tab10
 
-    system_name = aux_data['name']
     if system_name == 'LC':
         fig = plt.figure(layout="constrained", figsize=(20,10))
         fig.suptitle(f'{prefix}')
@@ -249,6 +248,33 @@ def plot_evaluation_curves(
         plt.close()
 
     elif system_name == 'RLC':
+        fig = plt.figure(layout="constrained", figsize=(20,10))
+        fig.suptitle(f'{prefix}')
+
+        layout = [['Q', 'Phi', 'V1', 'V2', 'V3', 'V4', 'jv', 'H'],
+                  ['Q_error', 'Phi_error', 'V1_error', 'V2_error', 'V3_error', 'V4_error', 'jv_error', 'H_error']]
+        ax = fig.subplot_mosaic(layout)
+
+        values_to_plot = ('Q', 'Phi', 'V1', 'V2', 'V3', 'V4', 'jv', 'H')
+
+        for i,v in enumerate(values_to_plot):
+            ax[v].set_title(f'${v}$')
+            ax[v].plot(ts, pred_data[i,:], color=cmap(0), ls='-', label=f'pred ${v}$')
+            ax[v].plot(ts, exp_data[i,:], color=cmap(0), ls='--', label=f'exp ${v}$')
+            ax[v].set_xlabel('Time [$s$]')
+            ax[v].set_ylabel(f'${v}$')
+            ax[v].legend()
+
+            ax[f'{v}_error'].set_title(f'${v}$ Error')
+            ax[f'{v}_error'].plot(ts, exp_data[i,:] - pred_data[i,:], color=cmap(0), ls='-')
+            ax[f'{v}_error'].set_xlabel('Time [$s$]')
+            ax[f'{v}_error'].set_ylabel(f'${v}$')
+
+        plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
+        if show: plt.show()
+        plt.close()
+
+    elif system_name == 'DGU':
         fig = plt.figure(layout="constrained", figsize=(20,10))
         fig.suptitle(f'{prefix}')
 

@@ -1,130 +1,16 @@
 import jraph
 import jax
-import diffrax
 import flax.linen as nn
 import jax.numpy as jnp
 import numpy as np
 
 from typing import Sequence, Callable
-from flax.typing import Array, Dtype
 from ml_collections import FrozenConfigDict
 from utils.graph_utils import *
 from utils.jax_utils import *
 from utils.models_utils import *
 
-@jax.jit
-def squareplus(x: Array, b: Array = 4) -> Array:
-    r"""Squareplus activation function.
-
-    From Flax source code
-
-    Computes the element-wise function
-
-    .. math::
-        \mathrm{squareplus}(x) = \frac{x + \sqrt{x^2 + b}}{2}
-
-    as described in https://arxiv.org/abs/2112.11687.
-
-    Args:
-        x : input array
-        b : smoothness parameter
-    """
-    x = jnp.asarray(x)
-    b = jnp.asarray(b)
-    y = x + jnp.sqrt(jnp.square(x) + b)
-    return y / 2
-
-class SineLayer(nn.Module):
-    # TODO: for testing purposes
-    param_dtype: Dtype = jnp.float32
-    omega_init: float = 30
-
-    @nn.compact
-    def __call__(self, inputs: Array) -> Array:
-        omega = self.param('omega', lambda k : jnp.asarray(self.omega_init, self.param_dtype))
-        layer = nn.Dense(features=inputs.shape[-1], param_dtype=self.param_dtype)
-        return jnp.sin(omega * layer(inputs))
-
-class MLP(nn.Module):
-    feature_sizes: Sequence[int]
-    activation: str = 'swish'
-    dropout_rate: float = 0
-    deterministic: bool = True
-    with_layer_norm: bool = False
-
-    @nn.compact
-    def __call__(self, input, training: bool=False):
-        x = input
-        if self.activation == 'swish':
-            activation_fn = nn.swish
-        elif self.activation == 'relu':
-            activation_fn = nn.relu
-        elif self.activation == 'sin':
-            activation_fn = SineLayer()
-        elif self.activation == 'softplus':
-            activation_fn = nn.softplus
-        elif self.activation == 'squareplus':
-            activation_fn = squareplus
-
-        for i, size in enumerate(self.feature_sizes):
-            x = nn.Dense(features=size)(x)
-            if i != len(self.feature_sizes) - 1:
-                x = activation_fn(x)
-                x = nn.Dropout(rate=self.dropout_rate, deterministic=not training)(x)
-
-        if self.with_layer_norm:
-            x = nn.LayerNorm()(x)
-        return x
-    
-class vmapMLP(nn.Module):
-    feature_sizes: Sequence[int]
-    activation: str = 'swish'
-    dropout_rate: float = 0
-    deterministic: bool = True
-    with_layer_norm: bool = False
-    @nn.compact
-    def __call__(self, xs):
-        vmapMLP = nn.vmap(MLP, variable_axes={'params': None}, split_rngs={'params': False}, in_axes=0) 
-        return vmapMLP(feature_sizes=self.feature_sizes,
-                       activation=self.activation,
-                       dropout_rate=self.dropout_rate,
-                       deterministic=self.deterministic,
-                       with_layer_norm=self.with_layer_norm,
-                       name='MLP')(xs)
-    
-class NeuralODE(nn.Module):
-    ''' 
-        Simple Neural ODE
-         - https://github.com/patrick-kidger/diffrax/issues/115
-         - https://github.com/google/flax/discussions/2891
-    '''
-    derivative_net: MLP
-    solver: diffrax._solver = diffrax.Tsit5()
-
-    @nn.compact
-    def __call__(self, inputs, ts=[0,1]):
-        if self.is_initializing():
-            self.derivative_net(jnp.concatenate((inputs, jnp.array([0]))))
-        derivative_net_params = self.derivative_net.variables
-
-        def derivative_fn(t, y, params):
-            input = jnp.concatenate((y, jnp.array(t).reshape(-1)))
-            return self.derivative_net.apply(params, input)
-        
-        term = diffrax.ODETerm(derivative_fn)
-
-        solution = diffrax.diffeqsolve(
-            term,
-            self.solver, 
-            t0=ts[0],
-            t1=ts[-1],
-            dt0=ts[1]-ts[0],
-            y0=inputs,
-            args=derivative_net_params,
-            stepsize_controller=diffrax.PIDController(rtol=1e-3, atol=1e-6),
-            saveat=diffrax.SaveAt(ts=ts))
-                
-        return solution.ys
+from scripts.models.mlp import *
     
 class GraphNetworkSimulator(nn.Module):
     encoder_node_fn: Callable

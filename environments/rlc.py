@@ -65,8 +65,9 @@ class RLC(Environment):
             J = jnp.array([[0, 1],
                            [-1, 0]])
             R = jnp.array([[0, 0], [0, self.config['R']]])
-            # R = jnp.array([[0], [self.config['R']]])
-            return jnp.matmul(J - R, dH) + control_input
+            # control_input is only V, so augment control with I=0 to be augmented_control=[[I], [V]]
+            augmented_control = jnp.concatenate((jnp.array([0]), control_input))
+            return jnp.matmul(J - R, dH) + augmented_control
         
         def get_power(state, control_input):
             pass
@@ -164,7 +165,7 @@ def generate_dataset(args, env_seed: int = 501):
     Vs = jax.random.uniform(vkey, shape=(args.n,), minval=V_range[0], maxval=V_range[1])
     for i in tqdm(range(args.n)):
         def control_policy(state, t, jax_key):
-            return jnp.array([0, Vs[i]])
+            return jnp.array([Vs[i]])
 
         env.set_control_policy(control_policy)
     

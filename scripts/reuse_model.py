@@ -10,6 +10,7 @@ from flax.core import frozen_dict
 import orbax.checkpoint as ocp
 
 from configs.reuse_model import get_reuse_model_config
+from helpers.graph_builder_factory import gb_factory
 from utils.train_utils import *
 from utils.gnn_utils import *
 
@@ -31,7 +32,7 @@ def transfer(config):
 
     net = create_net(config.system_name, net_params_1)
 
-    graph_builder = create_graph_builder(config.eval_system_name)
+    graph_builder = gb_factory(config.eval_system_name)
     eval_gb = graph_builder(paths.evaluation_data_path)
     net.edge_idxs = eval_gb.edge_idxs
     net.node_idxs = eval_gb.node_idxs

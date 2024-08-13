@@ -10,7 +10,7 @@ from clu import periodic_actions
 from clu import checkpoint
 from flax.training.train_state import TrainState
 
-from scripts.models import *
+from scripts.models.gnn import *
 from utils.data_utils import *
 from utils.train_utils import *
 from utils.jax_utils import *

@@ -1,9 +1,10 @@
-from scripts.graph_builder import *
+from scripts.graph_builders import *
 
 gb = {
     'LC1': LC1GraphBuilder,
     'LC2': LC2GraphBuilder,
-    'RLC': RLCGraphBuilder,
+    'RLC': TestGraphBuilder,
+    'DGU': TestGraphBuilder, # DGUGraphBuilder
     'CoupledLC': CoupledLCGraphBuilder,
     'Alternator': AlternatorGraphBuilder,
 }
