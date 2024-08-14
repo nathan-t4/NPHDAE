@@ -43,9 +43,17 @@ class TestGraphBuilder(GraphBuilder):
         self.edge_idxs = np.arange(
             self.num_capacitors+self.num_inductors+self.num_resistors+self.num_volt_sources+self.num_cur_sources
         ) # needs to be np instead of jnp
-        # self.include_idxs = jnp.array([0, 0, 1, 1])
-        self.include_idxs = None
-        self.node_idxs = None
+
+        # Which edge indices to include when calculating Hamiltonian 
+        # Indicates which edges correspond to energy-storing electrical components (e.g. capacitors & inductors)
+        self.include_idxs = jnp.concatenate((
+            jnp.ones((self.num_capacitors)),
+            jnp.zeros((self.num_resistors)),
+            jnp.ones((self.num_inductors)),
+            jnp.zeros((self.num_volt_sources)),
+            jnp.zeros((self.num_cur_sources)),
+        ))
+        self.node_idxs = None # Not in use yet
         self.differential_vars = jnp.arange(self.num_capacitors+self.num_inductors)
         self.algebraic_vars = jnp.arange(self.num_capacitors+self.num_inductors, self._num_states)
 
@@ -61,7 +69,7 @@ class TestGraphBuilder(GraphBuilder):
         pred_Phis = graph.edges[
             self.num_capacitors+self.num_resistors : 
             self.num_capacitors+self.num_resistors+self.num_inductors, 0]
-        pred_Vs = graph.nodes[:,0]
+        pred_Vs = graph.nodes[1:,0] # exclude ground node
         pred_jv = graph.edges[
             self.num_capacitors+self.num_resistors+self.num_inductors : 
             self.num_capacitors+self.num_resistors+self.num_inductors+self.num_volt_sources, 0]
@@ -84,7 +92,7 @@ class TestGraphBuilder(GraphBuilder):
 
     def get_exp_data(self, trajs, ts) -> Tuple:
         exp_diff_states = jnp.concatenate((self._Qs[trajs, ts], self._Phis[trajs, ts]), axis=-1).squeeze()
-        exp_alg_states = jnp.concatenate((self._Vs[trajs, ts], self._jv[trajs, ts]), axis=-1).squeeze()
+        exp_alg_states = jnp.concatenate((self._Vs[trajs, ts, 1:], self._jv[trajs, ts]), axis=-1).squeeze() # exclude ground node
         exp_H = self._H[trajs, ts]
         exp_residuals = self._residuals[trajs, ts]
         return (exp_diff_states, exp_alg_states, exp_H, exp_residuals)
@@ -256,19 +264,19 @@ class TestGraphBuilder(GraphBuilder):
 
         values[
             0 : 
-            self.num_capacitors] = [f'Q{i}' for i in range(self.num_capacitors)]    
+            self.num_capacitors] = [f'Q_{i}' for i in range(self.num_capacitors)]    
         values[
             self.num_capacitors : 
             self.num_capacitors+self.num_inductors
-            ] = [f'Phi{i}' for i in range(self.num_inductors)]
+            ] = [f'Phi_{i}' for i in range(self.num_inductors)]
         values[
             self.num_capacitors+self.num_inductors : 
-            self.num_capacitors+self.num_inductors+self.num_nodes
-            ] = [f'V{i}' for i in range(self.num_nodes)]
+            self.num_capacitors+self.num_inductors+self.num_nodes-1
+            ] = [f'V_{i}' for i in range(self.num_nodes-1)]
         values[
-            self.num_capacitors+self.num_inductors+self.num_nodes : 
-            self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources
-            ] = [f'jv{i}' for i in range(self.num_volt_sources)]
+            self.num_capacitors+self.num_inductors+self.num_nodes-1 : 
+            self.num_capacitors+self.num_inductors+self.num_nodes-1+self.num_volt_sources
+            ] = [f'jv_{i}' for i in range(self.num_volt_sources)]
         values.append('H')
         values.append('residual')
 

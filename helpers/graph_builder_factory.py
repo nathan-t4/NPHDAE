@@ -10,4 +10,4 @@ gb = {
 }
 
 def gb_factory(name):
-    return gb[name]
+    return gb[name] if name in gb.keys() else TestGraphBuilder

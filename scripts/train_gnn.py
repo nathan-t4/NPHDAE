@@ -26,10 +26,9 @@ from utils.gnn_utils import *
 from helpers.graph_builder_factory import gb_factory
 from helpers.config_factory import config_factory
 
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
+# os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.5'
 
 def eval(config: ml_collections.ConfigDict):
-    # TODO: fix T!
     training_params = config.training_params
     net_params = config.net_params
     paths = config.paths
@@ -38,7 +37,7 @@ def eval(config: ml_collections.ConfigDict):
     dirs = setup_dirs(config)
     dirs['log'] = os.path.join(paths.dir, 'log')
     dirs['ckpt'] = os.path.join(paths.dir, 'checkpoint')
-    plot_dir = os.path.join(paths.dir, 'eval_plots')
+    dirs['plot'] = os.path.join(paths.dir, 'eval_plots')
 
     rng = jax.random.key(config.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
@@ -48,94 +47,115 @@ def eval(config: ml_collections.ConfigDict):
 
     tx = optax.adam(**config.optimizer_params)
 
-    graph_builder = gb_factory(name)
+    # Incidence matrices of the system
+    AC = config.AC
+    AR = config.AR
+    AL = config.AL
+    AV = config.AV
+    AI = config.AI
+    incidence_matrices = (AC, AR, AL, AV, AI)
 
-    train_gb = graph_builder(paths.training_data_path)
-    eval_gb = graph_builder(paths.evaluation_data_path)
+    graph_builder = gb_factory(name)
+    train_gb = graph_builder(paths.training_data_path, *incidence_matrices)
+    eval_gb = graph_builder(paths.evaluation_data_path, *incidence_matrices)
     
     t0 = 0
     init_control = eval_gb._control[0, 0]
 
     net_params.training = False
+    net_params.system_config = get_system_config(*incidence_matrices) 
     net_params.graph_from_state = train_gb.get_graph_from_state
-    net_params.include_idxs = None
+    net_params.state_from_graph = train_gb.get_state_from_graph
+    net_params.alg_vars_from_graph = train_gb.get_alg_vars_from_graph
+    net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs
     net_params.node_idxs = train_gb.node_idxs
+    net_params.differential_vars = train_gb.differential_vars
+    net_params.algebraic_vars = train_gb.algebraic_vars
 
-    if not training_params.learn_matrices:
-        net_params.J = train_gb.J
-        net_params.R = train_gb.R
-        net_params.g = train_gb.g
-
-    eval_net = create_net(net_params)
-    eval_net.training = False
-    time_offset = eval_net.T
+    net = create_net(net_params)
+    net.training = False
     init_graph = eval_gb.get_graph(traj_idx=0, t=t0)
-    params = eval_net.init(init_rng, init_graph, init_control, net_rng)
+    params = net.init(init_rng, init_graph, init_control, 0.0, net_rng)
     state = TrainState.create(
-        apply_fn=eval_net.apply,
+        apply_fn=net.apply,
         params=params,
         tx=tx,
     )
-    ckpt_dir = os.path.join(dirs['ckpt'], 'best_model')
+    dirs['ckpt'] = os.path.join(dirs['ckpt'], 'best_model')
     options = ocp.CheckpointManagerOptions(max_to_keep=1, create=True)  
-    ckpt_dir = os.path.abspath(dirs['ckpt'])  
+    dirs['ckpt'] = os.path.abspath(dirs['ckpt'])  
     ckpt_mngr = ocp.CheckpointManager(
-        ckpt_dir,
+        dirs['ckpt'],
         options=options,
         item_handlers=ocp.StandardCheckpointHandler(),
     )
     state = ckpt_mngr.restore(paths.ckpt_step, args=ocp.args.StandardRestore(state))
 
     def rollout(eval_state: TrainState, traj_idx: int, ti: int = 0):
-        tf = jnp.floor_divide(training_params.rollout_timesteps + 1, eval_net.T)
+        tf = jnp.floor_divide(training_params.rollout_timesteps + 1, net.T)
         tf_idxs = ti + jnp.arange(1, tf)
-        tf_idxs = tf_idxs * eval_net.T
+        tf_idxs = tf_idxs * net.T
         t0_idxs = tf_idxs - net_params.T
-        ts = tf_idxs * eval_net.dt
+        ts = tf_idxs * net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
         controls = eval_gb.get_control(traj_idx, t0_idxs)
         exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
         get_pred_data = eval_gb.get_pred_data
         
-        def forward_pass(graph, control):
-            graph = eval_state.apply_fn(eval_state.params, graph, control, jax.random.key(config.seed))
+        def forward_pass(graph, inputs):  
+            control, t = inputs         
+            graph = eval_state.apply_fn(eval_state.params, graph, control, t, jax.random.key(config.seed))
             pred_data = get_pred_data(graph)
             graph = graph._replace(globals=None)
             return graph, pred_data
 
         start = default_timer()
-        final_batched_graph, pred_data = jax.lax.scan(forward_pass, graph, controls)
+        _, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
         end = default_timer()
-        jax.debug.print('Inference time {} [sec] for {} passes', end - start, len(ts))
-        losses = [jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))]
-        eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        return ts, np.array(pred_data), np.array(exp_data), eval_metrics
         
-    trajs_size = train_gb._num_timesteps
-    ts_size = train_gb._num_timesteps - t0
-    steps_per_epoch = (ts_size * trajs_size) // (training_params.batch_size ** 2)
-    init_epoch = int(state.step) // steps_per_epoch + 1
-    print(f"Number of parameters {num_parameters(params)}")
-    print(f"Number of epochs {init_epoch}")
-    rollout_error_sum = 0
-    error_sums = [0] * eval_gb._num_states
-    for i in range(eval_gb._num_trajectories):
-        ts, pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
+        print(f'Inference time {end-start} [sec] for {len(ts)} forward passes')
+
+        losses = [
+            jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+        ]
+        eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
+        pred_data = np.concatenate(pred_data, axis=1)
+        exp_data = np.concatenate(exp_data, axis=1)
+        return pred_data, exp_data, eval_metrics
+
+
+    print('##################################################')
+    print(f"Start evaluation of trained model")
+    print(f"\tTrained model directory: {os.path.relpath(dirs['ckpt'])}")
+    print(f"\tNumber of parameters: {num_parameters(params)}")
+    print(f"\tModel was trained for {config.paths.ckpt_step} epochs")
+    print('##################################################')
+
+    num_eval_trajs = eval_gb._num_trajectories
+    num_eval_timesteps = training_params.rollout_timesteps
+    error_sums = [0] * 4
+    for i in range(num_eval_trajs):
+        pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
         for j in range(len(error_sums)):
             error_sums[j] += eval_metrics[j].compute()['loss']
         
         error_sums = np.array(error_sums)
+               
+        eval_gb.plot(pred_data, exp_data, 
+                     plot_dir=dirs['plot'],
+                     prefix=f'eval_traj_{i}')
         
-        plot_evaluation_curves(ts, pred_data, exp_data, name,
-                                plot_dir=plot_dir,
-                                prefix=f'eval_traj_{i}')
-        writer.write_scalars(i, add_prefix_to_keys({'loss': error_sums.mean() / eval_gb._num_timesteps}, 'eval'))
+        writer.write_scalars(i, add_prefix_to_keys({'loss': error_sums.mean() / num_eval_timesteps}, 'eval'))
         
-    rollout_error_state = error_sums / (eval_gb._num_trajectories * eval_gb._num_timesteps)
+    rollout_error_state = error_sums / (num_eval_trajs * num_eval_timesteps)
     rollout_error = rollout_error_state.mean()
-    print(f'State errors {rollout_error_state}')
-    print(f'Rollout error {rollout_error}')
+
+    print('##################################################')
+    print(f"Finished evaluation")
+    print(f"State errors {rollout_error_state}")
+    print(f"Rollout error {rollout_error}")
+    print('##################################################')
 
     # Save evaluation metrics to json
     eval_metrics = {
@@ -143,7 +163,7 @@ def eval(config: ml_collections.ConfigDict):
         'rollout_error': str(rollout_error),
         'evaluation_data_path': paths.evaluation_data_path,
     }
-    eval_metrics_file = os.path.join(plot_dir, 'eval_metrics.js')
+    eval_metrics_file = os.path.join(dirs['plot'], 'eval_metrics.js')
     with open(eval_metrics_file, "w") as outfile:
         json.dump(eval_metrics, outfile)
 
@@ -194,18 +214,21 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     init_graph = train_gb.get_graph(0, 0)
     # Remember to check incidence matrices before training!
     incidence_matrices = (AC, AR, AL, AV, AI)
-    net_params.system_config = get_system_config(*incidence_matrices) #, edge_types=train_gb.edge_idxs) 
+    net_params.system_config = get_system_config(*incidence_matrices) 
 
+    print('##################################################')
+    print(f'Include idxs: {net_params.include_idxs}')
     print('Incidence matrices')
-    print(f"AC: {net_params.system_config['AC']}")
-    print(f"AR: {net_params.system_config['AR']}")
-    print(f"AL: {net_params.system_config['AL']}")
-    print(f"AV: {net_params.system_config['AV']}")
-    print(f"AI: {net_params.system_config['AI']}")
+    print(f"AC.T: {net_params.system_config['AC'].T}")
+    print(f"AR.T: {net_params.system_config['AR'].T}")
+    print(f"AL.T: {net_params.system_config['AL'].T}")
+    print(f"AV.T: {net_params.system_config['AV'].T}")
+    print(f"AI.T: {net_params.system_config['AI'].T}")
     print('PH matrices')
     print(f"E: {net_params.system_config['E']}")
     print(f"J: {net_params.system_config['J']}")
     print(f"B: {net_params.system_config['B']}")
+    print('##################################################')
 
     t0 = 0.0
     net = create_net(net_params)
@@ -254,20 +277,22 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                 t = batch_data[1]
                 differential_state_targets = batch_data[2]
                 algebraic_state_targets = batch_data[3]
-                # differential_state_targets = jnp.stack(batch_data[2:2+len(train_gb.differential_vars)])
-                # algebraic_state_targets = jnp.stack(batch_data[2+len(train_gb.differential_vars):2+len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
+                hamiltonian_target = batch_data[4]
+                residuals_target = batch_data[5]
                 pred_graphs = state.apply_fn(
                     params, batch_graphs, batch_control, t, net_rng, rngs={'dropout': dropout_rng}
                 )
                 predictions = train_gb.get_batch_pred_data(pred_graphs)
-                # differential_state_predictions = jnp.array(predictions[0:len(train_gb.differential_vars)])
-                # algebraic_state_predictions = jnp.array(predictions[len(train_gb.differential_vars):len(train_gb.differential_vars)+len(train_gb.algebraic_vars)])
                 differential_state_predictions = predictions[0]
                 algebraic_state_predictions = predictions[1]
-                residuals = jnp.sum(jnp.abs(predictions[3]))
+                hamiltonian_prediction = predictions[2]
+                residuals_prediction = jnp.sum(jnp.abs(predictions[3]), axis=-1).reshape(-1, 1)
                 loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
                         + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
-                        + residuals
+                        + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean()
+                # loss = optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
+                #      + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean() \
+                #      + 0.1 * optax.squared_error(residuals_prediction, residuals_target).mean()
             return loss
 
         def train_batch(state, trajs, t0_idxs):
@@ -357,12 +382,12 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     train_metrics = None
     min_error = jnp.inf
     ckpt_step = init_epoch
-    print('########################################')
+    print('##################################################')
     print(f"Number of parameters: {num_parameters(params)}")
     print(f"Training system: {name}")
     print(f"Saving to {os.path.relpath(dirs['home'])}")
     print(f"\nStarting training at epoch {init_epoch}")
-    print('########################################')
+    print('##################################################')
     for epoch in range(init_epoch, final_epoch):
         rng, train_rng = jax.random.split(rng)
         state, metrics_update = train_epoch(state, training_params.batch_size, train_rng) 
@@ -393,12 +418,12 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
 
                 rollout_error_state = np.array(error_sums) / (num_eval_trajs * eval_gb._num_timesteps)
 
-                print('########################################')
+                print('##################################################')
                 print(f'Epoch {epoch} evaluation:\n \t Differential state errors {rollout_error_state[0]} \n \t Algebraic states error {rollout_error_state[1]} \n \t Hamiltonian error {rollout_error_state[2]} \n \t Sum residuals {rollout_error_state[3]}')
-                rollout_error = rollout_error_state.mean()
-                print('########################################')
-
-                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error}, 'eval'))
+                print('##################################################')
+                rollout_error = rollout_error_state[0] + rollout_error_state[1]
+                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error_state[0]}, 'eval_diff'))
+                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error_state[1]}, 'eval_alg'))
 
                 if rollout_error < min_error: 
                     # Save best model
@@ -442,6 +467,12 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     run_params_file = os.path.join(paths.dir, 'run_params.js')
     with open(run_params_file, "w") as outfile:
         json.dump(config_js, outfile, indent=4)
+
+    print('##################################################')
+    print('Training completed')
+    print(f'\t Min error: {min_error.item()}')
+    print('##################################################')
+
 
     return config.metrics.min_error if optimizing_hparams else config
 

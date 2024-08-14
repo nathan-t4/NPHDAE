@@ -6,7 +6,7 @@ def get_rlc_config(args):
     config = ml_collections.ConfigDict()
     config.seed = 0
     config.system_name = 'RLC'
-    config.n_train = 200
+    config.n_train = 500
     config.steps = 700
     config.n_val = 20
     config.log_every_steps = 1
@@ -46,15 +46,13 @@ def get_rlc_config(args):
     config.net_params.edge_idxs = None
     config.net_params.node_idxs = None
     config.net_params.include_idxs = None
-    config.net_params.graph_from_state = None # will set later
-    # config.net_params.J = None # will set later
-    # config.net_params.R = None # will set later
-    # config.net_params.g = None # will set later
+    config.net_params.graph_from_state = None
+    config.net_params.state_from_graph = None
     config.net_params.learn_nodes = True
     config.net_params.integration_method = 'adam_bashforth' # 'adam_bashforth'
     config.net_params.dt = 0.01
     config.net_params.T = 1
-    config.net_params.num_mp_steps = 1
+    config.net_params.num_mp_steps = 2
     config.net_params.noise_std = 1e-5
     config.net_params.latent_size = 4
     config.net_params.hidden_layers = 2
@@ -65,7 +63,7 @@ def get_rlc_config(args):
     config.net_params.shared_params = False
     config.net_params.dropout_rate = 0.5
 
-    config.trial_name =  f'{strftime("%m%d-%H%M")}_wo_setting_nodes'
+    config.trial_name =  f'{strftime("%m%d-%H%M")}'
 
 
     return config

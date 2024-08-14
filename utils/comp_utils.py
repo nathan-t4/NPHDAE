@@ -5,9 +5,9 @@ def explicit_unbatch_graph(graph, system_configs):
     num_nodes = [cfg['num_nodes'] for cfg in system_configs]
     state_dim = [cfg['state_dim'] for cfg in system_configs]
     node_fis = jnp.cumsum(num_nodes)
-    node_iis = jnp.r_[jnp.array([0]), node_fis[:,-1]]
+    node_iis = jnp.r_[jnp.array([0]), node_fis[:-1]]
     state_fis = jnp.cumsum(state_dim)
-    state_iis = jnp.r_[jnp.array([0]), state_fis[:,-1]]
+    state_iis = jnp.r_[jnp.array([0]), state_fis[:-1]]
 
     nodes = [graph.nodes[ni, nf] for ni, nf in zip(node_iis, node_fis)]
     edges = [graph.edges[ei, ef] for ei, ef in zip(state_iis, state_fis)]
@@ -26,3 +26,20 @@ def explicit_unbatch_graph(graph, system_configs):
         graphs.append(graph_i)
 
     return graphs
+
+def explicit_unbatch_control(control, system_configs):
+    num_subsystems = len(system_configs)
+    num_cur_sources = [cfg['num_cur_sources'] for cfg in system_configs]
+    num_volt_sources = [cfg['num_volt_sources'] for cfg in system_configs]
+    ext_curs = [control[sum(num_cur_sources[:i]) : sum(num_cur_sources[:i+1])] for i in range(num_subsystems-1)]
+    ext_volts = [
+        control[
+            sum(num_cur_sources)+sum(num_volt_sources[:i]) : 
+            sum(num_cur_sources)+sum(num_volt_sources[:i+1])
+            ]    
+        for i in range(num_subsystems-1)
+        ]
+    
+    controls = [jnp.concatenate((i, v)) for i, v in zip(ext_curs, ext_volts)]
+
+    return controls

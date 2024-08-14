@@ -4,17 +4,23 @@ import optax
 from flax.training.train_state import TrainState
 import orbax.checkpoint as ocp
 
-from scripts.model_instances.comp_nets import CompLCGNS
-from configs.comp_circuits import get_comp_gnn_config
+from scripts.model_instances.comp_nets import CompPHGNS
+from configs.comp_circuits_old import get_comp_gnn_config
 from helpers.graph_builder_factory import gb_factory
 from utils.train_utils import *
 from utils.gnn_utils import *
 from utils.comp_utils import *
 
 def compose(config):
-    net_params_1 = config.net_params_1
-    net_params_2 = config.net_params_2
+    subsystem_names = config.subsystem_names
+    known_subsystem = config.known_subsystem
+    num_subsystems = len(subsystem_names)
+    net_params = config.net_params
+    optimizer_params = config.optimizer_params
     paths = config.paths
+    ckpt_dirs = paths.ckpt_dirs
+    ckpt_steps = paths.ckpt_steps
+    Alambda = config.Alambda # TODO
 
     if paths.dir == None:
         config.paths.dir = os.path.join(os.curdir, f'results/CompGNN/{config.trial_name}')
@@ -25,106 +31,114 @@ def compose(config):
     rng = jax.random.key(config.seed)
     rng, init_rng, net_rng = jax.random.split(rng, 3)
 
-    graph_builder = gb_factory('CoupledLC')
+    graph_builder = gb_factory('') # Get TestGraphBuilder
 
-    eval_gb = graph_builder(paths.coupled_lc_data_path)
-
-    net_params_1.training = False
-    net_params_2.training = False
-
-    net_one = create_net(config.net_one_name, net_params_1)
-    net_two = create_net(config.net_two_name, net_params_2)
-
-    gb_one = gb_factory(config.net_one_name)(paths.training_data_one)
-    gb_two = gb_factory(config.net_two_name)(paths.training_data_two)
-
-    net_one.graph_from_state = gb_one.get_graph_from_state
-    net_two.graph_from_state = gb_two.get_graph_from_state
-
-    net_one.edge_idxs = gb_one.edge_idxs
-    net_one.node_idxs = gb_one.node_idxs
-    net_two.edge_idxs = gb_two.edge_idxs
-    net_two.node_idxs = gb_two.node_idxs
-    net_two.include_idxs = np.array([0,1])
-
-    system_one_config = get_system_config(gb_one.get_graph(0, 0))
-    system_two_config = get_system_config(gb_two.get_graph(0, 0))
+    eval_gb = graph_builder(paths.comp_data_path)
 
     init_graph = eval_gb.get_graph(traj_idx=0, t=0)
-    init_graph_one, init_graph_two = explicit_unbatch_graph(init_graph, system_one_config, system_two_config)
+    init_graphs = explicit_unbatch_graph(init_graph, system_configs)
 
     init_control = eval_gb._control[0,0]
-    init_control_one = init_control[:system_one_config['num_volt_sources']+system_one_config['num_cur_sources']]
-    init_control_two = init_control[system_one_config['num_volt_sources']+system_one_config['num_cur_sources']:]
-
-    params_one = net_one.init(init_rng, init_graph_one, init_control_one, net_rng)
-
-    params_two = net_two.init(init_rng, init_graph_two, init_control_two, net_rng)
-
-    tx_one = optax.adam(**config.optimizer_params_1)
-
-    tx_two = optax.adam(**config.optimizer_params_2)
-
-    state_one = TrainState.create(
-        apply_fn=net_one.apply,
-        params=params_one,
-        tx=tx_one,
-    )
-
-    state_two = TrainState.create(
-        apply_fn=net_two.apply,
-        params=params_two,
-        tx=tx_two,
-    )
+    init_controls = explicit_unbatch_control(init_control, system_configs) # TODO
 
     options = ocp.CheckpointManagerOptions(max_to_keep=1, create=True)  
-    paths.ckpt_one_dir = os.path.abspath(paths.ckpt_one_dir)  
-    ckpt_mngr_one = ocp.CheckpointManager(
-        paths.ckpt_one_dir,
-        options=options,
-        item_handlers=ocp.StandardCheckpointHandler(),
-    )
-    paths.ckpt_two_dir = os.path.abspath(paths.ckpt_two_dir)  
-    ckpt_mngr_two = ocp.CheckpointManager(
-        paths.ckpt_two_dir,
-        options=options,
-        item_handlers=ocp.StandardCheckpointHandler(),
-    )
 
-    # Restore state from checkpoint
-    state_one = ckpt_mngr_one.restore(paths.ckpt_one_step, args=ocp.args.StandardRestore(state_one))
-    state_two = ckpt_mngr_two.restore(paths.ckpt_two_step, args=ocp.args.StandardRestore(state_two))
+    nets = []
+    params = []
+    txs = []
+    train_states = []
+    gbs = []
+    graph_to_state = []
+    state_to_graph = []
+    incidence_matrices = []
+    system_configs = []
 
-    assert net_one.dt == net_two.dt
-    assert net_one.T == net_two.T
-    assert net_one.integration_method == net_two.integration_method
-    dt = net_one.dt
-    T = net_one.T
-    integrator = net_one.integration_method
+    for i in range(num_subsystems):
+        net_params[i].training = False 
+
+        gb = gb_factory(subsystem_names[i])(paths.training_data_paths[i])
+        gbs.append(gb)
+
+        g_to_s = gb.get_state_from_graph
+        s_to_g = gb.get_graph_from_state
+        
+        graph_to_state.append(g_to_s)
+        state_to_graph.append(s_to_g)
+
+        AC = config.incidence_matrices[i].AC
+        AR = config.incidence_matrices[i].AR
+        AL = config.incidence_matrices[i].AL
+        AV = config.incidence_matrices[i].AV
+        AI = config.incidence_matrices[i].AI
+
+        incidence_matrices.append((AC, AR, AL, AV, AI))
+
+        if not known_subsystem[i]:
+            net = create_net(subsystem_names[i], net_params[i])
+            net.graph_from_state = g_to_s,
+            net.state_from_graph = s_to_g,
+            net.edge_idxs = gb.edge_idxs
+            net.node_idxs = gb.node_idxs
+            net.include_idxs = gb.include_idxs
+            nets.append(net)
+
+            param = net.init(init_rng, init_graphs[i], init_controls[i], net_rng)
+            params.append(param)
+
+            tx = optax.adam(**optimizer_params[i])
+            txs.append(tx)
+
+            ckpt_mngr = ocp.CheckpointManager(
+                os.path.abspath(ckpt_dirs[i]),
+                options=options,
+                item_handlers=ocp.StandardCheckpointHandler(),
+            )
+
+            train_state = TrainState.create(
+                apply_fn=net.apply,
+                params=param,
+                tx=tx
+            )
+            # Restore state from checkpoint
+            train_state = ckpt_mngr.restore(ckpt_steps[i], args=ocp.args.StandardRestore(train_state))
+            train_states.append(train_state)
+        
+            system_config = get_system_config(*incidence_matrices[i])
+            system_configs.append(system_config)
+
+        else:
+            system_config = get_system_config(*incidence_matrices[i])
+            system_config['is_last'] = True
+        
+        system_configs.append(system_config)
+
+    assert all([net.dt == nets[0].dt for net in nets])
+    assert all([net.T == nets[0].T for net in nets])
+    assert all([net.integration_method == nets[0].integration_method for net in nets])
+    dt = nets[0].dt
+    T = nets[0].T
+    integration_method = nets[0].integration_method
 
     # Initialize composite GNS
     comp_net_config = {
-        'integration_method': integrator,
+        'integration_method': integration_method,
         'dt': dt,
         'T': T,
-        'state_one': state_one,
-        'state_two': state_two,
-        'graph_to_state_one': gb_one.graph_to_state,
-        'graph_to_state_two': gb_two.graph_to_state,
-        'state_to_graph_one': gb_one.state_to_graph,
-        'state_to_graph_two': gb_two.state_to_graph,
-        'system_one_config': system_one_config,
-        'system_two_config': system_two_config,
+        'train_states': train_states,
+        'graph_to_state': graph_to_state,
+        'state_to_graph': state_to_graph,
+        'system_configs': system_configs,
+        'Alambda': Alambda,
     }
 
-    net = CompLCGNS(**comp_net_config)
-    params = net.init(init_rng, init_graph, init_control, net_rng)
-    tx = optax.adam(1e-3)
+    comp_net = CompPHGNS(**comp_net_config)
+    comp_params = net.init(init_rng, init_graph, init_control, net_rng)
+    comp_tx = optax.adam(1e-3)
 
     state = TrainState.create(
-        apply_fn=net.apply,
-        params=params,
-        tx=tx,
+        apply_fn=comp_net.apply,
+        params=comp_params,
+        tx=comp_tx,
     )
 
     def rollout(state, traj_idx, ti = 0):
@@ -137,42 +151,59 @@ def compose(config):
         controls = eval_gb.get_control(traj_idx, t0_idxs)
         exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
         get_pred_data = eval_gb.get_pred_data
+        get_batch_pred_data = eval_gb.get_batch_pred_data
         
-        def forward_pass(graph, inputs):  
+        def forward_pass(carry, inputs):  
+            graph, u_hats = carry
             control, t = inputs         
-            graph = state.apply_fn(state.params, graph, control, t, jax.random.key(config.seed))
-            pred_data = get_pred_data(graph)
-            graph = graph._replace(globals=None)
-            return graph, pred_data
+            graphs, u_hats = state.apply_fn(state.params, graph, control, u_hats, t, jax.random.key(config.seed))
+            pred_data = get_batch_pred_data(graphs)
+            graphs = [graph._replace(globals=None) for graph in graphs]
+            return (graphs, u_hats), pred_data
 
-        _, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
+        init_u_hat = None
+        init_timesteps = t0_idxs * dt
+        _, pred_data = jax.lax.scan(forward_pass, (graph, init_u_hat), (controls, init_timesteps))
         
         losses = [
             jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
         ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        return ts, np.array(pred_data), np.array(exp_data), eval_metrics
+        pred_data = np.concatenate(pred_data, axis=1)
+        exp_data = np.concatenate(exp_data, axis=1)
+        return pred_data, exp_data, eval_metrics
     
-    print("Evaluating composition")
-    error_sums = [0] * eval_gb._num_states
+    print('##################################################')
+    print(f"Evaluating composition of subsystems {subsystem_names}")
+    print(f"The known subsystems are {subsystem_names[[i for i, b in enumerate(known_subsystem) if b]]}")
+    print(f"Saving plots to {os.path.relpath(plot_dir)}")
+    print('##################################################')
+
+    error_sums = [0] * 4
     for i in range(eval_gb._num_trajectories): # eval_gb._num_trajectories
-        ts, pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
+        pred_data, exp_data, eval_metrics = rollout(state, traj_idx=i)
         for j in range(len(error_sums)):
             error_sums[j] += eval_metrics[j].compute()['loss']
-        plot_evaluation_curves(
-            ts, 
-            pred_data, 
-            exp_data, 
-            {'name': 'CompLCCircuits'},
-            plot_dir=plot_dir,
-            prefix=f'comp_eval_traj_{i}')
+
+        eval_gb.plot(pred_data, exp_data, 
+                     plot_dir=os.path.join(plot_dir['plot'], f'traj_{i}'),
+                     prefix=f'comp_eval_traj_{i}')
+
     rollout_mean_error = np.array(error_sums) / (eval_gb._num_trajectories * eval_gb._num_timesteps)
-    print('Rollout error:', rollout_mean_error)
+
+    print('##################################################')
+    print("Finished evaluating composition")
+    print("\nMean rollout stats:")
+    print(f"\tDifferential states error: {rollout_mean_error[0]}")
+    print(f"\tAlgebraic states error: {rollout_mean_error[1]}")
+    print(f"\tHamiltonian error: {rollout_mean_error[2]}")
+    print(f"\tResidual: {rollout_mean_error[3]}")
+    print('##################################################')
+
     metrics = {
-        'net_name_one': config.net_one_name,
-        'net_name_two': config.net_two_name,
-        'dir_one': config.paths.ckpt_one_dir,
-        'dir_two': config.paths.ckpt_two_dir,
+        'subsystem_names': subsystem_names,
+        'known_subsystem': known_subsystem,
+        'ckpt_dirs': ckpt_dirs,
         'rollout_mean_error_states': rollout_mean_error.tolist(),
         'rollout_mean_error': str(rollout_mean_error.mean()),
     }

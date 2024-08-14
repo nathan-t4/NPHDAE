@@ -5,11 +5,14 @@ from time import strftime
 def get_comp_gnn_config(args):
     config = ml_collections.ConfigDict()
     config.seed = 0
-    config.net_one_name = 'LC1'
-    config.net_two_name = 'LC1'
-    config.learn_matrices_one = False
-    config.learn_matrices_two = False
-    config.trial_name = f'{strftime("%m%d-%H%M")}_comp_{config.net_one_name}_w_{config.net_two_name}'
+
+    # Define composition network
+    config.subsystem_names = ['DGU', 'TL', 'DGU']
+    config.known_subsystem = [True, False, True]
+    config.last_subsystem_idx = 1
+    config.Alambda = jnp.array([]) # TODO
+
+    config.trial_name = f'{strftime("%m%d-%H%M")}_{config.subsystem_names}'
     config.rollout_timesteps = 1500
     config.log_every_steps = 1
     config.eval_every_steps = 2
@@ -18,22 +21,29 @@ def get_comp_gnn_config(args):
 
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
-    config.paths.ckpt_one_step = 38
-    config.paths.ckpt_one_dir = 'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model'
-    config.paths.ckpt_two_step = 38
-    config.paths.ckpt_two_dir = 'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model'
-    config.paths.coupled_lc_data_path = 'results/CoupledLC_data/val_5_1500_constant_params.pkl'
-    config.paths.training_data_one = 'results/LC1_data/train_200_700_constant_params.pkl'
-    config.paths.training_data_two = 'results/LC1_data/train_200_700_constant_params.pkl'
+    config.paths.comp_data_path = 'results/CoupledLC_data/val_5_1500_constant_params.pkl'
+    config.paths.ckpt_steps = [38, 38]
+    config.paths.ckpt_dirs = [
+        'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model',
+        'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model',
+    ]
+    config.paths.training_data_paths = [
+        'results/LC1_data/train_200_700_constant_params.pkl',
+        'results/LC1_data/train_200_700_constant_params.pkl',
+    ]
+
+    config.incidence_matrices_dgu.AC = jnp.array([[-1.0], [0.0], [0.0], [1.0]])
+    config.incidence_matrices_dgu.AR = jnp.array([[0.0], [1.0], [-1.0], [0.0]])
+    config.incidence_matrices_dgu.AL = jnp.array([[0.0], [0.0], [1.0], [-1.0]])
+    config.incidence_matrices_dgu.AV = jnp.array([[-1.0], [1.0], [0.0], [0.0]])
+    config.incidence_matrices_dgu.AI = jnp.array([[1.0], [0.0], [0.0], [-1.0]])
 
     config.optimizer_params_1 = ml_collections.ConfigDict()
     config.optimizer_params_1.learning_rate = 1e-4
     
     config.net_params_1 = ml_collections.ConfigDict()
     config.net_params_1.graph_from_state = None
-    config.net_params_1.J = None
-    config.net_params_1.R = None
-    config.net_params_1.g = None
+    config.net_params_1.state_from_graph = None
     config.net_params_1.edge_idxs = None
     config.net_params_1.node_idxs = None
     config.net_params_1.include_idxs = None
@@ -52,14 +62,19 @@ def get_comp_gnn_config(args):
     config.net_params_1.shared_params = False
     config.net_params_1.dropout_rate = 0.5
 
+    config.incidence_matrices_dgu = ml_collections.ConfigDict()
+    config.incidence_matrices_dgu.AC = jnp.array([[-1.0], [0.0], [0.0], [1.0]])
+    config.incidence_matrices_dgu.AR = jnp.array([[0.0], [1.0], [-1.0], [0.0]])
+    config.incidence_matrices_dgu.AL = jnp.array([[0.0], [0.0], [1.0], [-1.0]])
+    config.incidence_matrices_dgu.AV = jnp.array([[-1.0], [1.0], [0.0], [0.0]])
+    config.incidence_matrices_dgu.AI = jnp.array([[1.0], [0.0], [0.0], [-1.0]])
+
     config.optimizer_params_2 = ml_collections.ConfigDict()
     config.optimizer_params_2.learning_rate = 1e-4
     
     config.net_params_2 = ml_collections.ConfigDict()
     config.net_params_2.graph_from_state = None
-    config.net_params_2.J = None
-    config.net_params_2.R = None
-    config.net_params_2.g = None
+    config.net_params_2.state_from_graph = None
     config.net_params_2.edge_idxs = None
     config.net_params_2.node_idxs = None
     config.net_params_2.include_idxs = None
@@ -77,4 +92,15 @@ def get_comp_gnn_config(args):
     config.net_params_2.layer_norm = True
     config.net_params_2.shared_params = False
     config.net_params_2.dropout_rate = 0.5
+
+    config.incidence_matrices_tl = ml_collections.ConfigDict()
+    config.incidence_matrices_tl.AC = jnp.array([[0.0], [0.0], [0.0], [0.0]])
+    config.incidence_matrices_tl.AR = jnp.array([[0.0], [-1.0], [1.0], [0.0]])
+    config.incidence_matrices_tl.AL = jnp.array([[0.0], [0.0], [-1.0], [1.0]])
+    config.incidence_matrices_tl.AV = jnp.array([[0.0], [0.0], [0.0], [0.0]])
+    config.incidence_matrices_tl.AI = jnp.array([[0.0], [0.0], [0.0], [0.0]])
+
+    config.incidence_matrices = [
+        config.incidence_matrices_dgu, config.incidence_matrices_tl, config.incidence_matrices_dgu
+    ]
     return config

@@ -22,7 +22,7 @@ from flax.training.train_state import TrainState
 import orbax.checkpoint as ocp
 
 from scripts.model_instances.comp_nets import CompLCGNSOld
-from configs.comp_circuits import get_comp_gnn_config
+from configs.comp_circuits_old import get_comp_gnn_config
 from helpers.graph_builder_factory import gb_factory
 from utils.train_utils import *
 from utils.gnn_utils import *
