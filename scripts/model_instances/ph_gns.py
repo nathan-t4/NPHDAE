@@ -15,7 +15,7 @@ from dae_solver.index1_semi_explicit_flax import DAESolver
     
 class PHGNS(nn.Module):
     # Decoder post-processor parameters
-    graph_from_state: Callable
+    state_to_graph: Callable
     J: Union[None, Array] # if None then learn
     R: Union[None, Array] # if None then learn
     g: Union[None, Array] # if None then learn
@@ -103,7 +103,7 @@ class PHGNS(nn.Module):
             graph = graph._replace(edges=new_edges)
 
         def H_from_state(x):
-            graph = self.graph_from_state(state=x, control=control, system_params=False, set_nodes=False, set_ground_and_control=False, nodes=cur_nodes, globals=None)
+            graph = self.state_to_graph(state=x, control=control, system_params=False, set_nodes=False, set_ground_and_control=False, nodes=cur_nodes, globals=None)
             aux_data = None
             processed_graph = net(graph, aux_data, rng)
             if self.include_idxs is None:
@@ -148,7 +148,7 @@ class PHGNS(nn.Module):
                 next_state = integrator_factory(self.integration_method)(dynamics_function, cur_state, 0.0, self.dt)
             
             next_globals = jnp.array(H)
-            graph = self.graph_from_state(state=next_state, 
+            graph = self.state_to_graph(state=next_state, 
                                           control=control, 
                                           system_params=False, 
                                           set_nodes=False,
@@ -163,8 +163,8 @@ class PHGNS(nn.Module):
         return processed_graph
 
 class PHGNS_NDAE(nn.Module):
-    graph_from_state: Callable
-    state_from_graph: Callable
+    state_to_graph: Callable
+    graph_to_state: Callable
     alg_vars_from_graph: Callable
     integration_method: str
     system_config: Dict
@@ -271,7 +271,7 @@ class PHGNS_NDAE(nn.Module):
         )
     
     def __call__(self, graph, control, t, rng):
-        state = self.state_from_graph(graph)
+        state = self.graph_to_state(graph)
         # Add noise to training
         if self.training: 
             edges_shape = graph.edges.shape
@@ -282,7 +282,7 @@ class PHGNS_NDAE(nn.Module):
             graph = graph._replace(edges=new_edges)
 
         def H_from_state(x):
-            graph = self.graph_from_state(state=x, control=control)
+            graph = self.state_to_graph(state=x, control=control)
             processed_graph = self.net(graph, t, rng)
             if self.include_idxs is None:
                 H = jnp.sum(processed_graph.edges)
@@ -340,7 +340,7 @@ class PHGNS_NDAE(nn.Module):
                 
             residuals = get_residuals(next_state, t)
             next_globals = jnp.concatenate((jnp.array([H]), residuals))
-            graph = self.graph_from_state(state=next_state, 
+            graph = self.state_to_graph(state=next_state, 
                                           control=control, 
                                           set_ground_and_control=True,
                                           globals=next_globals)

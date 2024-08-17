@@ -64,8 +64,8 @@ def eval(config: ml_collections.ConfigDict):
 
     net_params.training = False
     net_params.system_config = get_system_config(*incidence_matrices) 
-    net_params.graph_from_state = train_gb.get_graph_from_state
-    net_params.state_from_graph = train_gb.get_state_from_graph
+    net_params.state_to_graph = train_gb.state_to_graph
+    net_params.graph_to_state = train_gb.graph_to_state
     net_params.alg_vars_from_graph = train_gb.get_alg_vars_from_graph
     net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs
@@ -197,8 +197,8 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     ############################################################
     ### Update net_params 
     net_params.training = True
-    net_params.graph_from_state = train_gb.get_graph_from_state
-    net_params.state_from_graph = train_gb.get_state_from_graph
+    net_params.state_to_graph = train_gb.state_to_graph
+    net_params.graph_to_state = train_gb.graph_to_state
     net_params.alg_vars_from_graph = train_gb.get_alg_vars_from_graph
     net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs

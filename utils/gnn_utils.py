@@ -84,15 +84,16 @@ def graph_from_incidence_matrices(A):
         si = jnp.where(a == 1)[0]
         ri = jnp.where(a == -1)[0]
         # If a is all zeros then do not append
-        if len(si) > 0: senders.append(si[0])
-        if len(ri) > 0: receivers.append(ri[0])
+        [senders.append(s) for s in si]
+        [receivers.append(r) for r in ri]
 
     senders = jnp.array(senders).squeeze()
     receivers = jnp.array(receivers).squeeze()
 
     return senders, receivers
 
-def get_system_config(AC, AR, AL, AV, AI):
+
+def get_system_config(AC, AR, AL, AV, AI, Alambda=None):
     num_nodes = len(AC)
     num_capacitors = 0 if (AC == 0.0).all() else len(AC.T)
     num_inductors = 0 if (AL == 0.0).all() else len(AL.T)
@@ -123,6 +124,8 @@ def get_system_config(AC, AR, AL, AV, AI):
     g = lambda e : (AR.T @ e) / 1.0 
 
     def r(z):
+        g = lambda e : (AR.T @ e) / 1.0 
+
         e = z[0:num_nodes]
         uc = z[
             num_nodes+num_inductors :
@@ -142,6 +145,14 @@ def get_system_config(AC, AR, AL, AV, AI):
     B = B.at[0:num_nodes, 0:num_cur_sources].set(-AI)
     B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
 
+    diff_indices = jnp.arange(num_capacitors+num_inductors)
+    alg_indices = jnp.arange(
+            num_capacitors+num_inductors, 
+            num_capacitors+num_inductors+num_nodes+num_volt_sources
+            )
+    num_diff_vars = len(diff_indices)
+    num_alg_vars = len(alg_indices)
+
     config = {
         'AC': AC,
         'AL': AL,
@@ -158,7 +169,106 @@ def get_system_config(AC, AR, AL, AV, AI):
         'E': E,
         'J': J,
         'r': r,
-        'B': B
+        'B': B,
+        'diff_indices': diff_indices,
+        'alg_indices': alg_indices,
+        'num_diff_vars': num_diff_vars,
+        'num_alg_vars': num_alg_vars,
+        'is_k': False,
+    }
+
+    return config
+
+def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
+    num_nodes = len(AC)
+    num_capacitors = 0 if (AC == 0.0).all() else len(AC.T)
+    num_inductors = 0 if (AL == 0.0).all() else len(AL.T)
+    num_resistors = 0 if (AR == 0.0).all() else len(AR.T)
+    num_volt_sources = 0 if (AV == 0.0).all() else len(AV.T)
+    num_cur_sources = 0 if (AI == 0.0).all() else len(AI.T)
+    num_lamb = len(Alambda.T)
+    state_dim = num_capacitors + num_inductors + num_nodes + num_volt_sources+num_lamb
+
+    E = jax.scipy.linalg.block_diag(AC, jnp.eye(num_inductors), jnp.zeros((num_capacitors, num_nodes)), jnp.zeros((num_volt_sources, num_volt_sources)), jnp.zeros((num_lamb, num_lamb)))
+
+    J = jnp.zeros((state_dim, state_dim)) 
+
+    # first row of equations of J 
+    J = J.at[0:num_nodes, num_nodes:(num_nodes + num_inductors)].set(-AL) 
+    J = J.at[
+        0:(num_nodes),
+        (num_nodes + num_inductors + num_capacitors):(num_nodes + num_inductors + num_capacitors + num_volt_sources)
+        ].set(-AV)
+    J = J.at[
+        0:num_nodes,
+        (num_nodes + num_inductors + num_capacitors + num_volt_sources):,
+        ].set(-Alambda)
+
+    # second row of equations of J
+    J = J.at[num_nodes:(num_nodes + num_inductors),
+            0:num_nodes].set(AL.transpose())
+    
+    # Final row of equations of J
+    J = J.at[(num_nodes + num_inductors + num_capacitors)::,
+            0:num_nodes].set(AV.transpose()) 
+    
+    J = J.at[(num_nodes + num_inductors + num_capacitors + num_volt_sources):,
+            0:num_nodes].set(-Alambda.transpose())
+    
+    g = lambda e : (AR.T @ e) / 1.0 
+
+    def r(z):
+        g = lambda e : (AR.T @ e) / 1.0 
+
+        e = z[0:num_nodes]
+        uc = z[
+            num_nodes+num_inductors :
+            num_nodes+num_inductors+num_capacitors
+        ]
+
+        curr_through_resistors = jnp.linalg.matmul(AR, g(e))
+        charge_constraint = jnp.matmul(AC.T, e) - uc
+
+        diss = jnp.zeros((state_dim,))
+        diss = diss.at[0:num_nodes].set(curr_through_resistors)
+        diss = diss.at[(num_nodes + num_inductors):(num_nodes + num_inductors + num_capacitors)].set(charge_constraint)
+
+        return diss
+
+    B = jnp.zeros((state_dim, num_cur_sources + num_volt_sources))
+    B = B.at[0:num_nodes, 0:num_cur_sources].set(-AI)
+    B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
+
+    diff_indices = jnp.arange(num_capacitors+num_inductors)
+    alg_indices = jnp.arange(
+            num_capacitors+num_inductors, 
+            num_capacitors+num_inductors+num_nodes+num_volt_sources+num_lamb
+            )
+    num_diff_vars = len(diff_indices)
+    num_alg_vars = len(alg_indices)
+
+    config = {
+        'AC': AC,
+        'AL': AL,
+        'AR': AR,
+        'AV': AV,
+        'AI': AI,
+        'num_nodes': num_nodes,
+        'num_capacitors': num_capacitors,
+        'num_inductors': num_inductors,
+        'num_resistors': num_resistors,
+        'num_volt_sources': num_volt_sources,
+        'num_cur_sources': num_cur_sources,
+        'state_dim': state_dim, 
+        'E': E,
+        'J': J,
+        'r': r,
+        'B': B,
+        'diff_indices': diff_indices,
+        'alg_indices': alg_indices,
+        'num_diff_vars': num_diff_vars,
+        'num_alg_vars': num_alg_vars,
+        'is_k': True,
     }
 
     return config
@@ -193,7 +303,7 @@ def get_J_matrix(system_config):
 def get_E_matrix(system_config):
     num_nodes = system_config['num_nodes']
     num_capacitors = system_config['num_capacitors']
-    num_inductors = system_config['num_inducotrs']
+    num_inductors = system_config['num_inductors']
     num_volt_sources = system_config['num_volt_sources']
     AC = system_config['AC']
     E = jax.scipy.linalg.block_diag(AC, jnp.eye(num_inductors), jnp.zeros((num_capacitors, num_nodes)), jnp.zeros((num_volt_sources, num_volt_sources)))

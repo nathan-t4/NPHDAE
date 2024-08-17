@@ -8,9 +8,17 @@ def get_comp_gnn_config(args):
 
     # Define composition network
     config.subsystem_names = ['DGU', 'TL', 'DGU']
-    config.known_subsystem = [True, False, True]
+    config.learned_subsystem = [True, False, True]
     config.last_subsystem_idx = 1
-    config.Alambda = jnp.array([]) # TODO
+    config.Alambda = jnp.array([[0.0, 0.0], 
+                                [0.0, 0.0],
+                                [1.0, 0.0],
+                                [-1.0, 0.0],
+                                [0.0, 0.0],
+                                [0.0, -1.0],
+                                [0.0, 0.0],
+                                [0.0, 0.0],
+                                [0.0, 1.0]])
 
     config.trial_name = f'{strftime("%m%d-%H%M")}_{config.subsystem_names}'
     config.rollout_timesteps = 1500
@@ -21,17 +29,20 @@ def get_comp_gnn_config(args):
 
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
-    config.paths.comp_data_path = 'results/CoupledLC_data/val_5_1500_constant_params.pkl'
-    config.paths.ckpt_steps = [38, 38]
+    config.paths.comp_data_path = 'results/microgrid_dae_data/val_5_800.pkl'
+    config.paths.ckpt_steps = [52, None, 52]
     config.paths.ckpt_dirs = [
-        'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model',
-        'results/GNS/LC1/0627_T=1_learn_nodes/checkpoint/best_model',
+        'results/GNS/DGU/0814-1804/checkpoint/best_model',
+        None,
+        'results/GNS/DGU/0814-1804/checkpoint/best_model',
     ]
     config.paths.training_data_paths = [
-        'results/LC1_data/train_200_700_constant_params.pkl',
-        'results/LC1_data/train_200_700_constant_params.pkl',
+        'dgu_dae_data/train_500_700.pkl',
+        'results/DGU_TL_data/test.pkl', # empty dataset to initialize graph builder
+        'dgu_dae_data/train_500_700.pkl',
     ]
 
+    config.incidence_matrices_dgu = ml_collections.ConfigDict()
     config.incidence_matrices_dgu.AC = jnp.array([[-1.0], [0.0], [0.0], [1.0]])
     config.incidence_matrices_dgu.AR = jnp.array([[0.0], [1.0], [-1.0], [0.0]])
     config.incidence_matrices_dgu.AL = jnp.array([[0.0], [0.0], [1.0], [-1.0]])
@@ -42,15 +53,15 @@ def get_comp_gnn_config(args):
     config.optimizer_params_1.learning_rate = 1e-4
     
     config.net_params_1 = ml_collections.ConfigDict()
-    config.net_params_1.graph_from_state = None
-    config.net_params_1.state_from_graph = None
+    config.net_params_1.state_to_graph = None
+    config.net_params_1.graph_to_state = None
     config.net_params_1.edge_idxs = None
     config.net_params_1.node_idxs = None
     config.net_params_1.include_idxs = None
     config.net_params_1.integration_method = 'adam_bashforth'
     config.net_params_1.dt = 0.01
     config.net_params_1.T = 1
-    config.net_params_1.num_mp_steps = 1
+    config.net_params_1.num_mp_steps = 2
     config.net_params_1.noise_std = 1e-5
     config.net_params_1.latent_size = 4
     config.net_params_1.hidden_layers = 2
@@ -73,15 +84,15 @@ def get_comp_gnn_config(args):
     config.optimizer_params_2.learning_rate = 1e-4
     
     config.net_params_2 = ml_collections.ConfigDict()
-    config.net_params_2.graph_from_state = None
-    config.net_params_2.state_from_graph = None
+    config.net_params_2.state_to_graph = None
+    config.net_params_2.graph_to_state = None
     config.net_params_2.edge_idxs = None
     config.net_params_2.node_idxs = None
     config.net_params_2.include_idxs = None
     config.net_params_2.integration_method = 'adam_bashforth'
     config.net_params_2.dt = 0.01
     config.net_params_2.T = 1
-    config.net_params_2.num_mp_steps = 1
+    config.net_params_2.num_mp_steps = 2
     config.net_params_2.noise_std = 1e-5
     config.net_params_2.latent_size = 4
     config.net_params_2.hidden_layers = 2
@@ -101,6 +112,57 @@ def get_comp_gnn_config(args):
     config.incidence_matrices_tl.AI = jnp.array([[0.0], [0.0], [0.0], [0.0]])
 
     config.incidence_matrices = [
-        config.incidence_matrices_dgu, config.incidence_matrices_tl, config.incidence_matrices_dgu
+        config.incidence_matrices_dgu, 
+        config.incidence_matrices_tl, 
+        config.incidence_matrices_dgu
     ]
+    config.net_params = [
+        config.net_params_1, None, config.net_params_2
+    ]
+    config.optimizer_params = [
+        config.optimizer_params_1, None, config.optimizer_params_2
+    ]
+
+    # TODO: check that these matrices are consistent with subsystems
+    config.composite_incidence_matrices = ml_collections.ConfigDict()
+    config.composite_incidence_matrices.AC = jnp.array([[-1.0, -1.0],
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [1.0, 0.0], 
+                                                        [0.0, 0.0],         
+                                                        [0.0, 1.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0]])
+    config.composite_incidence_matrices.AR = jnp.array([[0.0, 0.0, 0.0],
+                                                        [-1.0, 0.0, 0.0], 
+                                                        [1.0, 0.0, 0.0],
+                                                        [0.0, 1.0, 0.0],
+                                                        [0.0, -1.0, 0.0],
+                                                        [0.0, 0.0, 0.0],
+                                                        [0.0, 0.0, 1.0],
+                                                        [0.0, 0.0, -1.0]])
+    config.composite_incidence_matrices.AL = jnp.array([[0.0, 0.0, 0.0],
+                                                        [0.0, 0.0, 0.0],
+                                                        [-1.0, 0.0, 0.0],
+                                                        [1.0, 0.0, 0.0],
+                                                        [0.0, 1.0, 0.0],
+                                                        [0.0, -1.0, 0.0],
+                                                        [0.0, 0.0, 1.0],
+                                                        [0.0, 0.0, -1.0]])
+    config.composite_incidence_matrices.AV = jnp.array([[-1.0, -1.0],
+                                                        [1.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0],         
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 1.0]])
+    config.composite_incidence_matrices.AI = jnp.array([[-1.0, -1.0],
+                                                        [1.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0],         
+                                                        [0.0, 0.0], 
+                                                        [0.0, 0.0], 
+                                                        [0.0, 1.0]])
     return config

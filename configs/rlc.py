@@ -46,8 +46,8 @@ def get_rlc_config(args):
     config.net_params.edge_idxs = None
     config.net_params.node_idxs = None
     config.net_params.include_idxs = None
-    config.net_params.graph_from_state = None
-    config.net_params.state_from_graph = None
+    config.net_params.state_to_graph = None
+    config.net_params.graph_to_state = None
     config.net_params.learn_nodes = True
     config.net_params.integration_method = 'adam_bashforth' # 'adam_bashforth'
     config.net_params.dt = 0.01

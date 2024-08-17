@@ -38,13 +38,20 @@ class TestGraphBuilder(GraphBuilder):
         self._jv = jnp.array(state[:,:,self.num_capacitors+self.num_inductors+(self.num_nodes-1) : self.num_capacitors+self.num_inductors+(self.num_nodes-1)+self.num_volt_sources])
         self._is = self._control[:,:,0:self.num_cur_sources]
 
-        self._H = 0.5 * (self._Qs**2 / self.C + self._Phis**2 / self.L)
+        self._H = 0.5 * (jnp.linalg.vecdot(self._Qs, self._Qs) / self.C 
+            + jnp.linalg.vecdot(self._Phis, self._Phis) / self.L)
         self._residuals = jnp.zeros((self._num_trajectories, self._num_timesteps, 1))
-        self.edge_idxs = np.arange(
-            self.num_capacitors+self.num_inductors+self.num_resistors+self.num_volt_sources+self.num_cur_sources
-        ) # needs to be np instead of jnp
 
-        # Which edge indices to include when calculating Hamiltonian 
+        # Tells model which encoder/decoder to use for each edge
+        self.edge_idxs = []
+        [self.edge_idxs.append(0) for _ in range(self.num_capacitors)]
+        [self.edge_idxs.append(1) for _ in range(self.num_resistors)]
+        [self.edge_idxs.append(2) for _ in range(self.num_inductors)]
+        [self.edge_idxs.append(3) for _ in range(self.num_volt_sources)]
+        [self.edge_idxs.append(4) for _ in range(self.num_cur_sources)]
+        self.edge_idxs = np.array(self.edge_idxs)
+
+        # Tells model which edge indices to include when calculating Hamiltonian 
         # Indicates which edges correspond to energy-storing electrical components (e.g. capacitors & inductors)
         self.include_idxs = jnp.concatenate((
             jnp.ones((self.num_capacitors)),
@@ -105,7 +112,7 @@ class TestGraphBuilder(GraphBuilder):
     def _setup_graph_params(self):
         pass
 
-    def get_graph_from_state(self, state, control=None, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
+    def state_to_graph(self, state, control=None, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
         Q = state[0 : self.num_capacitors]
         Phi = state[self.num_capacitors : self.num_capacitors+self.num_inductors]
         e = state[
@@ -116,12 +123,15 @@ class TestGraphBuilder(GraphBuilder):
             self.num_capacitors+self.num_inductors+self.num_nodes :
             self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources
         ]
-        I = control[0 : self.num_cur_sources]
-        V = control[self.num_cur_sources : self.num_cur_sources+self.num_volt_sources]
+        if self.num_cur_sources + self.num_volt_sources > 0:
+            I = control[0 : self.num_cur_sources]
+            V = control[self.num_cur_sources : self.num_cur_sources+self.num_volt_sources]
+        else:
+            I = jnp.array([0])
+            V = jnp.array([0])
 
         nodes = e.reshape(-1,1)
         resistor_current = jnp.matmul(self.AR.T, e) # This is g
-        # resistor_current = jv # TODO: trial 
         edges = []
         if self.num_capacitors > 0:
             edges.append(Q)
@@ -139,12 +149,11 @@ class TestGraphBuilder(GraphBuilder):
         if set_nodes:
             raise NotImplementedError()
         if set_ground_and_control:
-            # TODO: automate this
-            # nodes = nodes.at[0].set(jnp.array([0]))
-            # nodes = nodes.at[]
-
             # Set voltage source
-            nodes = jnp.concatenate((jnp.array([[0]]), jnp.array([V]), nodes[2:]), axis=0)
+            volt_indices = jnp.where(self.AV == 1)[0]
+            nodes = nodes.at[0].set(0)
+            nodes = nodes.at[volt_indices].set(V)
+
             # Set current sources
             if self.num_cur_sources > 0:
                 edges = edges.at[-self.num_cur_sources:, 0].set(I)
@@ -169,7 +178,7 @@ class TestGraphBuilder(GraphBuilder):
 
         return graph
     
-    def get_state_from_graph(self, graph):
+    def graph_to_state(self, graph):
         q = graph.edges[0 : self.num_capacitors, 0]
         phi = graph.edges[
             self.num_capacitors+self.num_resistors : 
@@ -210,7 +219,7 @@ class TestGraphBuilder(GraphBuilder):
         if self.num_cur_sources > 0:
             edges.append(self._is[traj_idx, t].squeeze())
         
-        edges = jnp.array(edges).reshape(-1,1)
+        edges = jnp.concatenate(edges).reshape(-1,1)
         edges = jnp.concatenate((edges, self.edge_idxs.reshape(-1,1)), axis=1)
         global_context = None
 

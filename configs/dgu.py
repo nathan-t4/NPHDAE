@@ -23,8 +23,10 @@ def get_dgu_config(args):
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
     config.paths.ckpt_step = args.ckpt_step
-    config.paths.training_data_path = f'results/{config.system_name}_data/train_{config.n_train}_{config.steps}.pkl'
-    config.paths.evaluation_data_path = f'results/{config.system_name}_data/val_{config.n_val}_800.pkl'
+    # config.paths.training_data_path = f'results/{config.system_name}_data/train_{config.n_train}_{config.steps}.pkl'
+    # config.paths.evaluation_data_path = f'results/{config.system_name}_data/val_{config.n_val}_800.pkl'
+    config.paths.training_data_path = 'dgu_dae_data/train_500_700.pkl'
+    config.paths.evaluation_data_path = 'dgu_dae_data/val_20_800.pkl'
 
     config.training_params = ml_collections.ConfigDict()
     config.training_params.learn_matrices = False
@@ -42,8 +44,8 @@ def get_dgu_config(args):
     config.net_params.edge_idxs = None
     config.net_params.node_idxs = None
     config.net_params.include_idxs = None
-    config.net_params.graph_from_state = None
-    config.net_params.state_from_graph = None
+    config.net_params.state_to_graph = None
+    config.net_params.graph_to_state = None
     config.net_params.learn_nodes = True
     config.net_params.integration_method = 'adam_bashforth'
     config.net_params.dt = 0.01
