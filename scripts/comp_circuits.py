@@ -97,7 +97,8 @@ def compose(config):
             alg_vars_from_graph.append(alg_from_g)
 
             # TODO: move somewhere...
-            Alambda_k = Alambda[3:6]
+            # This is Alambda for subsystem k (transmission line)
+            Alambda_k = Alambda[3:6] # (num_nodes_1-1) : (num_nodes_1+num_nodes_2)-2
             Alambda_k = jnp.concatenate((jnp.zeros((1,2)), Alambda_k)) # add ground node
             system_config = get_system_k_config(*incidence_matrices[i], Alambda_k)
             system_config['is_k'] = True
@@ -171,12 +172,12 @@ def compose(config):
     }
 
     num_lambs = len(Alambda.T)
-    init_lamb = jnp.zeros(num_lambs)
+    init_lamb = None # jnp.zeros(num_lambs) # None 
     comp_net = CompPHGNS(**comp_net_config)
     comp_params = comp_net.init(
         init_rng, init_graph, init_control, init_lamb, init_t, net_rng
         )
-    comp_tx = optax.adam(1e-3) # The learning rate is ir
+    comp_tx = optax.adam(1e-3) # The learning rate is irrelevant
 
     state = TrainState.create(
         apply_fn=comp_net.apply,
@@ -207,7 +208,9 @@ def compose(config):
             graphs = [graph._replace(globals=None) for graph in graphs]
             return (graphs, next_lamb), pred_data
 
-        init_lamb = jnp.zeros(num_lambs)
+        # TODO
+        # init_lamb = jnp.zeros(num_lambs)
+        init_lamb = None
         init_timesteps = t0_idxs * dt
         _, pred_data = jax.lax.scan(forward_pass, (graph, init_lamb), (controls, init_timesteps))
         

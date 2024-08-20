@@ -20,12 +20,12 @@ class DAESolver():
             self, 
             f : callable, 
             g : callable, 
-            num_diff_vars : int, 
-            num_alg_vars : int):
+            diff_indices : list, 
+            alg_indices : list):
         self.f = f
         self.g = g
-        self.num_diff_vars = num_diff_vars
-        self.num_alg_vars = num_alg_vars
+        self.diff_indices = diff_indices
+        self.alg_indices = alg_indices
 
         self.construct_coupled_odes()
 
@@ -46,25 +46,16 @@ class DAESolver():
             return jax.jacfwd(gg)(t)
         
         def construct_b(x,y,t,params):
-            jac_gx = gx(x,y,t,params)
-            print('construct b')
-            print('gx', jac_gx, jnp.linalg.matrix_rank(jac_gx))
-            print('f', self.f(x,y,t,params))
-            print('gt', self.gt(x,y,t,params))
             return jnp.matmul(gx(x,y,t,params), self.f(x,y,t,params)) + gt(x,y,t,params)
         
-        # @nn.jit
+        @nn.jit
         def y_dot(x,y,t,params):
-            jac_gy = gy(x,y,t,params)
-            print('y dot')
-            print('gy', jac_gy, jnp.linalg.matrix_rank(jac_gy))
-            print('construct b', construct_b(x,y,t,params))
             return - jnp.linalg.solve(gy(x,y,t,params), construct_b(x,y,t,params))
         
-        # @nn.jit
+        @nn.jit
         def f_coupled_system(z, t, params):
-            x = z[0:self.num_diff_vars]
-            y = z[self.num_diff_vars::]
+            x = z[self.diff_indices]
+            y = z[self.alg_indices]
 
             xp = self.f(x,y,t,params)
             yp = self.y_dot(x,y,t,params)
@@ -79,10 +70,12 @@ class DAESolver():
         Solve the DAE
         """
 
-        x0 = z0[0:self.num_diff_vars]
-        y0 = z0[self.num_diff_vars::]
+        x0 = z0[self.diff_indices]
+        y0 = z0[self.alg_indices]
 
-        y0new, infodict, ier, mesg = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0, full_output=True)
+        print(f"Initial g {self.g(x0, y0, T[0], params)}")
+
+        y0new, infodict, ier, mesg = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0, full_output=True, xtol=y0_tol)
         
         if ier != 1:
             # throw an error if the algebraic states are not consistent.
@@ -118,7 +111,7 @@ def main():
     def g(x, y, t, params):
         return x + y - 1
 
-    solver = DAESolver(f, g, num_diff_vars=1, num_alg_vars=1)
+    solver = DAESolver(f, g, diff_indices=1, alg_indices=1)
 
     diff_vars_init = jnp.array([0.0])
     alg_vars_init = jnp.array([1.0])

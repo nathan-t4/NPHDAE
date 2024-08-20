@@ -40,6 +40,7 @@ class TestGraphBuilder(GraphBuilder):
 
         self._H = 0.5 * (jnp.linalg.vecdot(self._Qs, self._Qs) / self.C 
             + jnp.linalg.vecdot(self._Phis, self._Phis) / self.L)
+        self._H = self._H.reshape(self._num_trajectories, self._num_timesteps, 1)
         self._residuals = jnp.zeros((self._num_trajectories, self._num_timesteps, 1))
 
         # Tells model which encoder/decoder to use for each edge
@@ -61,12 +62,12 @@ class TestGraphBuilder(GraphBuilder):
             jnp.zeros((self.num_cur_sources)),
         ))
         self.node_idxs = None # Not in use yet
-        self.differential_vars = jnp.arange(self.num_capacitors+self.num_inductors)
-        self.algebraic_vars = jnp.arange(self.num_capacitors+self.num_inductors, self._num_states)
 
         self.senders, self.receivers = graph_from_incidence_matrices(
             (self.AC, self.AR, self.AL, self.AV, self.AI)
             )
+        
+        self.volt_indices = jnp.where(self.AV == 1)[0]
 
     def get_control(self, trajs, ts):
         return self._control[trajs, ts]
@@ -150,9 +151,8 @@ class TestGraphBuilder(GraphBuilder):
             raise NotImplementedError()
         if set_ground_and_control:
             # Set voltage source
-            volt_indices = jnp.where(self.AV == 1)[0]
             nodes = nodes.at[0].set(0)
-            nodes = nodes.at[volt_indices].set(V)
+            nodes = nodes.at[self.volt_indices].set(V)
 
             # Set current sources
             if self.num_cur_sources > 0:
@@ -190,34 +190,26 @@ class TestGraphBuilder(GraphBuilder):
         state = jnp.r_[q, phi, e, jv]
         return state
     
-    def get_alg_vars_from_graph(self, graph):
-        e = graph.nodes.squeeze()
-        # If the system has voltage sources, add 'jv' as algebraic variables
-        if self.num_volt_sources > 0:
-            jv = graph.edges[
-                self.num_capacitors+self.num_resistors+self.num_inductors :
-                self.num_capacitors+self.num_resistors+self.num_inductors+self.num_volt_sources
-            , 0]
-            y = jnp.r_[e, jv]
-        else:
-            y = e
+    def get_alg_vars_from_graph(self, graph, algebraic_vars):
+        state = self.graph_to_state(graph)
+        y = state[algebraic_vars]
         return y
     
     def get_graph(self, traj_idx, t) -> jraph.GraphsTuple:
         nodes = jnp.array(self._Vs[traj_idx, t]).reshape(-1,1)
         edges = []
         if self.num_capacitors > 0:
-            edges.append(self._Qs[traj_idx, t].squeeze())
+            edges.append(self._Qs[traj_idx, t])
         if self.num_resistors > 0:
             resistor_current = jnp.matmul(self.AR.T, self._Vs[traj_idx, t]) # this is g
             # resistor_current = self._jv[traj_idx, t]
-            edges.append(resistor_current.squeeze())
+            edges.append(resistor_current)
         if self.num_inductors > 0:
-            edges.append(self._Phis[traj_idx, t].squeeze())
+            edges.append(self._Phis[traj_idx, t])
         if self.num_volt_sources > 0:
-            edges.append(self._jv[traj_idx, t].squeeze())
+            edges.append(self._jv[traj_idx, t])
         if self.num_cur_sources > 0:
-            edges.append(self._is[traj_idx, t].squeeze())
+            edges.append(self._is[traj_idx, t])
         
         edges = jnp.concatenate(edges).reshape(-1,1)
         edges = jnp.concatenate((edges, self.edge_idxs.reshape(-1,1)), axis=1)
@@ -311,7 +303,7 @@ class TestGraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.R, self.L, self.C, self.system_params, self._Qs, self._Phis, self._Vs, self._jv, self._is, self._H, self._control, self._residuals, self._num_trajectories, self._num_timesteps, self._num_states, self.differential_vars, self.algebraic_vars, self.senders, self.receivers)
+        aux_data = (self._dt, self.R, self.L, self.C, self.system_params, self._Qs, self._Phis, self._Vs, self._jv, self._is, self._H, self._control, self._residuals, self._num_trajectories, self._num_timesteps, self._num_states, self.senders, self.receivers, self.volt_indices, self.num_capacitors, self.num_resistors, self.num_inductors, self.num_volt_sources, self.num_cur_sources)
         return (children, aux_data)
     
     @classmethod
@@ -334,10 +326,14 @@ class TestGraphBuilder(GraphBuilder):
         obj._num_trajectories     = aux_data[13]
         obj._num_timesteps        = aux_data[14]
         obj._num_states           = aux_data[15]
-        obj.differential_vars     = aux_data[16]
-        obj.algebraic_vars        = aux_data[17]
-        obj.senders               = aux_data[18]
-        obj.receivers             = aux_data[19]
+        obj.senders               = aux_data[16]
+        obj.receivers             = aux_data[17]
+        obj.volt_indices          = aux_data[18]
+        obj.num_capacitors        = aux_data[19]
+        obj.num_resistors         = aux_data[20]
+        obj.num_inductors         = aux_data[21]
+        obj.num_volt_sources      = aux_data[22]
+        obj.num_cur_sources       = aux_data[23]
 
         obj._setup_graph_params()
         return obj

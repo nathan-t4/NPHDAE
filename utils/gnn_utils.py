@@ -76,16 +76,31 @@ def incidence_matrices_from_graph(graph, edge_types=None):
     A = [jnp.array(a).T if len(a) > 0 else None for a in A]
     return A
 
+def fill_in_incidence_matrix(A):
+    # Fill in the missing ground node (first row) so that each column
+    # of the incidence matrix has one (1) and one (-1) entry.
+    gnd_row = []
+    for col in A.T:
+        if len(jnp.where(col == 1.0)[0]) == 0 and len(jnp.where(col == -1.0)[0]) == 1:
+            gnd_row.append(1.0)
+        elif len(jnp.where(col == -1.0)[0]) == 0 and len(jnp.where(col == 1.0)[0]) == 1:
+            gnd_row.append(-1.0)
+        else:
+            gnd_row.append(0.0)
+    gnd_row = jnp.array(gnd_row).reshape(1,-1)
+    return jnp.concatenate((gnd_row, A))
+
 def graph_from_incidence_matrices(A):
     AC, AR, AL, AV, AI = A
+    new_A = [fill_in_incidence_matrix(a) for a in A]    
     senders = []
     receivers = []
-    for a in A:
-        si = jnp.where(a == 1)[0]
-        ri = jnp.where(a == -1)[0]
-        # If a is all zeros then do not append
-        [senders.append(s) for s in si]
-        [receivers.append(r) for r in ri]
+    for a in new_A:
+        si_row, si_col = jnp.where(a == 1)
+        ri_row, ri_col = jnp.where(a == -1)
+        # If a is all zeros then do not append            
+        [senders.append(s) for s in si_row]
+        [receivers.append(r) for r in ri_row]
 
     senders = jnp.array(senders).squeeze()
     receivers = jnp.array(receivers).squeeze()
@@ -145,12 +160,13 @@ def get_system_config(AC, AR, AL, AV, AI, Alambda=None):
     B = B.at[0:num_nodes, 0:num_cur_sources].set(-AI)
     B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
 
-    diff_indices = jnp.arange(num_capacitors+num_inductors)
-    alg_indices = jnp.arange(
-            num_capacitors+num_inductors, 
-            num_capacitors+num_inductors+num_nodes+num_volt_sources
-            )
-    num_diff_vars = len(diff_indices)
+    # diff_indices = jnp.arange(num_capacitors+num_inductors)
+    # alg_indices = jnp.arange(
+    #         num_capacitors+num_inductors, 
+    #         num_capacitors+num_inductors+num_nodes+num_volt_sources
+    #         )
+    diff_indices, alg_indices = get_diff_and_alg_indices(E)
+    num_diff_vars = len(diff_indices) 
     num_alg_vars = len(alg_indices)
 
     config = {
@@ -187,9 +203,11 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
     num_volt_sources = 0 if (AV == 0.0).all() else len(AV.T)
     num_cur_sources = 0 if (AI == 0.0).all() else len(AI.T)
     num_lamb = len(Alambda.T)
-    state_dim = num_capacitors + num_inductors + num_nodes + num_volt_sources+num_lamb
-
-    E = jax.scipy.linalg.block_diag(AC, jnp.eye(num_inductors), jnp.zeros((num_capacitors, num_nodes)), jnp.zeros((num_volt_sources, num_volt_sources)), jnp.zeros((num_lamb, num_lamb)))
+    state_dim = num_capacitors + num_inductors + num_nodes + num_volt_sources + num_lamb
+    
+    E = jnp.zeros((state_dim, state_dim))
+    E = E.at[0:num_nodes, 0:num_capacitors].set(AC)
+    E = E.at[num_nodes:num_nodes+num_inductors, num_capacitors:num_capacitors+num_inductors].set(jnp.eye(num_inductors))
 
     J = jnp.zeros((state_dim, state_dim)) 
 
@@ -215,7 +233,6 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
     J = J.at[(num_nodes + num_inductors + num_capacitors + num_volt_sources):,
             0:num_nodes].set(-Alambda.transpose())
     
-    g = lambda e : (AR.T @ e) / 1.0 
 
     def r(z):
         g = lambda e : (AR.T @ e) / 1.0 
@@ -239,18 +256,14 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
     B = B.at[0:num_nodes, 0:num_cur_sources].set(-AI)
     B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
 
-    diff_indices = jnp.arange(num_capacitors+num_inductors)
-    alg_indices = jnp.arange(
-            num_capacitors+num_inductors, 
-            num_capacitors+num_inductors+num_nodes+num_volt_sources+num_lamb
-            )
+    diff_indices, alg_indices = get_diff_and_alg_indices(E)
     num_diff_vars = len(diff_indices)
     num_alg_vars = len(alg_indices)
 
     config = {
         'AC': AC,
-        'AL': AL,
         'AR': AR,
+        'AL': AL,
         'AV': AV,
         'AI': AI,
         'num_nodes': num_nodes,
@@ -321,11 +334,16 @@ def get_B_bar_matrix(system_config):
 
     B_bar = jnp.zeros((state_dim, num_cur_sources+num_volt_sources))
 
-    B_bar.at[0:num_nodes, 0:num_cur_sources].set(-AI)
+    B_bar = B_bar.at[0:num_nodes, 0:num_cur_sources].set(-AI)
 
-    B_bar.at[
+    B_bar = B_bar.at[
         num_capacitors+num_inductors+num_nodes : num_capacitors+num_inductors+num_nodes+num_volt_sources,
         num_cur_sources : num_cur_sources+num_volt_sources
         ].set(-jnp.eye(num_volt_sources))
     
     return B_bar
+
+def get_diff_and_alg_indices(E):
+    diff_indices = jnp.where(jnp.array([(E[row, :] != 0.0).any() for row in range(E.shape[0])]))[0]
+    alg_indices = jnp.where(jnp.array([(E[row, :] == 0.0).all() for row in range(E.shape[0])]))[0]
+    return diff_indices, alg_indices

@@ -203,8 +203,6 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs
     net_params.node_idxs = train_gb.node_idxs
-    net_params.differential_vars = train_gb.differential_vars
-    net_params.algebraic_vars = train_gb.algebraic_vars
     ############################################################
     
     ############################################################
@@ -228,6 +226,9 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     print(f"E: {net_params.system_config['E']}")
     print(f"J: {net_params.system_config['J']}")
     print(f"B: {net_params.system_config['B']}")
+    print('system indices')
+    print(f"Differential indices {net_params.system_config['diff_indices']}")
+    print(f"Algebraic indices {net_params.system_config['alg_indices']}")
     print('##################################################')
 
     t0 = 0.0

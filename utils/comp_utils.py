@@ -6,10 +6,7 @@ def explicit_unbatch_graph(graph, Alambda, system_configs):
 
     num_subsystems = len(system_configs)
     num_nodes = jnp.array([(cfg['num_nodes']-1) for cfg in system_configs])
-    # num_edges = jnp.array([
-    #     cfg['num_capacitors']+cfg['num_inductors']+cfg['num_volt_sources']
-    #     for cfg in system_configs
-    #     ])
+
     num_caps = jnp.array([cfg['num_capacitors'] for cfg in system_configs])
     num_res = jnp.array([cfg['num_resistors'] for cfg in system_configs])
     num_inds = jnp.array([cfg['num_inductors'] for cfg in system_configs])
@@ -19,28 +16,36 @@ def explicit_unbatch_graph(graph, Alambda, system_configs):
     # Look at Alambda to decide which nodes to equate
     node_fis = jnp.cumsum(num_nodes)
     node_iis = jnp.r_[jnp.array([0]), node_fis[:-1]]
-    node_idx = jnp.array([jnp.arange(ni, nf) for ni, nf in zip(node_iis, node_fis)])
+    node_idx = [jnp.arange(ni, nf) for ni, nf in zip(node_iis, node_fis)]
     equivalent_nodes = [jnp.where(col != 0)[0] for col in Alambda.T]
     for node_pairs in equivalent_nodes:
         first_idx = node_pairs[0]
         second_idx = node_pairs[1]
-        node_idx = node_idx.at[jnp.where(node_idx == second_idx)].set(first_idx)
-    node_idx = label_encoder(node_idx)
+        for i in range(len(node_idx)):
+            node_idx[i] = node_idx[i].at[jnp.where(node_idx[i] == second_idx)].set(first_idx)
+
+    idx = jnp.cumsum(jnp.array([len(arr) for arr in node_idx]))
+    node_idx = jnp.split(label_encoder(jnp.concatenate(node_idx)), idx[:-1])
+    
+    n_cap = sum(num_caps)
+    n_res = sum(num_res)
+    n_ind = sum(num_inds)
+    n_volt = sum(num_volts)
 
     cap_fis = jnp.cumsum(num_caps)
-    res_fis = jnp.cumsum(num_res) + sum(num_caps)
-    ind_fis = jnp.cumsum(num_inds) + sum(num_res) + sum(num_caps)
-    jv_fis = jnp.cumsum(num_volts) + sum(num_inds) + sum(num_res) + sum(num_caps)
-    cur_fis = jnp.cumsum(num_curs) + sum(num_volts) + sum(num_inds) + sum(num_res) + sum(num_caps)
+    res_fis = jnp.cumsum(num_res) + n_cap
+    ind_fis = jnp.cumsum(num_inds) + n_res + n_cap
+    jv_fis = jnp.cumsum(num_volts) + n_ind + n_res + n_cap
+    cur_fis = jnp.cumsum(num_curs) + n_volt + n_ind + n_res + n_cap
 
     cap_iis = jnp.r_[jnp.array([0]), cap_fis[:-1]]
-    res_iis = jnp.r_[jnp.array([sum(num_caps)]), res_fis[:-1]]
-    ind_iis = jnp.r_[jnp.array([sum(num_caps) + sum(num_res)]), ind_fis[:-1]]
+    res_iis = jnp.r_[jnp.array([n_cap]), res_fis[:-1]]
+    ind_iis = jnp.r_[jnp.array([n_cap + n_res]), ind_fis[:-1]]
     jv_iis = jnp.r_[
-        jnp.array([sum(num_caps) + sum(num_res) + sum(num_inds)]), jv_fis[:-1]
+        jnp.array([n_cap + n_res + n_ind]), jv_fis[:-1]
         ]
     cur_iis = jnp.r_[
-        jnp.array([sum(num_caps) + sum(num_res) + sum(num_inds) + sum(num_volts)]), 
+        jnp.array([n_cap + n_res + n_ind + n_volt]), 
         cur_fis[:-1]
         ]
 
@@ -50,7 +55,8 @@ def explicit_unbatch_graph(graph, Alambda, system_configs):
         jnp.concatenate((graph.nodes[jnp.array([0])], graph_nodes_wo_gnd[n_idx]))
         for n_idx in node_idx
         ]
-    # TODO: need to extract right things...graph.edges = [all_caps, all_resistors, all_inductors, all_volts, all_currs]
+
+    # extract subsystem edges from composite system graph
     graphs = []
     for i in range(num_subsystems):
         edge_i = []
