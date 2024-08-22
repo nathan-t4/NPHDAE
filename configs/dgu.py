@@ -14,11 +14,11 @@ def get_dgu_config(args):
     config.ckpt_every_steps = 5
     config.clear_cache_every_steps = 1
     config.optimizer = 'adam'
-    config.AC = jnp.array([[-1.0], [0.0], [0.0], [1.0]])
-    config.AR = jnp.array([[0.0], [1.0], [-1.0], [0.0]])
-    config.AL = jnp.array([[0.0], [0.0], [1.0], [-1.0]])
-    config.AV = jnp.array([[-1.0], [1.0], [0.0], [0.0]])
-    config.AI = jnp.array([[1.0], [0.0], [0.0], [-1.0]])
+    config.AC = jnp.array([[0.0], [0.0], [1.0]])
+    config.AR = jnp.array([[1.0], [-1.0], [0.0]])
+    config.AL = jnp.array([[0.0], [1.0], [-1.0]])
+    config.AV = jnp.array([[1.0], [0.0], [0.0]])
+    config.AI = jnp.array([[0.0], [0.0], [-1.0]])
 
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir

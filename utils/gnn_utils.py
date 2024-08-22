@@ -165,7 +165,9 @@ def get_system_config(AC, AR, AL, AV, AI, Alambda=None):
     #         num_capacitors+num_inductors, 
     #         num_capacitors+num_inductors+num_nodes+num_volt_sources
     #         )
+    
     diff_indices, alg_indices = get_diff_and_alg_indices(E)
+    alg_eq_indices = get_alg_eq_indices(E)
     num_diff_vars = len(diff_indices) 
     num_alg_vars = len(alg_indices)
 
@@ -188,6 +190,7 @@ def get_system_config(AC, AR, AL, AV, AI, Alambda=None):
         'B': B,
         'diff_indices': diff_indices,
         'alg_indices': alg_indices,
+        'alg_eq_indices': alg_eq_indices,
         'num_diff_vars': num_diff_vars,
         'num_alg_vars': num_alg_vars,
         'is_k': False,
@@ -257,6 +260,7 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
     B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
 
     diff_indices, alg_indices = get_diff_and_alg_indices(E)
+    alg_eq_indices = get_alg_eq_indices(E)
     num_diff_vars = len(diff_indices)
     num_alg_vars = len(alg_indices)
 
@@ -279,6 +283,7 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
         'B': B,
         'diff_indices': diff_indices,
         'alg_indices': alg_indices,
+        'alg_eq_indices': alg_eq_indices,
         'num_diff_vars': num_diff_vars,
         'num_alg_vars': num_alg_vars,
         'is_k': True,
@@ -343,7 +348,87 @@ def get_B_bar_matrix(system_config):
     
     return B_bar
 
+def get_B_hats(system_configs, Alambda):
+    num_subsystems = len(system_configs)
+    num_capacitors = [cfg['num_capacitors'] for cfg in system_configs]
+    num_inductors = [cfg['num_inductors'] for cfg in system_configs]
+    num_volt_sources = [cfg['num_volt_sources'] for cfg in system_configs]
+    num_nodes = [cfg['num_nodes'] for cfg in system_configs]
+    state_dims = [cfg['state_dim'] for cfg in system_configs]
+
+    Alambdas = [
+        Alambda[sum(num_nodes[:i]) : sum(num_nodes[:i+1])]
+        for i in range(num_subsystems)
+        ]
+    
+    num_lamb = len(Alambda.T)
+
+    system_k_idx = -1
+
+    # TODO: Define B_hat in get_system_config in gnn_utils
+    B_hats = []
+    for i, cfg in enumerate(system_configs):            
+        # Find the index of the k-th system
+        if cfg['is_k']:
+            if system_k_idx > 0:
+                raise ValueError(f"Last system has already been set to {system_k_idx}. Make sure there is only one subsystem with subsystem_config['last_system'] = True")
+            else:
+                system_k_idx = i
+                B_hat_k = jnp.concatenate((
+                    jnp.zeros((state_dims[i]-num_lamb, 1)), jnp.ones((num_lamb,1))
+                ))
+                B_hats = [*B_hats, B_hat_k]
+        else:
+            B_hat_i = jnp.concatenate((
+                Alambdas[i], 
+                jnp.zeros((num_inductors[i]+num_capacitors[i]+num_volt_sources[i], num_lamb))
+            ))
+            B_hats = [*B_hats, B_hat_i]
+
+    return B_hats
+
+def get_system_k_idx(system_configs):
+    system_k_idx = -1
+    for i, cfg in enumerate(system_configs):            
+        # Find the index of the k-th system
+        if cfg['is_k']:
+            if system_k_idx > 0:
+                raise ValueError(f"Last system has already been set to {system_k_idx}. Make sure there is only one subsystem with subsystem_config['last_system'] = True")
+            else:
+                system_k_idx = i
+    
+    assert(system_k_idx != -1), \
+            "k-th system index has not been set. \
+            Make sure that one system config in self.system_configs has cfg['is_k'] = True!"
+    
+    return system_k_idx
+
 def get_diff_and_alg_indices(E):
-    diff_indices = jnp.where(jnp.array([(E[row, :] != 0.0).any() for row in range(E.shape[0])]))[0]
-    alg_indices = jnp.where(jnp.array([(E[row, :] == 0.0).all() for row in range(E.shape[0])]))[0]
+    diff_indices = jnp.where(jnp.array([(E[:, col] != 0.0).any() for col in range(E.shape[1])]))[0]
+    alg_indices = jnp.where(jnp.array([(E[:, col] == 0.0).all() for col in range(E.shape[1])]))[0]
     return diff_indices, alg_indices
+
+def get_alg_eq_indices(E):
+    alg_eq_indices = jnp.where(jnp.array([(E[row, :] == 0.0).all() for row in range(E.shape[0])]))[0]
+    return alg_eq_indices
+
+def nonzero_columns(matrix):
+  """Returns the nonzero columns of a matrix.
+
+  Args:
+    matrix: A JAX array representing the input matrix.
+
+  Returns:
+    A JAX array containing the nonzero columns of the input matrix.
+  """
+
+  # Get the indices of nonzero elements
+  nonzero_indices = jnp.nonzero(matrix)
+
+  # Extract the column indices
+  column_indices = jnp.unique(nonzero_indices[1])
+
+  # Extract nonzero columns using the mask
+  nonzero_columns = matrix[:, column_indices]
+
+  return nonzero_columns

@@ -3,8 +3,32 @@ from utils.gnn_utils import graph_from_incidence_matrices
 
 @register_pytree_node_class
 class TestGraphBuilder(GraphBuilder):
+    """
+        Transforms dataset of states to graphs
+        The nodes represent to node voltages of the circuit, where the ground node Vg=0 is the first node
+        The edges represent two-terminal electrical components
+        - includes capacitors, resistors, inductors, voltage sources, and current sources
+    """
     def __init__(self, path, AC, AR, AL, AV, AI):
-        super().__init__(path, AC, AR, AL, AV, AI, add_undirected_edges=False, add_self_loops=False)
+        assert (len(AC) == len(AR) == len(AL) == len(AV) == len(AI))
+        self.AC = AC
+        self.AR = AR
+        self.AL = AL
+        self.AV = AV
+        self.AI = AI
+
+        self.num_nodes = len(AC)
+        self.num_capacitors = 0 if (AC == 0.0).all() else len(AC.T)
+        self.num_resistors =  0 if (AR == 0.0).all() else len(AR.T)
+        self.num_inductors =  0 if (AL == 0.0).all() else len(AL.T)
+        self.num_volt_sources = 0 if (AV == 0.0).all() else len(AV.T)
+        self.num_cur_sources = 0 if (AI == 0.0).all() else len(AI.T)
+        self._num_states = self.num_capacitors + self.num_inductors + self.num_nodes + self.num_volt_sources
+        
+        self.n_node = jnp.array([self.num_nodes])
+        self.n_edge = jnp.array([self.num_capacitors + self.num_inductors + self.num_resistors + self.num_volt_sources + self.num_cur_sources])
+
+        super().__init__(path, add_undirected_edges=False, add_self_loops=False)
 
     def _load_data(self, path):
         data = np.load(path, allow_pickle=True)
@@ -31,11 +55,11 @@ class TestGraphBuilder(GraphBuilder):
         other_nodes = jnp.array(
             state[:,:, 
                   self.num_capacitors+self.num_inductors : 
-                  self.num_capacitors+self.num_inductors+(self.num_nodes-1)]
+                  self.num_capacitors+self.num_inductors+self.num_nodes]
         )
         # Append ground node
         self._Vs = jnp.concatenate((ground_node, other_nodes), axis=-1) 
-        self._jv = jnp.array(state[:,:,self.num_capacitors+self.num_inductors+(self.num_nodes-1) : self.num_capacitors+self.num_inductors+(self.num_nodes-1)+self.num_volt_sources])
+        self._jv = jnp.array(state[:,:,self.num_capacitors+self.num_inductors+self.num_nodes : self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources])
         self._is = self._control[:,:,0:self.num_cur_sources]
 
         self._H = 0.5 * (jnp.linalg.vecdot(self._Qs, self._Qs) / self.C 
@@ -67,7 +91,7 @@ class TestGraphBuilder(GraphBuilder):
             (self.AC, self.AR, self.AL, self.AV, self.AI)
             )
         
-        self.volt_indices = jnp.where(self.AV == 1)[0]
+        self.volt_indices = jnp.where(self.AV == 1)[0] + 1 # for ground node
 
     def get_control(self, trajs, ts):
         return self._control[trajs, ts]
@@ -87,7 +111,7 @@ class TestGraphBuilder(GraphBuilder):
         pred_diff_states = jnp.concatenate((pred_Qs, pred_Phis), axis=-1).squeeze()
         pred_alg_states = jnp.concatenate((pred_Vs, pred_jv), axis=-1).squeeze()
         pred_H = jnp.array([graph.globals[0]])
-        residual = jnp.array([jnp.sum((graph.globals[1:]))])
+        residual = jnp.array([graph.globals[1]])
         return (pred_diff_states, pred_alg_states, pred_H, residual) 
     
     def get_batch_pred_data(self, graphs) -> Sequence[jraph.GraphsTuple]:
@@ -131,12 +155,13 @@ class TestGraphBuilder(GraphBuilder):
             I = jnp.array([0])
             V = jnp.array([0])
 
-        nodes = e.reshape(-1,1)
-        resistor_current = jnp.matmul(self.AR.T, e) # This is g
+        # Add ground node
+        nodes = jnp.concatenate((jnp.array([0]), e)).reshape(-1,1)
         edges = []
         if self.num_capacitors > 0:
             edges.append(Q)
         if self.num_resistors > 0:
+            resistor_current = jnp.matmul(self.AR.T, e) # This is g
             edges.append(resistor_current)
         if self.num_inductors > 0:
             edges.append(Phi)
@@ -145,7 +170,6 @@ class TestGraphBuilder(GraphBuilder):
         if self.num_cur_sources > 0:
             edges.append(I)
         edges = jnp.stack(edges)
-      # edges = jnp.stack((Q, resistor_current, Phi, jv, I))
 
         if set_nodes:
             raise NotImplementedError()
@@ -183,7 +207,7 @@ class TestGraphBuilder(GraphBuilder):
         phi = graph.edges[
             self.num_capacitors+self.num_resistors : 
             self.num_capacitors+self.num_resistors+self.num_inductors, 0]
-        e = graph.nodes.squeeze()
+        e = graph.nodes[1:].squeeze()
         jv = graph.edges[
             self.num_capacitors+self.num_resistors+self.num_inductors :
             self.num_capacitors+self.num_resistors+self.num_inductors+self.num_volt_sources, 0]
@@ -201,7 +225,8 @@ class TestGraphBuilder(GraphBuilder):
         if self.num_capacitors > 0:
             edges.append(self._Qs[traj_idx, t])
         if self.num_resistors > 0:
-            resistor_current = jnp.matmul(self.AR.T, self._Vs[traj_idx, t]) # this is g
+            # Start at 1: to ignore ground node
+            resistor_current = jnp.matmul(self.AR.T, self._Vs[traj_idx, t, 1:]) # this is g
             # resistor_current = self._jv[traj_idx, t]
             edges.append(resistor_current)
         if self.num_inductors > 0:
@@ -237,7 +262,7 @@ class TestGraphBuilder(GraphBuilder):
     def get_state(self, traj_idx, t) -> jnp.ndarray:
         return jnp.array([self._Qs[traj_idx, t],
                           self._Phis[traj_idx, t],
-                          self._Vs[traj_idx, t],
+                          self._Vs[traj_idx, t, 1:], # exclude ground node
                           self._jv[traj_idx, t],])
     
     def get_state_batch(self, traj_idxs, t0s) -> jnp.ndarray:
@@ -272,11 +297,11 @@ class TestGraphBuilder(GraphBuilder):
             ] = [f'Phi_{i}' for i in range(self.num_inductors)]
         values[
             self.num_capacitors+self.num_inductors : 
-            self.num_capacitors+self.num_inductors+self.num_nodes-1
-            ] = [f'V_{i}' for i in range(self.num_nodes-1)]
+            self.num_capacitors+self.num_inductors+self.num_nodes
+            ] = [f'V_{i}' for i in range(self.num_nodes)]
         values[
-            self.num_capacitors+self.num_inductors+self.num_nodes-1 : 
-            self.num_capacitors+self.num_inductors+self.num_nodes-1+self.num_volt_sources
+            self.num_capacitors+self.num_inductors+self.num_nodes : 
+            self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources
             ] = [f'jv_{i}' for i in range(self.num_volt_sources)]
         values.append('H')
         values.append('residual')
@@ -303,7 +328,7 @@ class TestGraphBuilder(GraphBuilder):
     
     def tree_flatten(self):
         children = ()
-        aux_data = (self._dt, self.R, self.L, self.C, self.system_params, self._Qs, self._Phis, self._Vs, self._jv, self._is, self._H, self._control, self._residuals, self._num_trajectories, self._num_timesteps, self._num_states, self.senders, self.receivers, self.volt_indices, self.num_capacitors, self.num_resistors, self.num_inductors, self.num_volt_sources, self.num_cur_sources)
+        aux_data = (self._dt, self.R, self.L, self.C, self.system_params, self._Qs, self._Phis, self._Vs, self._jv, self._is, self._H, self._control, self._residuals, self._num_trajectories, self._num_timesteps, self._num_states, self.senders, self.receivers, self.volt_indices, self.num_capacitors, self.num_resistors, self.num_inductors, self.num_volt_sources, self.num_cur_sources, self.n_node, self.n_edge, self.AC, self.AR, self.AL, self.AV, self.AI)
         return (children, aux_data)
     
     @classmethod
@@ -334,6 +359,13 @@ class TestGraphBuilder(GraphBuilder):
         obj.num_inductors         = aux_data[21]
         obj.num_volt_sources      = aux_data[22]
         obj.num_cur_sources       = aux_data[23]
+        obj.n_node                = aux_data[24]
+        obj.n_edge                = aux_data[25]
+        obj.AC                    = aux_data[26]
+        obj.AR                    = aux_data[27]
+        obj.AL                    = aux_data[28]
+        obj.AV                    = aux_data[29]
+        obj.AI                    = aux_data[30]
 
         obj._setup_graph_params()
         return obj

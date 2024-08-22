@@ -30,11 +30,11 @@ def get_comp_gnn_config(args):
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
     config.paths.comp_data_path = 'results/microgrid_dae_data/val_5_800.pkl'
-    config.paths.ckpt_steps = [52, None, 52]
+    config.paths.ckpt_steps = [50, None, 50]
     config.paths.ckpt_dirs = [
-        'results/GNS/DGU/0814-1804/checkpoint/best_model',
+        'results/GNS/DGU/0820-1101/checkpoint/best_model',
         None,
-        'results/GNS/DGU/0814-1804/checkpoint/best_model',
+        'results/GNS/DGU/0820-1101/checkpoint/best_model',
     ]
     config.paths.training_data_paths = [
         'dgu_dae_data/train_500_700.pkl',
@@ -43,11 +43,11 @@ def get_comp_gnn_config(args):
     ]
 
     config.incidence_matrices_dgu = ml_collections.ConfigDict()
-    config.incidence_matrices_dgu.AC = jnp.array([[-1.0], [0.0], [0.0], [1.0]])
-    config.incidence_matrices_dgu.AR = jnp.array([[0.0], [1.0], [-1.0], [0.0]])
-    config.incidence_matrices_dgu.AL = jnp.array([[0.0], [0.0], [1.0], [-1.0]])
-    config.incidence_matrices_dgu.AV = jnp.array([[-1.0], [1.0], [0.0], [0.0]])
-    config.incidence_matrices_dgu.AI = jnp.array([[1.0], [0.0], [0.0], [-1.0]])
+    config.incidence_matrices_dgu.AC = jnp.array([[0.0], [0.0], [1.0]])
+    config.incidence_matrices_dgu.AR = jnp.array([[-1.0], [1.0], [0.0]])
+    config.incidence_matrices_dgu.AL = jnp.array([[0.0], [1.0], [-1.0]])
+    config.incidence_matrices_dgu.AV = jnp.array([[1.0], [0.0], [0.0]])
+    config.incidence_matrices_dgu.AI = jnp.array([[0.0], [0.0], [-1.0]])
 
     config.optimizer_params_1 = ml_collections.ConfigDict()
     config.optimizer_params_1.learning_rate = 1e-4
@@ -74,11 +74,11 @@ def get_comp_gnn_config(args):
     config.net_params_1.dropout_rate = 0.5
 
     config.incidence_matrices_dgu = ml_collections.ConfigDict()
-    config.incidence_matrices_dgu.AC = jnp.array([[-1.0], [0.0], [0.0], [1.0]])
-    config.incidence_matrices_dgu.AR = jnp.array([[0.0], [1.0], [-1.0], [0.0]])
-    config.incidence_matrices_dgu.AL = jnp.array([[0.0], [0.0], [1.0], [-1.0]])
-    config.incidence_matrices_dgu.AV = jnp.array([[-1.0], [1.0], [0.0], [0.0]])
-    config.incidence_matrices_dgu.AI = jnp.array([[1.0], [0.0], [0.0], [-1.0]])
+    config.incidence_matrices_dgu.AC = jnp.array([[0.0], [0.0], [1.0]])
+    config.incidence_matrices_dgu.AR = jnp.array([[-1.0], [1.0], [0.0]])
+    config.incidence_matrices_dgu.AL = jnp.array([[0.0], [1.0], [-1.0]])
+    config.incidence_matrices_dgu.AV = jnp.array([[1.0], [0.0], [0.0]])
+    config.incidence_matrices_dgu.AI = jnp.array([[0.0], [0.0], [-1.0]])
 
     config.optimizer_params_2 = ml_collections.ConfigDict()
     config.optimizer_params_2.learning_rate = 1e-4
@@ -105,11 +105,11 @@ def get_comp_gnn_config(args):
     config.net_params_2.dropout_rate = 0.5
 
     config.incidence_matrices_tl = ml_collections.ConfigDict()
-    config.incidence_matrices_tl.AC = jnp.array([[0.0], [0.0], [0.0], [0.0]])
-    config.incidence_matrices_tl.AR = jnp.array([[0.0], [-1.0], [1.0], [0.0]])
-    config.incidence_matrices_tl.AL = jnp.array([[0.0], [0.0], [-1.0], [1.0]])
-    config.incidence_matrices_tl.AV = jnp.array([[0.0], [0.0], [0.0], [0.0]])
-    config.incidence_matrices_tl.AI = jnp.array([[0.0], [0.0], [0.0], [0.0]])
+    config.incidence_matrices_tl.AC = jnp.array([[0.0], [0.0], [0.0]])
+    config.incidence_matrices_tl.AR = jnp.array([[-1.0], [1.0], [0.0]])
+    config.incidence_matrices_tl.AL = jnp.array([[0.0], [-1.0], [1.0]])
+    config.incidence_matrices_tl.AV = jnp.array([[0.0], [0.0], [0.0]])
+    config.incidence_matrices_tl.AI = jnp.array([[0.0], [0.0], [0.0]])
 
     config.incidence_matrices = [
         config.incidence_matrices_dgu, 
@@ -124,45 +124,51 @@ def get_comp_gnn_config(args):
     ]
 
     # TODO: check that these matrices are consistent with subsystems
+    # THESE INCLUDE GROUND NODE
     config.composite_incidence_matrices = ml_collections.ConfigDict()
-    config.composite_incidence_matrices.AC = jnp.array([[-1.0, -1.0],
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [1.0, 0.0], 
-                                                        [0.0, 0.0],         
-                                                        [0.0, 1.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0]])
-    config.composite_incidence_matrices.AR = jnp.array([[0.0, 0.0, 0.0],
-                                                        [-1.0, 0.0, 0.0], 
-                                                        [1.0, 0.0, 0.0],
-                                                        [0.0, 1.0, 0.0],
-                                                        [0.0, -1.0, 0.0],
-                                                        [0.0, 0.0, 0.0],
-                                                        [0.0, 0.0, 1.0],
-                                                        [0.0, 0.0, -1.0]])
-    config.composite_incidence_matrices.AL = jnp.array([[0.0, 0.0, 0.0],
-                                                        [0.0, 0.0, 0.0],
-                                                        [-1.0, 0.0, 0.0],
-                                                        [1.0, 0.0, 0.0],
-                                                        [0.0, 1.0, 0.0],
-                                                        [0.0, -1.0, 0.0],
-                                                        [0.0, 0.0, 1.0],
-                                                        [0.0, 0.0, -1.0]])
-    config.composite_incidence_matrices.AV = jnp.array([[-1.0, -1.0],
-                                                        [1.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0],         
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 1.0]])
-    config.composite_incidence_matrices.AI = jnp.array([[-1.0, -1.0],
-                                                        [1.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0],         
-                                                        [0.0, 0.0], 
-                                                        [0.0, 0.0], 
-                                                        [0.0, 1.0]])
+    config.composite_incidence_matrices.AC = jnp.array(
+                    # [[-1.0, -1.0],
+                    [[0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [1.0, 0.0], 
+                    [0.0, 0.0],         
+                    [0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, 1.0]])
+    config.composite_incidence_matrices.AR = jnp.array(
+                    # [[0.0, 0.0, 0.0],
+                    [[-1.0, 0.0, 0.0], 
+                    [1.0, 0.0, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, -1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 0.0]])
+    config.composite_incidence_matrices.AL = jnp.array(
+                    # [[0.0, 0.0, 0.0],
+                    [[0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, -1.0],
+                    [0.0, 1.0, 1.0]])
+    config.composite_incidence_matrices.AV = jnp.array(
+                    # [[-1.0, -1.0],
+                    [[1.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0],         
+                    [0.0, 1.0], 
+                    [0.0, 0.0], 
+                    [0.0, 0.0]])
+    config.composite_incidence_matrices.AI = jnp.array(
+                    # [[1.0, 1.0],
+                    [[0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [-1.0, 0.0], 
+                    [0.0, 0.0],         
+                    [0.0, 0.0], 
+                    [0.0, 0.0], 
+                    [0.0, -1.0]])
     return config

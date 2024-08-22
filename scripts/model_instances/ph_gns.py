@@ -216,6 +216,7 @@ class PHGNS_NDAE(nn.Module):
 
         self.differential_vars = self.system_config['diff_indices']
         self.algebraic_vars = self.system_config['alg_indices']
+        self.algebraic_eqs = self.system_config['alg_eq_indices']
 
         P, L, U = jax.scipy.linalg.lu(self.E)
         self.P_inv = jnp.linalg.inv(P)
@@ -290,10 +291,25 @@ class PHGNS_NDAE(nn.Module):
             return H, processed_graph
         
         def decoder_postprocessor(cur_state, control):
-            H, processed_graph = H_from_state(cur_state)
+            (H, processed_graph), dH = jax.value_and_grad(H_from_state, has_aux=True)(cur_state)
             next_y = self.alg_vars_from_graph(processed_graph, self.algebraic_vars)
 
-            def dynamics_function(z, t):
+            def dynamics_function(x, t):
+                # dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+                e = x[
+                    self.num_capacitors+self.num_inductors :
+                    self.num_capacitors+self.num_inductors+self.num_nodes
+                ]
+                jV = x[
+                    self.num_capacitors+self.num_inductors+self.num_nodes :
+                    self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources
+                    ]
+                uC = dH[0 : self.num_capacitors]
+                jL = dH[
+                    self.num_capacitors : 
+                    self.num_capacitors+self.num_inductors
+                    ]
+                z = jnp.concatenate((e, jL, uC, jV))
                 return jnp.matmul(self.J, z) - self.r(z) + jnp.matmul(self.B, control)
             
             def f(x, t):
@@ -311,15 +327,17 @@ class PHGNS_NDAE(nn.Module):
                 z = jnp.zeros((self.state_dim))
                 z = z.at[self.differential_vars].set(x)
                 z = z.at[self.algebraic_vars].set(next_y)
-                # z = jnp.concatenate((x, next_y))
-                # differential_eqs = self.U_nonzero_inv @ (self.L_inv @ self.P_inv @ dynamics_function(z, t))[self.differential_vars]
-                differential_eqs = dynamics_function(z, t)[self.differential_vars]
+                differential_eqs = self.U_nonzero_inv @ (
+                    self.L_inv @ self.P_inv @ dynamics_function(z, t)
+                    )[self.differential_vars]
                 return differential_eqs
             
             def get_residuals(x, t):
-                g = dynamics_function(x, t)
-                residuals = jnp.abs(g[self.algebraic_vars])
-                return residuals
+                # g = 0
+                # residual sum of squares
+                # Changed from self.algebraic_vars to self.algebraic_eqs 
+                g = jnp.sum(dynamics_function(x, t)[self.algebraic_eqs] ** 2)
+                return g
 
             if self.integration_method == 'adam_bashforth':
                 integrator = integrator_factory(self.integration_method)
@@ -345,11 +363,11 @@ class PHGNS_NDAE(nn.Module):
                 next_state = solver.solve_dae_one_timestep_rk4(cur_state, t, self.dt, params=None)
                 
             residuals = get_residuals(next_state, t)
-            next_globals = jnp.concatenate((jnp.array([H]), residuals))
+            next_globals = jnp.stack((H, residuals))
             graph = self.state_to_graph(state=next_state, 
-                                          control=control, 
-                                          set_ground_and_control=True,
-                                          globals=next_globals)
+                                        control=control, 
+                                        set_ground_and_control=True,
+                                        globals=next_globals)
             
             return graph
 

@@ -47,6 +47,7 @@ def compose(config):
     alg_vars_from_graph = []
     incidence_matrices = []
     system_configs = []
+    ACs = []; ARs = []; ALs = []; AVs = []; AIs = []
 
     for i in range(num_subsystems):
         AC = config.incidence_matrices[i].AC
@@ -54,8 +55,14 @@ def compose(config):
         AL = config.incidence_matrices[i].AL
         AV = config.incidence_matrices[i].AV
         AI = config.incidence_matrices[i].AI
-
+        
         incidence_matrices.append((AC, AR, AL, AV, AI))
+
+        ACs.append(AC)
+        ARs.append(AR)
+        ALs.append(AL)
+        AVs.append(AV)
+        AIs.append(AI)
 
         if learned_subsystem[i]:
             gb = gb_factory(subsystem_names[i])(
@@ -74,8 +81,6 @@ def compose(config):
             net_params[i].graph_to_state = g_to_s
             net_params[i].state_to_graph = s_to_g
             net_params[i].alg_vars_from_graph = alg_from_g
-            net_params[i].differential_vars = gb.differential_vars
-            net_params[i].algebraic_vars = gb.algebraic_vars
             net_params[i].edge_idxs = gb.edge_idxs
             net_params[i].node_idxs = gb.node_idxs
             net_params[i].include_idxs = gb.include_idxs
@@ -98,8 +103,8 @@ def compose(config):
 
             # TODO: move somewhere...
             # This is Alambda for subsystem k (transmission line)
-            Alambda_k = Alambda[3:6] # (num_nodes_1-1) : (num_nodes_1+num_nodes_2)-2
-            Alambda_k = jnp.concatenate((jnp.zeros((1,2)), Alambda_k)) # add ground node
+            Alambda_k = Alambda[3:6] # (num_nodes_1) : (num_nodes_1+num_nodes_2)
+            # Alambda_k = jnp.concatenate((jnp.zeros((1,2)), Alambda_k)) # add ground node
             system_config = get_system_k_config(*incidence_matrices[i], Alambda_k)
             system_config['is_k'] = True
         
@@ -108,7 +113,10 @@ def compose(config):
     init_t = 0.0
     init_graph = eval_gb.get_graph(traj_idx=0, t=0)
     init_graphs = explicit_unbatch_graph(init_graph, Alambda, system_configs)
-    init_graph = jraph.batch(init_graphs)
+    # init_graph = jraph.batch(init_graphs)
+    # init_graph = explicit_batch_graphs(
+    #     init_graphs, Alambda, system_configs, init_graph.senders, init_graph.receivers
+    #     )
 
     init_control = eval_gb._control[0,0]
     init_controls = explicit_unbatch_control(init_control, system_configs)
@@ -159,6 +167,8 @@ def compose(config):
     ode_integration_method = 'adam_bashforth'
 
     # Initialize composite GNS
+    comp_sys_config = get_composite_system_config(system_configs, Alambda)
+
     comp_net_config = {
         'ode_integration_method': ode_integration_method,
         'dt': dt,
@@ -168,6 +178,7 @@ def compose(config):
         'state_to_graph': state_to_graph,
         'alg_vars_from_graph': alg_vars_from_graph,
         'system_configs': system_configs,
+        'composite_system_config': comp_sys_config,
         'Alambda': Alambda,
     }
 
@@ -175,7 +186,7 @@ def compose(config):
     init_lamb = None # jnp.zeros(num_lambs) # None 
     comp_net = CompPHGNS(**comp_net_config)
     comp_params = comp_net.init(
-        init_rng, init_graph, init_control, init_lamb, init_t, net_rng
+        init_rng, init_graphs, init_control, init_lamb, init_t, net_rng
         )
     comp_tx = optax.adam(1e-3) # The learning rate is irrelevant
 
@@ -192,11 +203,12 @@ def compose(config):
         t0_idxs = tf_idxs - T
         ts = tf_idxs * net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
-        graph = jraph.batch(explicit_unbatch_graph(graph, Alambda, system_configs))
+        graph = explicit_unbatch_graph(graph, Alambda, system_configs)
+        # graph = jraph.batch(graph)
         controls = eval_gb.get_control(traj_idx, t0_idxs)
         exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
         get_pred_data = eval_gb.get_pred_data
-        get_batch_pred_data = eval_gb.get_batch_pred_data
+        # get_batch_pred_data = eval_gb.get_batch_pred_data
         
         def forward_pass(carry, inputs):  
             graph, lamb = carry
@@ -204,7 +216,10 @@ def compose(config):
             graphs, next_lamb = state.apply_fn(
                 state.params, graph, control, lamb, t, jax.random.key(config.seed)
             )
-            pred_data = get_batch_pred_data(graphs)
+            # TODO: make sure graphs are correct...
+            # TODO: merge all graphs to graph
+            graph = explicit_batch_graphs(graphs)
+            pred_data = get_pred_data(graphs)
             graphs = [graph._replace(globals=None) for graph in graphs]
             return (graphs, next_lamb), pred_data
 
@@ -222,7 +237,9 @@ def compose(config):
         exp_data = np.concatenate(exp_data, axis=1)
         return pred_data, exp_data, eval_metrics
     
+    
     print('##################################################')
+    subsystem_names = np.array(subsystem_names)
     print(f"Evaluating composition of subsystems {subsystem_names}")
     print(f"The known subsystems are {subsystem_names[[i for i, b in enumerate(learned_subsystem) if b]]}")
     print(f"Saving plots to {os.path.relpath(plot_dir)}")

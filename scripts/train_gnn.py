@@ -70,8 +70,6 @@ def eval(config: ml_collections.ConfigDict):
     net_params.include_idxs = train_gb.include_idxs
     net_params.edge_idxs = train_gb.edge_idxs
     net_params.node_idxs = train_gb.node_idxs
-    net_params.differential_vars = train_gb.differential_vars
-    net_params.algebraic_vars = train_gb.algebraic_vars
 
     net = create_net(net_params)
     net.training = False
@@ -117,7 +115,7 @@ def eval(config: ml_collections.ConfigDict):
         print(f'Inference time {end-start} [sec] for {len(ts)} forward passes')
 
         losses = [
-            jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+            jnp.mean(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
         ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
         pred_data = np.concatenate(pred_data, axis=1)
@@ -148,7 +146,7 @@ def eval(config: ml_collections.ConfigDict):
         
         writer.write_scalars(i, add_prefix_to_keys({'loss': error_sums.mean() / num_eval_timesteps}, 'eval'))
         
-    rollout_error_state = error_sums / (num_eval_trajs * num_eval_timesteps)
+    rollout_error_state = error_sums / num_eval_trajs
     rollout_error = rollout_error_state.mean()
 
     print('##################################################')
@@ -229,6 +227,7 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     print('system indices')
     print(f"Differential indices {net_params.system_config['diff_indices']}")
     print(f"Algebraic indices {net_params.system_config['alg_indices']}")
+    print(f"Algebraic equation indices {net_params.system_config['alg_eq_indices']}")
     print('##################################################')
 
     t0 = 0.0
@@ -280,6 +279,8 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                 algebraic_state_targets = batch_data[3]
                 hamiltonian_target = batch_data[4]
                 residuals_target = batch_data[5]
+                state_targets = jnp.concatenate((differential_state_targets, algebraic_state_targets), axis=-1)
+
                 pred_graphs = state.apply_fn(
                     params, batch_graphs, batch_control, t, net_rng, rngs={'dropout': dropout_rng}
                 )
@@ -288,9 +289,12 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                 algebraic_state_predictions = predictions[1]
                 hamiltonian_prediction = predictions[2]
                 residuals_prediction = jnp.sum(jnp.abs(predictions[3]), axis=-1).reshape(-1, 1)
-                loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
-                        + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
-                        + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean()
+                state_predictions = jnp.concatenate((differential_state_predictions, algebraic_state_predictions), axis=-1)
+                loss = optax.squared_error(state_predictions, state_targets).mean() \
+                     + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean()
+                # loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
+                #         + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
+                        # + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean()
                 # loss = optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
                 #      + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean() \
                 #      + 0.1 * optax.squared_error(residuals_prediction, residuals_target).mean()
@@ -334,7 +338,7 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
         _, pred_data = jax.lax.scan(forward_pass, graph, (controls, t0_idxs * net.dt))
         
         losses = [
-            jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+            jnp.mean(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
         ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
         pred_data = np.concatenate(pred_data, axis=1)
@@ -417,18 +421,18 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                                  plot_dir=os.path.join(dirs['plot'], f'traj_{i}'),
                                  prefix=f'Epoch {epoch}: eval_traj_{i}')
 
-                rollout_error_state = np.array(error_sums) / (num_eval_trajs * eval_gb._num_timesteps)
+                rollout_error_state = np.array(error_sums) / num_eval_trajs
 
                 print('##################################################')
                 print(f'Epoch {epoch} evaluation:\n \t Differential state errors {rollout_error_state[0]} \n \t Algebraic states error {rollout_error_state[1]} \n \t Hamiltonian error {rollout_error_state[2]} \n \t Sum residuals {rollout_error_state[3]}')
                 print('##################################################')
-                rollout_error = rollout_error_state[0] + rollout_error_state[1]
-                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error_state[0]}, 'eval_diff'))
-                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error_state[1]}, 'eval_alg'))
+                rollout_state_error = rollout_error_state[0] + rollout_error_state[1]
+                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error_state[0]}, 'EVAL: differential_states'))
+                writer.write_scalars(epoch, add_prefix_to_keys({'loss': rollout_error_state[1]}, 'EVAL: algebraic_states'))
 
-                if rollout_error < min_error: 
+                if rollout_state_error < min_error: 
                     # Save best model
-                    min_error = rollout_error
+                    min_error = rollout_state_error
                     ckpt_step = epoch
                     print(f'Saving best model at epoch {epoch}')
                     with report_progress.timed('checkpoint'):
@@ -436,13 +440,13 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                         ckpt_mngr.wait_until_finished()
 
                 if epoch > training_params.min_epochs: # train for at least 'min_epochs' epochs
-                    early_stop = early_stop.update(rollout_error)
+                    early_stop = early_stop.update(rollout_state_error)
                     if early_stop.should_stop:
                         print(f'Met early stopping criteria, breaking at epoch {epoch}')
                         training_params.num_epochs = epoch - init_epoch
                         is_last_step = True
                 if optimizing_hparams:
-                    optimizing_hparams.report(rollout_error, step=epoch)
+                    optimizing_hparams.report(rollout_state_error, step=epoch)
 
         if epoch % config.log_every_steps == 0 or is_last_step:
             writer.write_scalars(epoch, add_prefix_to_keys(train_metrics.compute(), 'train'))
