@@ -295,7 +295,7 @@ class PHGNS_NDAE(nn.Module):
             next_y = self.alg_vars_from_graph(processed_graph, self.algebraic_vars)
 
             def dynamics_function(x, t):
-                # dH, _ = jax.grad(H_from_state, has_aux=True)(x)
+                dH, _ = jax.grad(H_from_state, has_aux=True)(x)
                 e = x[
                     self.num_capacitors+self.num_inductors :
                     self.num_capacitors+self.num_inductors+self.num_nodes
@@ -332,12 +332,12 @@ class PHGNS_NDAE(nn.Module):
                     )[self.differential_vars]
                 return differential_eqs
             
-            def get_residuals(x, t):
+            def g(x, t):
                 # g = 0
                 # residual sum of squares
                 # Changed from self.algebraic_vars to self.algebraic_eqs 
-                g = jnp.sum(dynamics_function(x, t)[self.algebraic_eqs] ** 2)
-                return g
+                rss = jnp.sum(dynamics_function(x, t)[self.algebraic_eqs] ** 2)
+                return rss
 
             if self.integration_method == 'adam_bashforth':
                 integrator = integrator_factory(self.integration_method)
@@ -362,7 +362,7 @@ class PHGNS_NDAE(nn.Module):
                 solver = DAESolver(ff, gg, self.differential_vars, self.algebraic_vars)
                 next_state = solver.solve_dae_one_timestep_rk4(cur_state, t, self.dt, params=None)
                 
-            residuals = get_residuals(next_state, t)
+            residuals = g(next_state, t)
             next_globals = jnp.stack((H, residuals))
             graph = self.state_to_graph(state=next_state, 
                                         control=control, 

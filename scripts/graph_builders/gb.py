@@ -59,7 +59,10 @@ class TestGraphBuilder(GraphBuilder):
         )
         # Append ground node
         self._Vs = jnp.concatenate((ground_node, other_nodes), axis=-1) 
-        self._jv = jnp.array(state[:,:,self.num_capacitors+self.num_inductors+self.num_nodes : self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources])
+        self._jv = jnp.array(
+            state[:,:,self.num_capacitors+self.num_inductors+self.num_nodes : 
+                  self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources]
+                  )
         self._is = self._control[:,:,0:self.num_cur_sources]
 
         self._H = 0.5 * (jnp.linalg.vecdot(self._Qs, self._Qs) / self.C 
@@ -137,7 +140,7 @@ class TestGraphBuilder(GraphBuilder):
     def _setup_graph_params(self):
         pass
 
-    def state_to_graph(self, state, control=None, system_params=None, set_nodes=False, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
+    def state_to_graph(self, state, control=None, system_params=None, set_ground_and_control=False, nodes=None, globals=None) -> jraph.GraphsTuple:
         Q = state[0 : self.num_capacitors]
         Phi = state[self.num_capacitors : self.num_capacitors+self.num_inductors]
         e = state[
@@ -171,8 +174,6 @@ class TestGraphBuilder(GraphBuilder):
             edges.append(I)
         edges = jnp.stack(edges)
 
-        if set_nodes:
-            raise NotImplementedError()
         if set_ground_and_control:
             # Set voltage source
             nodes = nodes.at[0].set(0)

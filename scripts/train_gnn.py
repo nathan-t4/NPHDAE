@@ -290,8 +290,11 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                 hamiltonian_prediction = predictions[2]
                 residuals_prediction = jnp.sum(jnp.abs(predictions[3]), axis=-1).reshape(-1, 1)
                 state_predictions = jnp.concatenate((differential_state_predictions, algebraic_state_predictions), axis=-1)
+
                 loss = optax.squared_error(state_predictions, state_targets).mean() \
-                     + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean()
+                     + 0.01 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean() \
+                     + 0.01 * optax.squared_error(residuals_prediction, residuals_target).mean() \
+                
                 # loss = optax.squared_error(differential_state_predictions, differential_state_targets).mean() \
                 #         + optax.squared_error(algebraic_state_predictions, algebraic_state_targets).mean() \
                         # + 0.1 * optax.squared_error(hamiltonian_prediction, hamiltonian_target).mean()

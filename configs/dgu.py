@@ -50,7 +50,7 @@ def get_dgu_config(args):
     config.net_params.integration_method = 'adam_bashforth'
     config.net_params.dt = 0.01
     config.net_params.T = 1
-    config.net_params.num_mp_steps = 2
+    config.net_params.num_mp_steps = 1
     config.net_params.noise_std = 1e-5
     config.net_params.latent_size = 4
     config.net_params.hidden_layers = 2
