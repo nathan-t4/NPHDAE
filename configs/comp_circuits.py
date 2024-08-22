@@ -20,8 +20,8 @@ def get_comp_gnn_config(args):
                                 [0.0, 0.0],
                                 [0.0, 1.0]])
 
-    config.trial_name = f'{strftime("%m%d-%H%M")}_{config.subsystem_names}'
-    config.rollout_timesteps = 1500
+    config.trial_name = f'{strftime("%m%d-%H%M")}_{"_".join(config.subsystem_names)}'
+    config.rollout_timesteps = 800
     config.log_every_steps = 1
     config.eval_every_steps = 2
     config.ckpt_every_steps = 5
@@ -30,11 +30,11 @@ def get_comp_gnn_config(args):
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
     config.paths.comp_data_path = 'results/microgrid_dae_data/val_5_800.pkl'
-    config.paths.ckpt_steps = [50, None, 50]
+    config.paths.ckpt_steps = [42, None, 42]
     config.paths.ckpt_dirs = [
-        'results/GNS/DGU/0820-1101/checkpoint/best_model',
+        'results/GNS/DGU/0822-1026/checkpoint/best_model',
         None,
-        'results/GNS/DGU/0820-1101/checkpoint/best_model',
+        'results/GNS/DGU/0822-1026/checkpoint/best_model',
     ]
     config.paths.training_data_paths = [
         'dgu_dae_data/train_500_700.pkl',
@@ -61,7 +61,7 @@ def get_comp_gnn_config(args):
     config.net_params_1.integration_method = 'adam_bashforth'
     config.net_params_1.dt = 0.01
     config.net_params_1.T = 1
-    config.net_params_1.num_mp_steps = 2
+    config.net_params_1.num_mp_steps = 1
     config.net_params_1.noise_std = 1e-5
     config.net_params_1.latent_size = 4
     config.net_params_1.hidden_layers = 2
@@ -92,7 +92,7 @@ def get_comp_gnn_config(args):
     config.net_params_2.integration_method = 'adam_bashforth'
     config.net_params_2.dt = 0.01
     config.net_params_2.T = 1
-    config.net_params_2.num_mp_steps = 2
+    config.net_params_2.num_mp_steps = 1
     config.net_params_2.noise_std = 1e-5
     config.net_params_2.latent_size = 4
     config.net_params_2.hidden_layers = 2

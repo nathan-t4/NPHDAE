@@ -247,10 +247,6 @@ class CompPHGNS(nn.Module):
         self.L_inv = self.composite_system_config['L_inv']
         self.U_inv = self.composite_system_config['U_inv']
 
-        jax.debug.print('E {}', self.E)
-        jax.debug.print('J {}', self.J)
-        jax.debug.print('B {}', self.B_bar)
-
         self.ode_integrator = integrator_factory(self.ode_integration_method)
 
     def __call__(self, graphs, control, lamb, t, rng):
@@ -309,10 +305,7 @@ class CompPHGNS(nn.Module):
 
         def H_from_state(x):
             """
-            Returns the total Hamiltonian of the composite system and finds the next state for all subsystems
-
-            The input state x must not include ground nodes
-            
+            Returns the total Hamiltonian of the composite system and finds the next state for all subsystems            
             """
 
             # Get initial u_hat
@@ -335,7 +328,6 @@ class CompPHGNS(nn.Module):
                     nc+nl+ne+sum(self.num_volt_sources[:i+1])
                 ]
 
-                # Append ground node to get full state
                 state_i = jnp.concatenate((q_i, phi_i, e_i, jv_i))
                 states.append(state_i)
             
@@ -367,13 +359,12 @@ class CompPHGNS(nn.Module):
         def H_from_state_i(state_i, i):
             """
                 Returns the Hamiltonian prediction H_i and graph_i for subsystem i
-                The full_state_i must NOT include the ground node!
             """
-            if i == self.system_k_idx:
+            def get_H_k():
                 # For the known subsystem k
                 phi = state_i[0]
                 H_k = 0.5 * phi**2
-                graph_k = jraph.GraphsTuple(nodes=jnp.array([[0]]),
+                graph_k = jraph.GraphsTuple(nodes=jnp.array([[0, 0, 0, 0]]),
                                             edges=jnp.array([[0, 0]]),
                                             globals=jnp.array([H_k]),
                                             receivers=jnp.array([0]),
@@ -381,16 +372,17 @@ class CompPHGNS(nn.Module):
                                             n_node=jnp.array([0]),
                                             n_edge=jnp.array([0]))
                 return H_k, graph_k
-            else:
+            def get_H_i():
                 graph_i = self.state_to_graph[i](state=state_i, control=controls[i])
                 intermediate_graph_i = self.train_states[i].apply_fn(
                     self.train_states[i].params, graph_i, controls[i], t, rng
                 )
                 H_i = intermediate_graph_i.globals[0]
                 return H_i, intermediate_graph_i
+            
+            return get_H_k() if i == self.system_k_idx else get_H_i()
 
         def dynamics_function_i(x, t, params):
-            """ Input state x must NOT include ground node """
             i, u_hats = params
             e_i = x[
                 self.num_capacitors[i]+self.num_inductors[i] :
@@ -406,14 +398,13 @@ class CompPHGNS(nn.Module):
 
             if i == self.system_k_idx:
                 lamb = x[-self.num_lamb:]
-                z_i = jnp.concatenate((e_i, dHphi, dHq, jv_i, lamb)) # exclude ground node
+                z_i = jnp.concatenate((e_i, dHphi, dHq, jv_i, lamb))
             else:
-                z_i = jnp.concatenate((e_i, dHphi, dHq, jv_i)) # exclude ground node
+                z_i = jnp.concatenate((e_i, dHphi, dHq, jv_i))
 
             return jnp.matmul(self.Js[i], z_i) - self.rs[i](z_i) + jnp.matmul(self.B_bars[i], controls[i]) + jnp.matmul(self.B_hats[i], u_hats[i])
         
         def neural_dae_i(x, t, params):
-            """ Input state must NOT include ground node """
             i, next_y, u_hats = params
             z = jnp.concatenate((x, next_y))
             daes = dynamics_function_i(z, t, (i, u_hats))
@@ -422,7 +413,6 @@ class CompPHGNS(nn.Module):
         # Step 1: solve for lambda_0 by solving full system on the first iteration
         if lamb is None:
             def monolithic_dynamics_function(state, t):
-                """ The input state must NOT include the ground node """
                 dH, _ = jax.grad(H_from_state, has_aux=True)(state)
                 e = state[nc+nl : nc+nl+ne]
                 jv = state[nc+nl+ne : nc+nl+ne+nv]
@@ -452,11 +442,10 @@ class CompPHGNS(nn.Module):
 
             # This is initial guess for lambda
             lamb0 = jnp.zeros((self.num_lamb)) 
-            x0 = jnp.concatenate((q, phi))
-            y0 = jnp.concatenate((e, jv)) # This e does not include ground
-            z0 = jnp.concatenate((x0, y0, lamb0))
-            print(f"Initial dynamics function {monolithic_dynamics_function(z0, t)}")
-
+            # t1 = time.time()
+            # print(f"Initial dynamics function {monolithic_dynamics_function(state, t)}")
+            # t2 = time.time()
+            # print(f"The monolithic dynamics function took {t2 - t1}")
             # TODO: BTW, if this works every iteration, then we can just get next_state from here...
 
             # ynew = minimize(lambda y : test_g(z0[self.diff_indices_c], y, t, None), z0[self.alg_indices_c])
@@ -470,12 +459,14 @@ class CompPHGNS(nn.Module):
                     monolithic_f, monolithic_g, self.diff_indices_c, self.alg_indices_c
                 )
             # # next_state = full_system_solver.solve_dae(z0, jnp.array([self.dt]), params=None, y0_tol=10)[0]
-            next_state = full_system_solver.solve_dae_one_timestep_rk4(z0, t, self.dt, params=None)
+            next_state = full_system_solver.solve_dae_one_timestep_rk4(state, t, self.dt, params=None)
             lamb = next_state[-self.num_lamb:]
-            # lamb = z0[-self.num_lamb :]
+
+            jax.debug.print('lamb')
+
+            lamb = lamb0
                 
         def fi(x, y, t, params):
-            """ Input state x must include ground node """
             i, u_hats = params
             state = jnp.concatenate((x, y))
             dae_i = dynamics_function_i(state, t, params) 
@@ -485,7 +476,6 @@ class CompPHGNS(nn.Module):
                 return self.U_invs[i] @ (self.L_invs[i] @ self.P_invs[i] @ dae_i)[self.diff_indices[i]]
         
         def gi(x, y, t, params):
-            """ Input state x must include ground node """
             i, u_hats = params
             state = jnp.concatenate((x, y))
             residuals_i = dynamics_function_i(state, t, params)[self.alg_eq_indices[i]]
@@ -519,7 +509,6 @@ class CompPHGNS(nn.Module):
         dae_solver = DAESolver(
             fi, gi, self.diff_indices[k], self.alg_indices[k]
             )
-        # TODO: make sure state_k_ext includes ground
         state_k_ext = jnp.concatenate((states[k], lamb))
         params=(k, u_hats)
 
@@ -540,12 +529,11 @@ class CompPHGNS(nn.Module):
         next_state_k = next_state_k_ext[:-self.num_lamb]
 
         next_states.insert(k, next_state_k)
-        next_graphs.insert(
-            k,
-            self.state_to_graph[k](
+        next_graphs[self.system_k_idx] = self.state_to_graph[k](
                 next_state_k, controls[k], set_ground_and_control=True,
                 globals=next_graphs[self.system_k_idx].globals
-                )
-        )
+            )
+        
+        jax.debug.print('{}', next_graphs[self.system_k_idx])
 
         return next_graphs, next_lamb

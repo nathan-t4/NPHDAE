@@ -291,7 +291,7 @@ class PHGNS_NDAE(nn.Module):
             return H, processed_graph
         
         def decoder_postprocessor(cur_state, control):
-            (H, processed_graph), dH = jax.value_and_grad(H_from_state, has_aux=True)(cur_state)
+            H, processed_graph = H_from_state(cur_state)
             next_y = self.alg_vars_from_graph(processed_graph, self.algebraic_vars)
 
             def dynamics_function(x, t):

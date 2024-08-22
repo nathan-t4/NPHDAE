@@ -45,6 +45,7 @@ def compose(config):
     graph_to_state = []
     state_to_graph = []
     alg_vars_from_graph = []
+    graph_to_pred_data = []
     incidence_matrices = []
     system_configs = []
     ACs = []; ARs = []; ALs = []; AVs = []; AIs = []
@@ -73,10 +74,12 @@ def compose(config):
             g_to_s = gb.graph_to_state
             s_to_g = gb.state_to_graph
             alg_from_g = gb.get_alg_vars_from_graph
+            g_to_pd = gb.get_pred_data
             
             graph_to_state.append(g_to_s)
             state_to_graph.append(s_to_g)
             alg_vars_from_graph.append(alg_from_g)
+            graph_to_pred_data.append(g_to_pd)
             net_params[i].training = False 
             net_params[i].graph_to_state = g_to_s
             net_params[i].state_to_graph = s_to_g
@@ -96,15 +99,16 @@ def compose(config):
             g_to_s = gb.graph_to_state
             s_to_g = gb.state_to_graph
             alg_from_g = gb.get_alg_vars_from_graph
+            g_to_pd = gb.get_pred_data
             
             graph_to_state.append(g_to_s)
             state_to_graph.append(s_to_g)
             alg_vars_from_graph.append(alg_from_g)
+            graph_to_pred_data.append(g_to_pd)
 
             # TODO: move somewhere...
-            # This is Alambda for subsystem k (transmission line)
+            # This is Alambda for tsubsystem k (transmission line)
             Alambda_k = Alambda[3:6] # (num_nodes_1) : (num_nodes_1+num_nodes_2)
-            # Alambda_k = jnp.concatenate((jnp.zeros((1,2)), Alambda_k)) # add ground node
             system_config = get_system_k_config(*incidence_matrices[i], Alambda_k)
             system_config['is_k'] = True
         
@@ -113,11 +117,7 @@ def compose(config):
     init_t = 0.0
     init_graph = eval_gb.get_graph(traj_idx=0, t=0)
     init_graphs = explicit_unbatch_graph(init_graph, Alambda, system_configs)
-    # init_graph = jraph.batch(init_graphs)
-    # init_graph = explicit_batch_graphs(
-    #     init_graphs, Alambda, system_configs, init_graph.senders, init_graph.receivers
-    #     )
-
+    
     init_control = eval_gb._control[0,0]
     init_controls = explicit_unbatch_control(init_control, system_configs)
 
@@ -203,45 +203,66 @@ def compose(config):
         t0_idxs = tf_idxs - T
         ts = tf_idxs * net.dt
         graph = eval_gb.get_graph(traj_idx, ti)
-        graph = explicit_unbatch_graph(graph, Alambda, system_configs)
-        # graph = jraph.batch(graph)
+        graphs = explicit_unbatch_graph(graph, Alambda, system_configs)
         controls = eval_gb.get_control(traj_idx, t0_idxs)
         exp_data = eval_gb.get_exp_data(traj_idx, tf_idxs)
-        get_pred_data = eval_gb.get_pred_data
-        # get_batch_pred_data = eval_gb.get_batch_pred_data
         
         def forward_pass(carry, inputs):  
-            graph, lamb = carry
+            g, lamb = carry
             control, t = inputs         
-            graphs, next_lamb = state.apply_fn(
-                state.params, graph, control, lamb, t, jax.random.key(config.seed)
+            gs, next_lamb = state.apply_fn(
+                state.params, g, control, lamb, t, jax.random.key(config.seed)
             )
-            # TODO: make sure graphs are correct...
-            # TODO: merge all graphs to graph
-            graph = explicit_batch_graphs(graphs)
-            pred_data = get_pred_data(graphs)
-            graphs = [graph._replace(globals=None) for graph in graphs]
-            return (graphs, next_lamb), pred_data
+            pred_data = [g_to_pd(graph) for g_to_pd, graph in zip(graph_to_pred_data, gs)]
+            gs = [graph._replace(globals=None) for graph in gs]
+            return (gs, next_lamb), pred_data
 
-        # TODO
-        # init_lamb = jnp.zeros(num_lambs)
-        init_lamb = None
+        init_lamb = jnp.zeros(num_lambs)
+        # init_lamb = None
         init_timesteps = t0_idxs * dt
-        _, pred_data = jax.lax.scan(forward_pass, (graph, init_lamb), (controls, init_timesteps))
-        
+        _, pred_data = jax.lax.scan(forward_pass, (graphs, init_lamb), (controls, init_timesteps))
+
+        processed_pred_data = []
+        for i in range(len(pred_data[0])):
+            def make_2d(arr):
+                if len(arr.shape) < 2:
+                    return arr.reshape(-1,1)
+                else:
+                    return arr
+                
+            pred_data_i = jnp.concatenate(
+                [make_2d(pred_data[j][i]) for j in range(num_subsystems)],
+                axis=-1
+                )
+            if i == 0:
+                # TODO: reorder so that in form (q, phi) [was (q1, phi1, phi2, q2, phi3)]
+                pred_data_i = pred_data_i[:,jnp.array([0,3,1,2,4])]
+            if i == 1:
+                # Remove equivalent nodes
+                pred_data_i = pred_data_i[:,jnp.array([0,1,2,4,6,7,8,9,10])]
+            if i == 2 or i == 3:
+                pred_data_i = make_2d(jnp.sum(pred_data_i, axis=-1))
+
+            processed_pred_data.append(pred_data_i)
+
+            print('pred data i shape', pred_data_i.shape)
+            print('exp data i shape', exp_data[i].shape)
+
+        # TODO: need to remove redundant nodes???
+                   
         losses = [
-            jnp.sum(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+            jnp.mean(optax.l2_loss(predictions=processed_pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
         ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        pred_data = np.concatenate(pred_data, axis=1)
+        pred_data = np.concatenate(processed_pred_data, axis=1)
         exp_data = np.concatenate(exp_data, axis=1)
         return pred_data, exp_data, eval_metrics
     
     
     print('##################################################')
     subsystem_names = np.array(subsystem_names)
-    print(f"Evaluating composition of subsystems {subsystem_names}")
-    print(f"The known subsystems are {subsystem_names[[i for i, b in enumerate(learned_subsystem) if b]]}")
+    print(f"Evaluating composition of subsystems {'_'.join(subsystem_names)}")
+    print(f"The known subsystems are {subsystem_names[[i for i, b in enumerate(learned_subsystem) if not b]]}")
     print(f"Saving plots to {os.path.relpath(plot_dir)}")
     print('##################################################')
 
@@ -252,10 +273,10 @@ def compose(config):
             error_sums[j] += eval_metrics[j].compute()['loss']
 
         eval_gb.plot(pred_data, exp_data, 
-                     plot_dir=os.path.join(plot_dir['plot'], f'traj_{i}'),
+                     plot_dir=os.path.join(plot_dir, f'traj_{i}'),
                      prefix=f'comp_eval_traj_{i}')
 
-    rollout_mean_error = np.array(error_sums) / (eval_gb._num_trajectories * eval_gb._num_timesteps)
+    rollout_mean_error = np.array(error_sums) / eval_gb._num_trajectories
 
     print('##################################################')
     print("Finished evaluating composition")
@@ -267,7 +288,7 @@ def compose(config):
     print('##################################################')
 
     metrics = {
-        'subsystem_names': subsystem_names,
+        'subsystem_names': subsystem_names.tolist(),
         'learned_subsystem': learned_subsystem,
         'ckpt_dirs': ckpt_dirs,
         'rollout_mean_error_states': rollout_mean_error.tolist(),

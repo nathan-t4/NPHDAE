@@ -14,17 +14,14 @@ def explicit_batch_graphs(graphs, Alambda, system_configs, senders, receivers):
     num_inds = jnp.array([cfg['num_inductors'] for cfg in system_configs])
     num_volts = jnp.array([cfg['num_volt_sources'] for cfg in system_configs])
     num_curs = jnp.array([cfg['num_cur_sources'] for cfg in system_configs])
-    num_edges = jnp.array(
-        [nc+nr+nl+nv+ni for (nc,nr,nl,nv,ni) in zip(num_caps, num_res, num_inds, num_volts, num_curs)]
-        )
 
-    n_node = sum(num_nodes)
-    n_edge = sum(num_edges)
     qs = []
     rs = []
     phis = []
     es = []
     jvs = []
+    jis = []
+    globals = []
 
     for i, graph in enumerate(graphs):
         q = graph.edges[0 : num_caps[i]]
@@ -36,34 +33,44 @@ def explicit_batch_graphs(graphs, Alambda, system_configs, senders, receivers):
             num_caps[i]+num_res[i]+num_inds[i]+num_volts[i] :
             num_caps[i]+num_res[i]+num_inds[i]+num_volts[i]+num_curs[i]
         ]
+        es.append(e)
         qs.append(q)
         rs.append(r)
         phis.append(phi)
-        es.append(e)
         jvs.append(jv)
+        jis.append(ji)
+        globals.append(graph.globals)
+
+    es = jnp.concatenate(es) # without ground node
+    qs = jnp.concatenate(qs)
+    rs = jnp.concatenate(rs)
+    phis = jnp.concatenate(phis)
+    jvs = jnp.concatenate(jvs)
+    jis = jnp.concatenate(jis)
+    globals = jnp.concatenate(globals)
+
     
     # Need to remove redundant nodes...
-    es.insert(0, jnp.array([0]))
-
-    new_edges = jnp.concatenate((qs, rs, phis, jvs, jis))
-    new_nodes = jnp.concatenate(es) # Need to remove redundant nodes
+    edges = jnp.concatenate((qs, rs, phis, jvs, jis))
+    nodes = es
 
     node_fis = jnp.cumsum(num_nodes)
     node_iis = jnp.r_[jnp.array([0]), node_fis[:-1]]
     node_idx = [jnp.arange(ni, nf) for ni, nf in zip(node_iis, node_fis)]
-    # Look at Alambda to decide which nodes to equate
+    # Look at Alambda to decide which nodes to equate and delete
     equivalent_nodes = [jnp.where(col != 0)[0] for col in Alambda.T]
-    for node_pairs in equivalent_nodes:
-        first_idx = min(node_pairs)
-        second_idx = max(node_pairs)
-        for i in range(num_subsystems):
-            node_idx[i] = node_idx[i].at[jnp.where(node_idx[i] == first_idx)].set(second_idx)
+    nodes_to_remove = np.sort([x if x in node_idx[1] else y for (x,y) in equivalent_nodes])
+    for i in reversed(nodes_to_remove):
+        nodes = np.delete(nodes, i)
 
-    graph = jraph.GraphsTuple(nodes=new_nodes,
-                              edges=new_edges,
-                              globals=None,
-                              n_node=jnp.array([n_node]),
-                              n_edge=jnp.array([n_edge]),
+    # Append ground node
+    nodes = np.concatenate(([0],nodes)).reshape(-1,1)
+    
+    graph = jraph.GraphsTuple(nodes=nodes,
+                              edges=edges,
+                              globals=globals,
+                              n_node=jnp.array([nodes.shape[0]]),
+                              n_edge=jnp.array([edges.shape[0]]),
                               senders=senders,
                               receivers=receivers)
     
@@ -155,10 +162,10 @@ def explicit_unbatch_graph(graph, Alambda, system_configs):
             sender_i.append(graph.senders[cur_iis[i] : cur_fis[i]])
 
         edge_i = jnp.concatenate(edge_i)
-        receiver_i = label_encoder(jnp.array(receiver_i))
-        sender_i = label_encoder(jnp.array(sender_i))
+        receiver_i = label_encoder(jnp.array(receiver_i)).flatten()
+        sender_i = label_encoder(jnp.array(sender_i)).flatten()
         # Append ground node
-        node_i = jnp.concatenate((jnp.array([0]), nodes[i]))
+        node_i = jnp.concatenate((jnp.array([0]), nodes[i])).reshape(-1,1)
 
         graph_i = jraph.GraphsTuple(
             nodes=node_i,

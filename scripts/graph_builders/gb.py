@@ -25,7 +25,7 @@ class TestGraphBuilder(GraphBuilder):
         self.num_cur_sources = 0 if (AI == 0.0).all() else len(AI.T)
         self._num_states = self.num_capacitors + self.num_inductors + self.num_nodes + self.num_volt_sources
         
-        self.n_node = jnp.array([self.num_nodes])
+        self.n_node = jnp.array([self.num_nodes + 1]) # +1 for ground node
         self.n_edge = jnp.array([self.num_capacitors + self.num_inductors + self.num_resistors + self.num_volt_sources + self.num_cur_sources])
 
         super().__init__(path, add_undirected_edges=False, add_self_loops=False)
@@ -317,13 +317,15 @@ class TestGraphBuilder(GraphBuilder):
             ax[v].plot(ts, exp[:,i], color=cmap(0), ls='--', label=f'exp ${v}$')
             ax[v].set_xlabel('Time [$s$]')
             ax[v].set_ylabel(f'${v}$')
-            ax[v].legend()
+            # ax[v].legend()
 
             ax[f'{v}e'].set_title(f'${v}$ Error')
             ax[f'{v}e'].plot(ts, exp[:,i] - pred[:,i], color=cmap(0), ls='-')
             ax[f'{v}e'].set_xlabel('Time [$s$]')
             ax[f'{v}e'].set_ylabel(f'${v}$')
+            # ax[f'{v}e'].legend()
 
+        plt.tight_layout()
         plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
         plt.close()
     
