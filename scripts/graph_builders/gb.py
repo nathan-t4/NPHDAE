@@ -1,6 +1,5 @@
 from scripts.graph_builders.gb_base import *
 from utils.gnn_utils import graph_from_incidence_matrices
-
 @register_pytree_node_class
 class TestGraphBuilder(GraphBuilder):
     """
@@ -31,7 +30,7 @@ class TestGraphBuilder(GraphBuilder):
         super().__init__(path, add_undirected_edges=False, add_self_loops=False)
 
     def _load_data(self, path):
-        data = np.load(path, allow_pickle=True)
+        data = jnp.load(path, allow_pickle=True)
         config = data['config']
         state = data['state_trajectories']
         u = data['control_inputs']
@@ -77,7 +76,7 @@ class TestGraphBuilder(GraphBuilder):
         [self.edge_idxs.append(2) for _ in range(self.num_inductors)]
         [self.edge_idxs.append(3) for _ in range(self.num_volt_sources)]
         [self.edge_idxs.append(4) for _ in range(self.num_cur_sources)]
-        self.edge_idxs = np.array(self.edge_idxs)
+        self.edge_idxs = jnp.array(self.edge_idxs)
 
         # Tells model which edge indices to include when calculating Hamiltonian 
         # Indicates which edges correspond to energy-storing electrical components (e.g. capacitors & inductors)
@@ -310,7 +309,7 @@ class TestGraphBuilder(GraphBuilder):
         layout = [values, [f'{v}e' for v in values]]
         ax = fig.subplot_mosaic(layout)
 
-        ts = np.arange(self._num_timesteps) * self._dt
+        ts = jnp.arange(self._num_timesteps) * self._dt
         for i,v in enumerate(values):
             ax[v].set_title(f'${v}$')
             ax[v].plot(ts, pred[:,i], color=cmap(0), ls='-', label=f'pred ${v}$')
@@ -325,7 +324,7 @@ class TestGraphBuilder(GraphBuilder):
             ax[f'{v}e'].set_ylabel(f'${v}$')
             # ax[f'{v}e'].legend()
 
-        plt.tight_layout()
+        fig.tight_layout()
         plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))
         plt.close()
     

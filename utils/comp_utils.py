@@ -5,8 +5,6 @@ from utils.gnn_utils import *
 
 def explicit_batch_graphs(graphs, Alambda, system_configs, senders, receivers):
     """ Batch graphs to get graph """
-    label_encoder = lambda arr : jnp.unique(arr, return_inverse=True)[1]
-
     num_subsystems = len(system_configs)
     num_nodes = jnp.array([(cfg['num_nodes']) for cfg in system_configs])
     num_caps = jnp.array([cfg['num_capacitors'] for cfg in system_configs])
@@ -59,12 +57,12 @@ def explicit_batch_graphs(graphs, Alambda, system_configs, senders, receivers):
     node_idx = [jnp.arange(ni, nf) for ni, nf in zip(node_iis, node_fis)]
     # Look at Alambda to decide which nodes to equate and delete
     equivalent_nodes = [jnp.where(col != 0)[0] for col in Alambda.T]
-    nodes_to_remove = np.sort([x if x in node_idx[1] else y for (x,y) in equivalent_nodes])
+    nodes_to_remove = jnp.sort([x if x in node_idx[1] else y for (x,y) in equivalent_nodes])
     for i in reversed(nodes_to_remove):
-        nodes = np.delete(nodes, i)
+        nodes = jnp.delete(nodes, i)
 
     # Append ground node
-    nodes = np.concatenate(([0],nodes)).reshape(-1,1)
+    nodes = jnp.concatenate(([0],nodes)).reshape(-1,1)
     
     graph = jraph.GraphsTuple(nodes=nodes,
                               edges=edges,
@@ -204,6 +202,7 @@ def get_composite_system_config(system_configs, Alambda):
         AVs = [cfg['AV'] for cfg in system_configs]
         AIs = [cfg['AI'] for cfg in system_configs]
 
+        num_subsystems = len(system_configs)
         num_nodes = [cfg['num_nodes'] for cfg in system_configs]
         num_capacitors = [cfg['num_capacitors'] for cfg in system_configs]
         num_resistors = [cfg['num_resistors'] for cfg in system_configs]
@@ -212,6 +211,8 @@ def get_composite_system_config(system_configs, Alambda):
         num_cur_sources = [cfg['num_cur_sources'] for cfg in system_configs]
         state_dims = [cfg['state_dim'] for cfg in system_configs]
         num_lamb = len(Alambda.T)
+        diff_indices = [cfg['diff_indices'] for cfg in system_configs]
+        alg_indices = [cfg['alg_indices'] for cfg in system_configs]
 
         ncc = sum(num_capacitors)
         nrc = sum(num_resistors)
@@ -284,6 +285,97 @@ def get_composite_system_config(system_configs, Alambda):
         L_inv = jax.scipy.linalg.inv(L)
         U_inv = jax.scipy.linalg.inv(U[diff_indices,:][:,diff_indices])
 
+        # Get Alambdas
+        Alambdas = [
+            Alambda[sum(num_nodes[0:i]) : sum(num_nodes[0:i+1])]
+            for i in range(num_subsystems)
+            ]
+        
+        # Decompose composite system state to subsystem states
+
+        def subsystem_to_composite_state(states):
+            qs = []; phis = []; es = []; jvs = []
+            for state, nc, ni, ne, nv in zip(
+                states, num_capacitors, num_inductors, num_nodes, num_volt_sources):
+                qs.append(state[0 : nc])
+                phis.append(state[nc : nc+ni])
+                es.append(state[nc+ni : nc+ni+ne])
+                jvs.append(state[nc+ni+ne : nc+ni+ne+nv])
+            
+            q = jnp.concatenate(qs)
+            phi = jnp.concatenate(phis)
+            e = jnp.concatenate(es) 
+            jv = jnp.concatenate(jvs)
+            state = jnp.concatenate((q, phi, e, jv))
+
+            return state, (qs, phis, es, jvs)
+        
+        def composite_to_subsystem_states(state):
+            nc = sum(num_capacitors)
+            nl = sum(num_inductors)
+            ne = sum(num_nodes)
+            states = []
+            qs = []; phis = []; es = []; jvs = []
+            for i in range(num_subsystems):
+                q_i = state[sum(num_capacitors[:i]) : sum(num_capacitors[:i+1])]
+                phi_i = state[
+                    nc+sum(num_inductors[:i]) : 
+                    nc+sum(num_inductors[:i+1])
+                ]
+                e_i = state[
+                    nc+nl+sum(num_nodes[:i]) :
+                    nc+nl+sum(num_nodes[:i+1]) : 
+                ]
+                jv_i = state[
+                    nc+nl+ne+sum(num_volt_sources[:i]) : 
+                    nc+nl+ne+sum(num_volt_sources[:i+1])
+                ]
+                qs.append(q_i)
+                phis.append(phi_i)
+                es.append(e_i)
+                jvs.append(jv_i)
+
+                state_i = jnp.concatenate((q_i, phi_i, e_i, jv_i))
+                states.append(state_i)
+
+            return states, (qs, phis, es, jvs)            
+        
+        def get_coupling_input(lamb, es, system_k_idx):
+            # Jacobian-type approach
+            u_hats = []
+            for i in range(num_subsystems):
+                if i == system_k_idx:
+                    coupling_constraint = jnp.sum(
+                        jnp.array([jnp.matmul(Al_i.T, e_i) for Al_i, e_i in zip(Alambdas, es)])
+                    )
+
+                    u_hats.append(jnp.array([coupling_constraint]))
+                else:
+                    u_hats.append(-lamb)
+            return u_hats
+
+        
+        # def get_H(states, controls, lamb, state_to_graphs, alg_vars_from_graph, ode_integrator, system_k_idx):
+        #     _, (__, ___, es, ____) = subsystem_to_composite_state(states)
+        #     u_hats = get_coupling_input(lamb, es)
+        #     next_graphs = []
+        #     for i in range(num_subsystems):
+        #         # TODO: scan this, output y is (Hs, states), then sum(Hs) to get H
+        #         # jax.lax.scan(get_Hs, carry, (states, u_hats, alg_vars_from_graph))                
+        #         if i != system_k_idx:
+        #             H_i = 
+        #             x_i = states[i][diff_indices[i]]
+        #             next_y_i = alg_vars_from_graph[i](next_graph_i, alg_indices[i])
+        #             next_x_i = ode_integrator(
+        #                 partial(neural_dae_i, params=(i, next_y_i, u_hats)), x_i, t, dt, T
+        #             )
+        #             next_state_i = jnp.concatenate((next_x_i, next_y_i))
+        #             next_graph_i = state_to_graphs[i](
+        #                 next_state_i, controls[i], globals=next_graph_i.globals
+        #                 )
+        #     return next_graphs
+                
+
         comp_net_config = {
             'E': E,
             'J': J,
@@ -297,6 +389,10 @@ def get_composite_system_config(system_configs, Alambda):
             'P_inv': P_inv,
             'L_inv': L_inv,
             'U_inv': U_inv,
+            'Alambdas': Alambdas,
+            'subsystem_to_composite_state': subsystem_to_composite_state,
+            'composite_to_subsystem_states': composite_to_subsystem_states,
+            'get_coupling_input': get_coupling_input,
         }
 
         return comp_net_config

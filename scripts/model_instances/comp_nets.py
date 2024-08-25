@@ -176,19 +176,19 @@ class CompPHGNS(nn.Module):
         self.rs = [cfg['r'] for cfg in self.system_configs]
         self.B_bars = [cfg['B'] for cfg in self.system_configs]
 
-        self.num_nodes = [cfg['num_nodes'] for cfg in self.system_configs]
-        self.num_capacitors = [cfg['num_capacitors'] for cfg in self.system_configs]
-        self.num_resistors = [cfg['num_resistors'] for cfg in self.system_configs]
-        self.num_inductors = [cfg['num_inductors'] for cfg in self.system_configs]
-        self.num_volt_sources = [cfg['num_volt_sources'] for cfg in self.system_configs]
-        self.num_cur_sources = [cfg['num_cur_sources'] for cfg in self.system_configs]
-        self.state_dims = [cfg['state_dim'] for cfg in self.system_configs]
+        self.num_nodes = jnp.array([cfg['num_nodes'] for cfg in self.system_configs])
+        self.num_capacitors = jnp.array([cfg['num_capacitors'] for cfg in self.system_configs])
+        self.num_resistors = jnp.array([cfg['num_resistors'] for cfg in self.system_configs])
+        self.num_inductors = jnp.array([cfg['num_inductors'] for cfg in self.system_configs])
+        self.num_volt_sources = jnp.array([cfg['num_volt_sources'] for cfg in self.system_configs])
+        self.num_cur_sources = jnp.array([cfg['num_cur_sources'] for cfg in self.system_configs])
+        self.state_dims = jnp.array([cfg['state_dim'] for cfg in self.system_configs])
 
         self.diff_indices = [cfg['diff_indices'] for cfg in self.system_configs]
         self.alg_indices = [cfg['alg_indices'] for cfg in self.system_configs]
         self.alg_eq_indices = [cfg['alg_eq_indices'] for cfg in self.system_configs]
-        self.num_diff_vars = [len(cfg['diff_indices']) for cfg in self.system_configs]
-        self.num_alg_vars = [len(cfg['alg_indices']) for cfg in self.system_configs]
+        self.num_diff_vars = [cfg['num_diff_vars'] for cfg in self.system_configs]
+        self.num_alg_vars = [cfg['num_alg_vars'] for cfg in self.system_configs]
 
         # Perform LU decomposition on Es[i] and invert decomposition matrices.
         self.P_invs = [
@@ -209,14 +209,12 @@ class CompPHGNS(nn.Module):
         # A_{\lambda_i} \in \{-1, 0, 1\}^{n_{u_i} \times n_{\lambda}}
         # n_{u_i} is the dimension of the control for subsystem i, 
         # and n_{\lambda} is the number of coupling edges
-        self.Alambdas = [
-            self.Alambda[sum(self.num_nodes[:i]) : sum(self.num_nodes[:i+1])]
-            for i in range(self.num_subsystems)
-            ]
+        self.Alambdas = self.composite_system_config['Alambdas']
+
         
         self.num_lamb = len(self.Alambda.T)
         self.B_hats = get_B_hats(self.system_configs, self.Alambda)
-        self.system_k_idx = get_system_k_idx(self.system_configs)
+        self.system_k_idx = np.array(get_system_k_idx(self.system_configs))
         
         ncc = sum(self.num_capacitors)
         nrc = sum(self.num_resistors)
@@ -247,6 +245,11 @@ class CompPHGNS(nn.Module):
         self.L_inv = self.composite_system_config['L_inv']
         self.U_inv = self.composite_system_config['U_inv']
 
+        self.subsystem_to_composite_state = self.composite_system_config['subsystem_to_composite_state']
+        self.composite_to_subsystem_states = self.composite_system_config['composite_to_subsystem_states']
+        self.get_coupling_input = self.composite_system_config['get_coupling_input']
+        self.get_coupling_input = partial(self.get_coupling_input, system_k_idx=self.system_k_idx)
+
         self.ode_integrator = integrator_factory(self.ode_integration_method)
 
     def __call__(self, graphs, control, lamb, t, rng):
@@ -264,96 +267,142 @@ class CompPHGNS(nn.Module):
         nl = self.nlc
         ne = self.nec
         nv = self.nvc
-        qs = []
-        phis = []
-        es = []
-        jvs = []
 
-
-        # TODO: state_to_(qs, phis, es, jvs): Sequence[Callable] -> Sequence[Sequence]
-        for i, state in enumerate(states):
-            qs.append(state[0 : self.num_capacitors[i]])
-            phis.append(state[self.num_capacitors[i] : self.num_capacitors[i]+self.num_inductors[i]])
-            es.append(state[
-                self.num_capacitors[i]+self.num_inductors[i] :
-                self.num_capacitors[i]+self.num_inductors[i]+self.num_nodes[i]
-            ])
-            jvs.append(state[
-                self.num_capacitors[i]+self.num_inductors[i]+self.num_nodes[i] :
-                self.num_capacitors[i]+self.num_inductors[i]+self.num_nodes[i]+self.num_volt_sources[i]
-            ])
+        state, (qs, phis, es, jvs) = self.subsystem_to_composite_state(states)
         
-        q = jnp.concatenate(qs)
-        phi = jnp.concatenate(phis)
-        e = jnp.concatenate(es) 
-        jv = jnp.concatenate(jvs)
-        state = jnp.concatenate((q, phi, e, jv))
-
-        # Jacobian-type approach
-        def get_coupling_input(lamb):
-            u_hats = []
-            for i in range(self.num_subsystems):
-                if i == self.system_k_idx:
-                    coupling_constraint = jnp.sum(
-                        jnp.array([jnp.matmul(Al_i.T, e_i) for Al_i, e_i in zip(self.Alambdas, es)])
-                    )
-
-                    u_hats.append(jnp.array([coupling_constraint]))
-                else:
-                    u_hats.append(-lamb)
-            return u_hats
-
         def H_from_state(x):
             """
             Returns the total Hamiltonian of the composite system and finds the next state for all subsystems            
             """
-
             # Get initial u_hat
             lamb = x[-self.num_lamb:]
-            u_hats = get_coupling_input(lamb)
-            states = []
             # Extract the subsystem states from the composite system state
-            for i in range(self.num_subsystems):
-                q_i = x[sum(self.num_capacitors[:i]) : sum(self.num_capacitors[:i+1])]
-                phi_i = x[
-                    nc+sum(self.num_inductors[:i]) : 
-                    nc+sum(self.num_inductors[:i+1])
-                ]
-                e_i = x[
-                    nc+nl+sum(self.num_nodes[:i]) :
-                    nc+nl+sum(self.num_nodes[:i+1]) : 
-                ]
-                jv_i = x[
-                    nc+nl+ne+sum(self.num_volt_sources[:i]) : 
-                    nc+nl+ne+sum(self.num_volt_sources[:i+1])
-                ]
-
-                state_i = jnp.concatenate((q_i, phi_i, e_i, jv_i))
-                states.append(state_i)
-            
+            states, (qs, phis, es, jvs) = self.composite_to_subsystem_states(x)
+            u_hats = self.get_coupling_input(lamb, es)
             # Get Hamiltonian predictions for all subsystems.
             # For all of the (k-1) subsystems, also get the next subsystem state.
-            next_graphs = []
-            for i in range(self.num_subsystems):
-                state_i = states[i]
-                H_i, next_graph_i = H_from_state_i(state_i, i)
+            # next_graphs = []
 
-                if i != self.system_k_idx:
-                    x_i = state_i[self.diff_indices[i]]
-                    next_y_i = self.alg_vars_from_graph[i](next_graph_i, self.alg_indices[i])
-                    next_x_i = self.ode_integrator(
-                        partial(neural_dae_i, params=(i, next_y_i, u_hats)), x_i, t, self.dt, self.T
-                    )
-                    next_state_i = jnp.zeros((self.state_dims[i]))
-                    next_state_i = next_state_i.at[self.diff_indices[i]].set(next_x_i)
-                    next_state_i = next_state_i.at[self.alg_indices[i]].set(next_y_i)
-                    next_graph_i = self.state_to_graph[i](
-                        next_state_i, controls[i], globals=next_graph_i.globals
-                        )
+            # for state_i, diff_indices_i, alg_indices_i, s_to_g in zip(
+            #     states, self.diff_indices, self.alg_indices, self.state_to_graph):
+            #     # TODO: scan this, output y is (Hs, states), then sum(Hs) to get H
+            #     # jax.lax.scan(get_Hs, carry, (states, u_hats, self.alg_vars_from_graph))
+            #     if i != self.system_k_idx:
+            #         graph_i = self.state_to_graph[i](state=state_i, control=controls[i])
+            #         intermediate_graph_i = self.train_states[i].apply_fn(
+            #             self.train_states[i].params, graph_i, controls[i], t, rng
+            #         )
+            #         x_i = state_i[diff_indices_i]
+            #         next_y_i = self.alg_vars_from_graph[i](intermediate_graph_i, alg_indices_i)
+            #         next_x_i = self.ode_integrator(
+            #             partial(neural_dae_i, params=(i, next_y_i, u_hats)), x_i, t, self.dt, self.T
+            #         )
+            #         next_state_i = jnp.concatenate((next_x_i, next_y_i))
+            #         next_graph_i = s_to_g(
+            #             next_state_i, controls[i], globals=next_graph_i.globals
+            #             )  
+            #     else:
+            #         # Hamiltonian of the k-th subsystem is known
+            #         phi = state_i[0]
+            #         H_i = 0.5 * phi**2
+            #         next_graph_i = jraph.GraphsTuple(nodes=jnp.array([[0, 0, 0, 0]]),
+            #                                     edges=jnp.array([[0, 0]]),
+            #                                     globals=jnp.array([H_i]),
+            #                                     receivers=jnp.array([0]),
+            #                                     senders=jnp.array([0]),
+            #                                     n_node=jnp.array([0]),
+            #                                     n_edge=jnp.array([0]))
                 
-                next_graphs.append(next_graph_i)
+            #     next_graphs.append(next_graph_i)
             
-            H = sum([next_graph.globals[0] for next_graph in next_graphs])
+            # H = sum([next_graph.globals[0] for next_graph in next_graphs])
+
+            # For now, write this out explicitly....
+            def get_H_0(state_0):
+                graph_0 = self.state_to_graph[0](state=state_0, control=controls[0])
+                intermediate_graph_0 = self.train_states[0].apply_fn(
+                    self.train_states[0].params, graph_0, controls[0], t, rng
+                )
+                H_0 = intermediate_graph_0.globals[0]
+                return H_0, intermediate_graph_0
+
+            H_0, intermediate_graph_0 = get_H_0(states[0])
+            x_0 = states[0][self.diff_indices[0]]
+            next_y_0 = self.alg_vars_from_graph[0](intermediate_graph_0, self.alg_indices[0])
+
+            def dynamics_function_0(state_0, t):
+                e_0 = state_0[2 : 5]
+                jv_0 = state_0[5 : 6]
+                dH_0, _ = jax.grad(get_H_0, argnums=0, has_aux=True)(x)
+                dHq = dH_0[0 : 1]
+                dHphi = dH_0[1 : 2]
+
+                z_0 = jnp.concatenate((e_0, dHphi, dHq, jv_0))
+
+                return jnp.matmul(self.Js[0], z_0) - self.rs[0](z_0) + jnp.matmul(self.B_bars[0], controls[0]) + jnp.matmul(self.B_hats[0], u_hats[0])
+
+            def neural_dae_0(x0, t):
+                z0 = jnp.concatenate((x0, next_y_0))
+                dae0 = dynamics_function_0(z0, t)
+                return self.U_invs[0] @ (self.L_invs[0] @ self.P_invs[0] @ dae0)[self.diff_indices[0]]
+            
+            next_x_0 = self.ode_integrator(
+                neural_dae_0, x_0, t, self.dt, self.T
+            )
+            next_state_0 = jnp.concatenate((next_x_0, next_y_0))
+            next_graph_0 = self.state_to_graph[0](
+                next_state_0, controls[0], globals=intermediate_graph_0.globals
+                )  
+
+            phi = states[1][0]
+            H_1 = 0.5 * phi**2
+            next_graph_1 = jraph.GraphsTuple(nodes=jnp.array([[0, 0, 0, 0]]),
+                                            edges=jnp.array([[0, 0]]),
+                                            globals=jnp.array([H_1]),
+                                            receivers=jnp.array([0]),
+                                            senders=jnp.array([0]),
+                                            n_node=jnp.array([0]),
+                                            n_edge=jnp.array([0])) 
+            
+            def get_H_2(state_2):
+                graph_2 = self.state_to_graph[2](state=state_2, control=controls[2])
+                intermediate_graph_2 = self.train_states[2].apply_fn(
+                    self.train_states[2].params, graph_2, controls[2], t, rng
+                )
+                H_2 = intermediate_graph_2.globals[0]
+                return H_2, intermediate_graph_2
+            
+            H_2, intermediate_graph_2 = get_H_2(states[2])
+            x_2 = states[2][self.diff_indices[2]]
+            next_y_2 = self.alg_vars_from_graph[2](intermediate_graph_2, self.alg_indices[2])
+
+            def dynamics_function_2(state_2, t):
+                e_2 = state_2[2 : 5]
+                jv_2 = state_2[5 : 6]
+                dH_2, _ = jax.grad(get_H_2, argnums=0, has_aux=True)(x)
+                dHq = dH_2[0 : 1]
+                dHphi = dH_2[1 : 2]
+
+                z_2 = jnp.concatenate((e_2, dHphi, dHq, jv_2))
+
+                return jnp.matmul(self.Js[2], z_2) - self.rs[2](z_2) + jnp.matmul(self.B_bars[2], controls[2]) + jnp.matmul(self.B_hats[2], u_hats[2])
+            
+            def neural_dae_2(x2, t):
+                z2 = jnp.concatenate((x2, next_y_2))
+                dae2 = dynamics_function_2(z2, t)
+                return self.U_invs[2] @ (self.L_invs[2] @ self.P_invs[2] @ dae2)[self.diff_indices[2]]
+            
+            next_x_2 = self.ode_integrator(
+                neural_dae_2, x_2, t, self.dt, self.T
+            )
+
+            next_state_2 = jnp.concatenate((next_x_2, next_y_2))
+            next_graph_2 = self.state_to_graph[2](
+                next_state_2, controls[2], globals=intermediate_graph_2.globals
+                )  
+            
+            H = jnp.sum(jnp.array([H_0, H_1, H_2]))
+            next_graphs = [next_graph_0, next_graph_1, next_graph_2]
             return H, next_graphs
         
         def H_from_state_i(state_i, i):
@@ -364,13 +413,13 @@ class CompPHGNS(nn.Module):
                 # For the known subsystem k
                 phi = state_i[0]
                 H_k = 0.5 * phi**2
-                graph_k = jraph.GraphsTuple(nodes=jnp.array([[0, 0, 0, 0]]),
-                                            edges=jnp.array([[0, 0]]),
+                graph_k = jraph.GraphsTuple(nodes=jnp.zeros(graphs[1].nodes.shape),
+                                            edges=jnp.zeros(graphs[1].edges.shape),
                                             globals=jnp.array([H_k]),
-                                            receivers=jnp.array([0]),
-                                            senders=jnp.array([0]),
-                                            n_node=jnp.array([0]),
-                                            n_edge=jnp.array([0]))
+                                            receivers=graphs[1].receivers,
+                                            senders=graphs[1].senders,
+                                            n_node=graphs[1].n_node,
+                                            n_edge=graphs[1].n_edge)
                 return H_k, graph_k
             def get_H_i():
                 graph_i = self.state_to_graph[i](state=state_i, control=controls[i])
@@ -442,29 +491,18 @@ class CompPHGNS(nn.Module):
 
             # This is initial guess for lambda
             lamb0 = jnp.zeros((self.num_lamb)) 
-            # t1 = time.time()
-            # print(f"Initial dynamics function {monolithic_dynamics_function(state, t)}")
-            # t2 = time.time()
-            # print(f"The monolithic dynamics function took {t2 - t1}")
-            # TODO: BTW, if this works every iteration, then we can just get next_state from here...
 
-            # ynew = minimize(lambda y : test_g(z0[self.diff_indices_c], y, t, None), z0[self.alg_indices_c])
-            # if ynew.success:
-            #     print(f"New algebraic var: {ynew}")
-            #     z0 = jnp.concatenate((z0[self.diff_indices_c], ynew))
-            # else:
-            #     print(f"Optimization failed")
-                
             full_system_solver = DAESolver(
-                    monolithic_f, monolithic_g, self.diff_indices_c, self.alg_indices_c
+                    monolithic_f, test_g, self.diff_indices_c, self.alg_indices_c # or monolithic_g
                 )
-            # # next_state = full_system_solver.solve_dae(z0, jnp.array([self.dt]), params=None, y0_tol=10)[0]
-            next_state = full_system_solver.solve_dae_one_timestep_rk4(state, t, self.dt, params=None)
-            lamb = next_state[-self.num_lamb:]
-
-            jax.debug.print('lamb')
-
-            lamb = lamb0
+            z0 = jnp.concatenate((state, lamb0))
+            next_state_ext = full_system_solver.solve_dae(z0, jnp.array([t + self.dt]), params=None, y0_tol=1e-4)[0]
+            # next_state = full_system_solver.solve_dae_one_timestep_rk4(z0, t, self.dt, params=None)
+            lamb = next_state_ext[-self.num_lamb:]
+            next_state = next_state_ext[0 : -self.num_lamb]
+            next_states = self.composite_to_subsystem_states(next_state)
+            # jax.debug.print('test lamb {}', lamb)
+            # lamb = lamb0
                 
         def fi(x, y, t, params):
             i, u_hats = params
@@ -485,55 +523,91 @@ class CompPHGNS(nn.Module):
         H, next_graphs = H_from_state(state)
         next_states = []
         next_es = []
-        for i in range(self.num_subsystems):
-            if i == self.system_k_idx:
-                pass
-            else:
-                next_state_i = self.graph_to_state[i](next_graphs[i])
-                next_e_i = next_state_i[
-                    self.num_capacitors[i]+self.num_inductors[i] : 
-                    self.num_capacitors[i]+self.num_inductors[i]+self.num_nodes[i]
-                ]
-                next_states.append(next_state_i)
-                next_es.append(next_e_i)
+        # for i in range(self.num_subsystems):
+        #     if i == self.system_k_idx:
+        #         pass
+        #     else:
+        #         next_state_i = self.graph_to_state[i](next_graphs[i])
+        #         next_e_i = next_state_i[
+        #             self.num_capacitors[i]+self.num_inductors[i] : 
+        #             self.num_capacitors[i]+self.num_inductors[i]+self.num_nodes[i]
+        #         ]
+        #         next_states.append(next_state_i)
+        #         next_es.append(next_e_i)
+
+        next_states.append(self.graph_to_state[0](next_graphs[0]))
+        next_states.append(None) # still need to find state[1]
+        next_states.append(self.graph_to_state[2](next_graphs[2]))
 
         # Gauss-Seidel approach
         # u_hats[self.system_k_idx] = jnp.sum(jnp.matmul(self.Alambdas.T, next_es))
 
+        def H_from_state_k(state_k):
+            # For the known subsystem k
+            phi = state_k[0]
+            H_k = 0.5 * phi**2
+            graph_k = jraph.GraphsTuple(nodes=jnp.array([[0, 0, 0, 0]]),
+                                        edges=jnp.array([[0, 0]]),
+                                        globals=jnp.array([H_k]),
+                                        receivers=jnp.array([0]),
+                                        senders=jnp.array([0]),
+                                        n_node=jnp.array([0]),
+                                        n_edge=jnp.array([0]))
+            return H_k, graph_k
+
+        def dynamics_function_1(x, t, params):
+            next_states = params
+            e_0 = next_states[0][2 : 5]
+            e_2 = next_states[2][2 : 5]
+            e_1 = x[1 : 4]
+            es = [e_0, e_1, e_2]
+            jv_1 = x[4 : 4]
+            dH_1, _ = jax.grad(H_from_state_k, argnums=0, has_aux=True)(x)
+            dHq = dH_1[0 : 0]
+            dHphi = dH_1[0 : 1]
+
+            lamb = x[-self.num_lamb:]
+            u_hats = self.get_coupling_input(lamb, es)
+            z_1 = jnp.concatenate((e_1, dHphi, dHq, jv_1, lamb))
+
+            return jnp.matmul(self.Js[1], z_1) - self.rs[1](z_1) + jnp.matmul(self.B_bars[1], controls[1]) + jnp.matmul(self.B_hats[1], u_hats[1])
+        
+        # def neural_dae_i(x, t, params):
+        #     i, next_y, u_hats = params
+        #     z = jnp.concatenate((x, next_y))
+        #     daes = dynamics_function_i(z, t, (i, u_hats))
+        #     return self.U_invs[i] @ (self.L_invs[i] @ self.P_invs[i] @ daes)[self.diff_indices[i]]
+        
+        def f1(x, y, t, params):
+            state = jnp.concatenate((x, y))
+            dae_1 = dynamics_function_1(state, t, params) 
+            return dae_1[self.diff_indices[1]]
+        
+        def g1(x, y, t, params):
+            state = jnp.concatenate((x, y))
+            residuals_1 = dynamics_function_1(state, t, params)[self.alg_eq_indices[1]]
+            return residuals_1
+        
+        
         # Step 3: Solve for the extended next state of subsystem k (w/ lambda) using DAE solver
-
-        # TODO: try to make PH system matrices for system k with incidence matrices w/o gnd node
-        u_hats = get_coupling_input(lamb)
-
         k = self.system_k_idx
         dae_solver = DAESolver(
-            fi, gi, self.diff_indices[k], self.alg_indices[k]
+            f1, g1, self.diff_indices[k], self.alg_indices[k]
             )
         state_k_ext = jnp.concatenate((states[k], lamb))
-        params=(k, u_hats)
+        next_state_k_ext = dae_solver.solve_dae(state_k_ext, jnp.array([t + self.dt]), params=next_states)[0]
+        # test = dae_solver.solve_dae_one_timestep_rk4(state_k_ext, t, self.dt, params=next_states)
 
-        # TODO: write out equations to make sure it makes sense
-        # yknew, infodict, ier, mesg = fsolve(lambda yy : dae_solver.g(x0, yy, t, params), y0, full_output=True)
+        next_lamb = next_state_k_ext[-self.num_lamb : len(next_state_k_ext)]
+        next_state_k = next_state_k_ext[0 : -self.num_lamb]
+        residual_1 = jnp.sum(
+            g1(next_state_k[self.diff_indices[1]], next_state_k[self.alg_indices[1]], t, params=next_states) ** 2
+        )
 
-        # if ier != 1:
-        #     # throw an error if the algebraic states are not consistent.
-        #     raise ValueError("Initial algebraic states were inconsistent. fsolve returned {}".format(mesg))
-        
-        # state_k_ext = state_k_ext.at[self.alg_indices[k]].set(yknew)
-
-        # next_state_k_ext = dae_solver.solve_dae(state_k_ext, jnp.array([self.dt]), params=params)
-        next_state_k_ext = dae_solver.solve_dae_one_timestep_rk4(state_k_ext, t, self.dt, params)
-
-        next_lamb = next_state_k_ext[-self.num_lamb:]
-
-        next_state_k = next_state_k_ext[:-self.num_lamb]
-
-        next_states.insert(k, next_state_k)
+        next_states[k] = next_state_k
         next_graphs[self.system_k_idx] = self.state_to_graph[k](
                 next_state_k, controls[k], set_ground_and_control=True,
-                globals=next_graphs[self.system_k_idx].globals
+                globals=jnp.concatenate((next_graphs[self.system_k_idx].globals, jnp.array([residual_1]))),
             )
         
-        jax.debug.print('{}', next_graphs[self.system_k_idx])
-
         return next_graphs, next_lamb

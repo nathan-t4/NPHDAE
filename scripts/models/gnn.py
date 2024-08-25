@@ -2,7 +2,6 @@ import jraph
 import jax
 import flax.linen as nn
 import jax.numpy as jnp
-import numpy as np
 
 from typing import Sequence, Callable
 from ml_collections import FrozenConfigDict
@@ -119,8 +118,6 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
         are processed with the n-th decoder.
         All other edges are processed with the last decoder.
     """
-    edge_idxs: Sequence
-    node_idxs: Sequence
     encoder_edge_fns: Sequence[Callable]
     encoder_node_fns: Sequence[Callable]
     decoder_edge_fns: Sequence[Callable]
@@ -155,10 +152,6 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
                 just MLP for the edge encoders/decoders.
             """
             identity = lambda x : x
-            # TODO: if i NOT in self.edge_idxs then embed_edge_fns[i] = identity
-            # for i in range(len(embed_edge_fns)):
-            #     embed_edge_fns[i] = embed_edge_fns[i] if embed_edge_fns[i] else identity
-            # embed_nodes_fn = embed_node_fn if embed_node_fn else identity
             embed_globals_fn = embed_global_fn if embed_global_fn else identity
 
             def Embed(graph):
@@ -168,7 +161,8 @@ class HeterogeneousGraphNetworkSimulator(nn.Module):
                 """
                 new_edges = None
                 for i in range(len(graph.edges)):
-                    new_edge = embed_edge_fns[self.edge_idxs[i]](graph.edges[i])
+                    # TODO: make embed_edge_fns based on edge indices...
+                    new_edge = embed_edge_fns[i](graph.edges[i])
                     if new_edges is None:
                         new_edges = new_edge
                     else:

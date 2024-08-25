@@ -180,10 +180,11 @@ def compose(config):
         'system_configs': system_configs,
         'composite_system_config': comp_sys_config,
         'Alambda': Alambda,
+        # 'H_from_states': get_H_from_states(train_states) # TODO
     }
 
     num_lambs = len(Alambda.T)
-    init_lamb = None # jnp.zeros(num_lambs) # None 
+    init_lamb = jnp.zeros(num_lambs) # None 
     comp_net = CompPHGNS(**comp_net_config)
     comp_params = comp_net.init(
         init_rng, init_graphs, init_control, init_lamb, init_t, net_rng
@@ -213,48 +214,30 @@ def compose(config):
             gs, next_lamb = state.apply_fn(
                 state.params, g, control, lamb, t, jax.random.key(config.seed)
             )
-            pred_data = [g_to_pd(graph) for g_to_pd, graph in zip(graph_to_pred_data, gs)]
-            gs = [graph._replace(globals=None) for graph in gs]
-            return (gs, next_lamb), pred_data
+            states = []
+            Hs = []
+            residuals = []
+            for g, g_to_s in zip(gs, graph_to_state):
+                states.append(g_to_s(g))
+                Hs.append(g.globals[0])
+                residuals.append(g.globals[1])            
+            comp_state = comp_sys_config['subsystem_to_composite_state'](states)[0]
+            pred_data = (comp_state[0:5],
+                        comp_state[jnp.array([5,6,7,9,11,12,13,14,15])], 
+                         jnp.sum(jnp.asarray(Hs), keepdims=True), 
+                         jnp.sum(jnp.asarray(residuals), keepdims=True))
+            gs = [g._replace(globals=None) for g in gs]
+            return (gs, next_lamb), (pred_data, next_lamb)
 
         init_lamb = jnp.zeros(num_lambs)
-        # init_lamb = None
         init_timesteps = t0_idxs * dt
-        _, pred_data = jax.lax.scan(forward_pass, (graphs, init_lamb), (controls, init_timesteps))
-
-        processed_pred_data = []
-        for i in range(len(pred_data[0])):
-            def make_2d(arr):
-                if len(arr.shape) < 2:
-                    return arr.reshape(-1,1)
-                else:
-                    return arr
-                
-            pred_data_i = jnp.concatenate(
-                [make_2d(pred_data[j][i]) for j in range(num_subsystems)],
-                axis=-1
-                )
-            if i == 0:
-                # TODO: reorder so that in form (q, phi) [was (q1, phi1, phi2, q2, phi3)]
-                pred_data_i = pred_data_i[:,jnp.array([0,3,1,2,4])]
-            if i == 1:
-                # Remove equivalent nodes
-                pred_data_i = pred_data_i[:,jnp.array([0,1,2,4,6,7,8,9,10])]
-            if i == 2 or i == 3:
-                pred_data_i = make_2d(jnp.sum(pred_data_i, axis=-1))
-
-            processed_pred_data.append(pred_data_i)
-
-            print('pred data i shape', pred_data_i.shape)
-            print('exp data i shape', exp_data[i].shape)
-
-        # TODO: need to remove redundant nodes???
+        _, (pred_data, lambs) = jax.lax.scan(forward_pass, (graphs, init_lamb), (controls, init_timesteps))
                    
         losses = [
-            jnp.mean(optax.l2_loss(predictions=processed_pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
+            jnp.mean(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
         ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
-        pred_data = np.concatenate(processed_pred_data, axis=1)
+        pred_data = np.concatenate(pred_data, axis=1)
         exp_data = np.concatenate(exp_data, axis=1)
         return pred_data, exp_data, eval_metrics
     
@@ -304,5 +287,5 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--dir', type=str, default=None)
     args = parser.parse_args()
-    cfg = config_factory('CompCircuits', args) # Old one is 'CompCircuitsOld'
+    cfg = config_factory('CompCircuits', args) # Old config is 'CompCircuitsOld'
     compose(cfg)

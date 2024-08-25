@@ -1,9 +1,8 @@
 import jraph
 import jax
 import jax.numpy as jnp
-import numpy as np
-import ml_collections
 from functools import partial
+import ml_collections
 from typing import Sequence, Tuple
 from jax.tree_util import register_pytree_node_class
 

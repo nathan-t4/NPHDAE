@@ -229,26 +229,79 @@ class PHGNS_NDAE(nn.Module):
         num_edge_types = 5 # num of two-terminal components (C, R, L, V, I)
         num_node_types = 1 # num of node types (voltage)
 
-        encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+        capacitor_encoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                 with_layer_norm=self.layer_norm, 
                                 activation=self.activation, 
-                                name=f'enc_edge_{i}') for i in range(num_edge_types)]
+                                name=f'cap_enc_edge')
+        
+        resistor_encoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'res_enc_edge')
+        
+        inductor_encoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'ind_enc_edge')
+        
+        volt_source_encoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'volt_enc_edge')
+        
+        cur_source_encoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+                                with_layer_norm=self.layer_norm, 
+                                activation=self.activation, 
+                                name=f'cur_enc_edge')
+        
+        encoder_edge_fns = []
+        [encoder_edge_fns.append(capacitor_encoder) for _ in range(self.num_capacitors)]
+        [encoder_edge_fns.append(resistor_encoder) for _ in range(self.num_resistors)]
+        [encoder_edge_fns.append(inductor_encoder) for _ in range(self.num_inductors)]
+        [encoder_edge_fns.append(volt_source_encoder) for _ in range(self.num_volt_sources)]
+        [encoder_edge_fns.append(cur_source_encoder) for _ in range(self.num_cur_sources)]
+
+        # encoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
+        #                         with_layer_norm=self.layer_norm, 
+        #                         activation=self.activation, 
+        #                         name=f'enc_edge_{i}') for i in range(num_edge_types)]
         
         encoder_node_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers,
                                 with_layer_norm=self.layer_norm, 
                                 activation=self.activation, 
                                 name=f'enc_node_{i}') for i in range(num_node_types)]
         
-        decoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+        capacitor_decoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
                                 activation=self.activation, 
-                                name=f'dec_edge_{i}') for i in range(num_edge_types)]
+                                name=f'cap_dec_edge')
+        resistor_decoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+                               activation=self.activation, 
+                               name=f'res_dec_edge')
+        inductor_decoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+                               activation=self.activation, 
+                               name=f'ind_dec_edge')
+        volt_source_decoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+                                  activation=self.activation, 
+                                  name=f'volt_dec_edge')
+        cur_source_decoder = MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+                                 activation=self.activation, 
+                                 name=f'cur_dec_edge')
+        
+        decoder_edge_fns = []
+        [decoder_edge_fns.append(capacitor_decoder) for _ in range(self.num_capacitors)]
+        [decoder_edge_fns.append(resistor_decoder) for _ in range(self.num_resistors)]
+        [decoder_edge_fns.append(inductor_decoder) for _ in range(self.num_inductors)]
+        [decoder_edge_fns.append(volt_source_decoder) for _ in range(self.num_volt_sources)]
+        [decoder_edge_fns.append(cur_source_decoder) for _ in range(self.num_cur_sources)]
+
+        # decoder_edge_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [edge_output_size], 
+        #                         activation=self.activation, 
+        #                         name=f'dec_edge_{i}') for i in range(num_edge_types)]
         decoder_node_fns = [MLP(feature_sizes=[self.latent_size] * self.hidden_layers + [node_output_size], 
                                 activation=self.activation, 
                                 name=f'dec_node_{i}') for i in range(num_node_types)]
 
         self.net = HeterogeneousGraphNetworkSimulator(
-            edge_idxs=self.edge_idxs,
-            node_idxs=self.node_idxs,
             encoder_node_fns=encoder_node_fns,
             encoder_edge_fns=encoder_edge_fns,
             decoder_node_fns=decoder_node_fns,

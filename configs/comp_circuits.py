@@ -30,11 +30,11 @@ def get_comp_gnn_config(args):
     config.paths = ml_collections.ConfigDict()
     config.paths.dir = args.dir
     config.paths.comp_data_path = 'results/microgrid_dae_data/val_5_800.pkl'
-    config.paths.ckpt_steps = [42, None, 42]
+    config.paths.ckpt_steps = [16, None, 16]
     config.paths.ckpt_dirs = [
-        'results/GNS/DGU/0822-1026/checkpoint/best_model',
+        'results/GNS/DGU/0824-1038/checkpoint/best_model',
         None,
-        'results/GNS/DGU/0822-1026/checkpoint/best_model',
+        'results/GNS/DGU/0824-1038/checkpoint/best_model',
     ]
     config.paths.training_data_paths = [
         'dgu_dae_data/train_500_700.pkl',

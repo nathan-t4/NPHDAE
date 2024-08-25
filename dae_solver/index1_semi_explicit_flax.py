@@ -4,6 +4,9 @@ from scipy.optimize import fsolve
 import jax
 from jax.experimental.ode import odeint
 import flax.linen as nn
+import optax
+
+import jaxopt
 
 from helpers.integrator_factory import integrator_factory
 
@@ -28,6 +31,7 @@ class DAESolver():
         self.alg_indices = alg_indices
 
         self.construct_coupled_odes()
+        self.construct_optimizer()
 
     def construct_coupled_odes(self):
         """
@@ -48,14 +52,12 @@ class DAESolver():
         def construct_b(x,y,t,params):
             return jnp.matmul(gx(x,y,t,params), self.f(x,y,t,params)) + gt(x,y,t,params)
         
-        @nn.jit
         def y_dot(x,y,t,params):
             return - jnp.linalg.solve(gy(x,y,t,params), construct_b(x,y,t,params))
         
-        @nn.jit
         def f_coupled_system(z, t, params):
-            x = z[self.diff_indices]
-            y = z[self.alg_indices]
+            x = z[0 : len(self.diff_indices)]
+            y = z[len(self.diff_indices) ::]
 
             xp = self.f(x,y,t,params)
             yp = self.y_dot(x,y,t,params)
@@ -65,26 +67,53 @@ class DAESolver():
         self.y_dot = y_dot
         self.f_coupled_system = f_coupled_system
 
+    def construct_optimizer(self):
+        self.optimizer = optax.adam(1e-2)
+
+    def optimize(self, f, init_params):
+        opt_state = self.optimizer.init(init_params)
+
+        def step(params, opt_state):
+            f_value, grads = jax.value_and_grad(f)(params)
+            update, opt_state = self.optimizer.update(grads, opt_state, params)
+            params = optax.apply_updates(params, update)
+            return params, f_value, opt_state
+        
+        params = init_params
+        for k in range(10):
+            params, f_value, opt_state = step(params, opt_state)
+
+        return params, f_value
+
     def solve_dae(self, z0, T, params, y0_tol=1e-9):
         """
         Solve the DAE
         """
 
-        x0 = z0[self.diff_indices]
-        y0 = z0[self.alg_indices]
+        x0 = z0[:len(self.diff_indices)]
+        y0 = z0[len(self.diff_indices) ::]
 
-        print(f"Initial g {self.g(x0, y0, T[0], params)}")
-
-        y0new, infodict, ier, mesg = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0, full_output=True, xtol=y0_tol)
+        # y0new, infodict, ier, mesg = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0, full_output=True)
         
-        if ier != 1:
-            # throw an error if the algebraic states are not consistent.
-            raise ValueError("Initial algebraic states were inconsistent. fsolve returned {}".format(mesg))
+        # if ier != 1:
+        #     # throw an error if the algebraic states are not consistent.
+        #     raise ValueError("Initial algebraic states were inconsistent. fsolve returned {}".format(mesg))
+        
+        # fsolve = jaxopt.ScipyRootFinding(
+        #     dtype=jnp.float32,
+        #     method='lm', 
+        #     optimality_fun=lambda yy : self.g(x0, yy, T[0], params),
+        #     tol=y0_tol)
+        
+        # solver = fsolve.run(init_params=y0)
+        # y0new = solver.params
 
-        if not (jnp.abs(y0new - y0) < y0_tol).all():
-            print("Initial algebraic states {} were inconsistent. New initial algebraic state values are {}".format(y0, y0new))
-            y0 = y0new
-            z0 = jnp.concatenate((x0, y0))
+        y0new, g = self.optimize(lambda yy : optax.squared_error(self.g(x0, yy, T[0], params)).mean(), init_params=y0) # MSE
+
+        # if not (jnp.abs(y0new - y0) < y0_tol).all():
+        # print("Initial algebraic states {} were inconsistent. New initial algebraic state values are {}".format(y0, y0new))
+        y0 = y0new
+        z0 = jnp.concatenate((x0, y0))
 
         sol = odeint(self.f_coupled_system, z0, T, params)
 

@@ -1,5 +1,4 @@
 import jax
-import numpy as np
 import jax.numpy as jnp
 import matplotlib
 matplotlib.use('Agg')
@@ -37,9 +36,9 @@ def incidence_matrices_from_graph(graph, edge_types=None):
         label = edge_types[i]
         sender_idx = graph.senders[i]
         receiver_idx = graph.receivers[i]
-        Ai = np.zeros((len(graph.nodes)))
-        Ai[sender_idx] = -1
-        Ai[receiver_idx] = 1
+        Ai = jnp.zeros((len(graph.nodes)))
+        Ai = Ai.at[sender_idx].set(-1)
+        Ai = Ai.at[receiver_idx].set(1)
         A[label].append(Ai)
 
     A = [jnp.array(a).T if len(a) > 0 else None for a in A]

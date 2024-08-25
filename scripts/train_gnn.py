@@ -68,8 +68,8 @@ def eval(config: ml_collections.ConfigDict):
     net_params.graph_to_state = train_gb.graph_to_state
     net_params.alg_vars_from_graph = train_gb.get_alg_vars_from_graph
     net_params.include_idxs = train_gb.include_idxs
-    net_params.edge_idxs = train_gb.edge_idxs
-    net_params.node_idxs = train_gb.node_idxs
+    # net_params.edge_idxs = train_gb.edge_idxs
+    # net_params.node_idxs = train_gb.node_idxs
 
     net = create_net(net_params)
     net.training = False
