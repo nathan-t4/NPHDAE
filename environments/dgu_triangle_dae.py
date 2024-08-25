@@ -155,7 +155,7 @@ class DGU_TRIANGLE_PH_DAE():
 
         return dataset
 
-if __name__ == '__main__':
+def generate_dataset(ntraj=1, ntimesteps=150, plot=True):
     num_nodes = 12
     AC = np.zeros((num_nodes,3))
     AC[2,0] = 1
@@ -212,7 +212,7 @@ if __name__ == '__main__':
     
     # seed = 42 # for testing
     seed = 41 # for training
-    env = DGU_TRIANGLE_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.01)
+    env = DGU_TRIANGLE_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.0015)
 
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'dgu_triangle_data'))
@@ -224,20 +224,26 @@ if __name__ == '__main__':
     dataset = env.gen_dataset(
         z0_init_lb=jnp.concatenate((1 * jnp.zeros(9), jnp.zeros(15))),
         z0_init_ub=jnp.concatenate((1 * jnp.zeros(9), jnp.zeros(15))),
-        trajectory_num_steps=150, # 700 for training, 800 for testing.
+        trajectory_num_steps=1000, # 700 for training, 800 for testing.
         num_trajectories=1, # 500 for training, 20 for testing
         save_str=save_dir,
     )
 
     import matplotlib.pyplot as plt
-    T = jnp.arange(150)
-    traj = dataset['state_trajectories'][0,:,:]
-    fig, ax = plt.subplots(2, figsize=(15,25))
-    ax[0].plot(T, traj[:,jnp.array([0,1,2,3,4,5,6,7,8,21,22,23])], label=['q1', 'q2', 'q3', 'phi1', 'phi2', 'phi_3', 'phi_4', 'phi_5', 'phi_6', 'jv1', 'jv2', 'jv3'])
-    ax[1].plot(T, traj[:,9:21], label=['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9', 'e10', 'e11', 'e12'])
-    ax[0].legend(loc='upper right')
-    ax[1].legend(loc='upper right')
-    plt.savefig('dgu_triangle_actual.png')
-    plt.show()
+    if plot:
+        T = jnp.arange(150)
+        traj = dataset['state_trajectories'][0,:,:]
+        fig, ax = plt.subplots(2, figsize=(15,25))
+        ax[0].plot(T, traj[:,jnp.array([0,1,2,3,4,5,6,7,8,21,22,23])], label=['q1', 'q2', 'q3', 'phi1', 'phi2', 'phi_3', 'phi_4', 'phi_5', 'phi_6', 'jv1', 'jv2', 'jv3'])
+        ax[1].plot(T, traj[:,9:21], label=['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9', 'e10', 'e11', 'e12'])
+        ax[0].legend(loc='upper right')
+        ax[1].legend(loc='upper right')
+        plt.savefig('dgu_triangle_actual.png')
+        plt.show()
 
     print(time.time() - t)
+
+    return dataset
+
+if __name__ == '__main__':
+    generate_dataset()
