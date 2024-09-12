@@ -10,18 +10,18 @@ def get_comp_gnn_config(args):
     config.subsystem_names = ['DGU', 'TL', 'DGU']
     config.learned_subsystem = [True, False, True]
     config.last_subsystem_idx = 1
-    config.Alambda = jnp.array([[0.0, 0.0], 
+    config.Alambda =jnp.array([[0.0, 0.0], 
                                 [0.0, 0.0],
                                 [1.0, 0.0],
                                 [-1.0, 0.0],
                                 [0.0, 0.0],
-                                [0.0, -1.0],
+                                [0.0, -1.0], # changed order
                                 [0.0, 0.0],
                                 [0.0, 0.0],
-                                [0.0, 1.0]])
+                                [0.0, 1.0]]) # changed order
 
     config.trial_name = f'{strftime("%m%d-%H%M")}_{"_".join(config.subsystem_names)}'
-    config.rollout_timesteps = 800
+    config.rollout_timesteps = 100
     config.log_every_steps = 1
     config.eval_every_steps = 2
     config.ckpt_every_steps = 5
@@ -124,10 +124,8 @@ def get_comp_gnn_config(args):
     ]
 
     # TODO: check that these matrices are consistent with subsystems
-    # THESE INCLUDE GROUND NODE
     config.composite_incidence_matrices = ml_collections.ConfigDict()
     config.composite_incidence_matrices.AC = jnp.array(
-                    # [[-1.0, -1.0],
                     [[0.0, 0.0], 
                     [0.0, 0.0], 
                     [1.0, 0.0], 
@@ -136,7 +134,6 @@ def get_comp_gnn_config(args):
                     [0.0, 0.0], 
                     [0.0, 1.0]])
     config.composite_incidence_matrices.AR = jnp.array(
-                    # [[0.0, 0.0, 0.0],
                     [[-1.0, 0.0, 0.0], 
                     [1.0, 0.0, 0.0],
                     [0.0, -1.0, 0.0],
@@ -145,16 +142,14 @@ def get_comp_gnn_config(args):
                     [0.0, 0.0, 1.0],
                     [0.0, 0.0, 0.0]])
     config.composite_incidence_matrices.AL = jnp.array(
-                    # [[0.0, 0.0, 0.0],
                     [[0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [-1.0, 0.0, 0.0],
                     [0.0, -1.0, 0.0],
                     [0.0, 0.0, 0.0],
-                    [0.0, 0.0, -1.0],
-                    [0.0, 1.0, 1.0]])
+                    [0.0, 0.0, 1.0],
+                    [0.0, 1.0, -1.0]])
     config.composite_incidence_matrices.AV = jnp.array(
-                    # [[-1.0, -1.0],
                     [[1.0, 0.0], 
                     [0.0, 0.0], 
                     [0.0, 0.0], 
@@ -163,7 +158,6 @@ def get_comp_gnn_config(args):
                     [0.0, 0.0], 
                     [0.0, 0.0]])
     config.composite_incidence_matrices.AI = jnp.array(
-                    # [[1.0, 1.0],
                     [[0.0, 0.0], 
                     [0.0, 0.0], 
                     [-1.0, 0.0], 

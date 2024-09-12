@@ -276,6 +276,7 @@ class TestGraphBuilder(GraphBuilder):
         import matplotlib.pyplot as plt
         from matplotlib import cm
         import os
+        import numpy as np
 
         cmap = cm.tab10
 
@@ -290,39 +291,54 @@ class TestGraphBuilder(GraphBuilder):
 
         values[
             0 : 
-            self.num_capacitors] = [f'Q_{i}' for i in range(self.num_capacitors)]    
+            self.num_capacitors] = [f'Q' for i in range(self.num_capacitors)]    
         values[
             self.num_capacitors : 
             self.num_capacitors+self.num_inductors
-            ] = [f'Phi_{i}' for i in range(self.num_inductors)]
+            ] = [f'Phi' for i in range(self.num_inductors)]
         values[
             self.num_capacitors+self.num_inductors : 
             self.num_capacitors+self.num_inductors+self.num_nodes
-            ] = [f'V_{i}' for i in range(self.num_nodes)]
+            ] = [f'V' for i in range(self.num_nodes)]
         values[
             self.num_capacitors+self.num_inductors+self.num_nodes : 
             self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources
-            ] = [f'jv_{i}' for i in range(self.num_volt_sources)]
+            ] = [f'jv' for i in range(self.num_volt_sources)]
+        values.extend([
+            f'lamb' for i in range(len(pred[0, self.num_capacitors+self.num_inductors+self.num_nodes+self.num_volt_sources : -2]))
+            ])
         values.append('H')
         values.append('residual')
 
-        layout = [values, [f'{v}e' for v in values]]
+        uniq, index = np.unique(values, return_index=True)
+        uniq = uniq[index.argsort()]
+
+        layout = np.array([uniq, [f'{v}e' for v in uniq]])
         ax = fig.subplot_mosaic(layout)
 
-        ts = jnp.arange(self._num_timesteps) * self._dt
+        ts = jnp.arange(pred.shape[0]) * self._dt
+        
+        past_v = values[0]
+        counter = 0
         for i,v in enumerate(values):
+            if v == past_v:
+                counter = counter + 1
+            else:
+                counter = 0
+
             ax[v].set_title(f'${v}$')
-            ax[v].plot(ts, pred[:,i], color=cmap(0), ls='-', label=f'pred ${v}$')
-            ax[v].plot(ts, exp[:,i], color=cmap(0), ls='--', label=f'exp ${v}$')
+            ax[v].plot(ts, pred[:,i], color=cmap(counter), ls='-', label=f'pred ${v}$')
+            ax[v].plot(ts, exp[:,i], color=cmap(counter), ls='--', label=f'exp ${v}$')
             ax[v].set_xlabel('Time [$s$]')
             ax[v].set_ylabel(f'${v}$')
             # ax[v].legend()
 
             ax[f'{v}e'].set_title(f'${v}$ Error')
-            ax[f'{v}e'].plot(ts, exp[:,i] - pred[:,i], color=cmap(0), ls='-')
+            ax[f'{v}e'].plot(ts, exp[:,i] - pred[:,i], color=cmap(counter), ls='-')
             ax[f'{v}e'].set_xlabel('Time [$s$]')
             ax[f'{v}e'].set_ylabel(f'${v}$')
             # ax[f'{v}e'].legend()
+            past_v = v
 
         fig.tight_layout()
         plt.savefig(os.path.join(plot_dir, f'{prefix}.png'))

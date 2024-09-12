@@ -4,7 +4,7 @@ import optax
 from flax.training.train_state import TrainState
 import orbax.checkpoint as ocp
 
-from scripts.model_instances.comp_nets import CompPHGNS
+from scripts.model_instances.comp_nets import CompPHGNS, MonolithicCompPHGNS
 from helpers.graph_builder_factory import gb_factory
 from helpers.config_factory import config_factory
 from utils.train_utils import *
@@ -107,8 +107,9 @@ def compose(config):
             graph_to_pred_data.append(g_to_pd)
 
             # TODO: move somewhere...
-            # This is Alambda for tsubsystem k (transmission line)
+            # This is Alambda for subsystem k (transmission line)
             Alambda_k = Alambda[3:6] # (num_nodes_1) : (num_nodes_1+num_nodes_2)
+            # Alambda_k = jnp.array([[-1, -1], [0, 0,], [1, 1]]) # TEST!
             system_config = get_system_k_config(*incidence_matrices[i], Alambda_k)
             system_config['is_k'] = True
         
@@ -180,12 +181,12 @@ def compose(config):
         'system_configs': system_configs,
         'composite_system_config': comp_sys_config,
         'Alambda': Alambda,
-        # 'H_from_states': get_H_from_states(train_states) # TODO
     }
 
     num_lambs = len(Alambda.T)
     init_lamb = jnp.zeros(num_lambs) # None 
     comp_net = CompPHGNS(**comp_net_config)
+    # comp_net = MonolithicCompPHGNS(**comp_net_config)
     comp_params = comp_net.init(
         init_rng, init_graphs, init_control, init_lamb, init_t, net_rng
         )
@@ -217,28 +218,32 @@ def compose(config):
             states = []
             Hs = []
             residuals = []
-            for g, g_to_s in zip(gs, graph_to_state):
-                states.append(g_to_s(g))
-                Hs.append(g.globals[0])
-                residuals.append(g.globals[1])            
-            comp_state = comp_sys_config['subsystem_to_composite_state'](states)[0]
+            for graph, g_to_s in zip(gs, graph_to_state):
+                states.append(g_to_s(graph))
+                Hs.append(graph.globals[0])
+                residuals.append(graph.globals[1])   
+                     
+            comp_state = comp_sys_config['subsystem_to_composite_state'](states, Alambda)[0]
             pred_data = (comp_state[0:5],
-                        comp_state[jnp.array([5,6,7,9,11,12,13,14,15])], 
+                         comp_state[5:14], 
                          jnp.sum(jnp.asarray(Hs), keepdims=True), 
                          jnp.sum(jnp.asarray(residuals), keepdims=True))
             gs = [g._replace(globals=None) for g in gs]
             return (gs, next_lamb), (pred_data, next_lamb)
 
         init_lamb = jnp.zeros(num_lambs)
+        init_lamb = jnp.array([0, 0], dtype=jnp.float32)
         init_timesteps = t0_idxs * dt
         _, (pred_data, lambs) = jax.lax.scan(forward_pass, (graphs, init_lamb), (controls, init_timesteps))
-                   
+
         losses = [
             jnp.mean(optax.l2_loss(predictions=pred_data[i], targets=exp_data[i])) for i in range(len(exp_data))
         ]
         eval_metrics = [EvalMetrics.single_from_model_output(loss=loss) for loss in losses]
         pred_data = np.concatenate(pred_data, axis=1)
         exp_data = np.concatenate(exp_data, axis=1)
+        pred_data = np.insert(pred_data, [-2], lambs, axis=1)
+        exp_data = np.insert(exp_data, [-2], jnp.zeros((exp_data.shape[0], num_lambs)), axis=1)
         return pred_data, exp_data, eval_metrics
     
     

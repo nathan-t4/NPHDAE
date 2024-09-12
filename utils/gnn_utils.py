@@ -181,7 +181,6 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
     E = E.at[num_nodes:num_nodes+num_inductors, num_capacitors:num_capacitors+num_inductors].set(jnp.eye(num_inductors))
 
     J = jnp.zeros((state_dim, state_dim)) 
-
     # first row of equations of J 
     J = J.at[0:num_nodes, num_nodes:(num_nodes + num_inductors)].set(-AL) 
     J = J.at[
@@ -198,11 +197,12 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
             0:num_nodes].set(AL.transpose())
     
     # Final row of equations of J
-    J = J.at[(num_nodes + num_inductors + num_capacitors)::,
+    J = J.at[(num_nodes + num_inductors + num_capacitors) :
+            (num_nodes + num_inductors + num_capacitors + num_volt_sources),
             0:num_nodes].set(AV.transpose()) 
     
     J = J.at[(num_nodes + num_inductors + num_capacitors + num_volt_sources):,
-            0:num_nodes].set(-Alambda.transpose())
+            0:num_nodes].set(Alambda.transpose())
     
 
     def r(z):
@@ -225,7 +225,10 @@ def get_system_k_config(AC, AR, AL, AV, AI, Alambda):
 
     B = jnp.zeros((state_dim, num_cur_sources + num_volt_sources))
     B = B.at[0:num_nodes, 0:num_cur_sources].set(-AI)
-    B = B.at[(num_nodes + num_inductors + num_capacitors):, num_cur_sources:].set(-jnp.eye(num_volt_sources))
+    B = B.at[(num_nodes + num_inductors + num_capacitors) :
+             (num_nodes + num_inductors + num_capacitors + num_volt_sources), 
+             num_cur_sources : (num_cur_sources + num_volt_sources)
+             ].set(-jnp.eye(num_volt_sources))
 
     diff_indices, alg_indices = get_diff_and_alg_indices(E)
     alg_eq_indices = get_alg_eq_indices(E)
@@ -343,7 +346,7 @@ def get_B_hats(system_configs, Alambda):
             else:
                 system_k_idx = i
                 B_hat_k = jnp.concatenate((
-                    jnp.zeros((state_dims[i]-num_lamb, 1)), jnp.ones((num_lamb,1))
+                    jnp.zeros((state_dims[i]-num_lamb, num_lamb)), jnp.eye(num_lamb)
                 ))
                 B_hats = [*B_hats, B_hat_k]
         else:

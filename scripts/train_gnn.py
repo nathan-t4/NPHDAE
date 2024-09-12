@@ -235,7 +235,7 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
     params = net.init(init_rng, init_graph, init_control, t0, net_rng)
     batched_apply = jax.vmap(net.apply, in_axes=(None, 0, 0, 0, None))
     ############################################################
-        
+    
     def train_epoch(state: TrainState, batch_size: int, rng: jax.Array):
         ''' Train one epoch using all trajectories '''     
         loss_function = training_params.loss_function
@@ -245,6 +245,7 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
         dropout_rng = jax.random.split(rng, batch_size)
         rng, net_rng = jax.random.split(rng)
 
+        @jax.jit
         def loss_fn(params, batch_graphs, batch_data):
             if name == 'LC2':
                 batch_control = jnp.array(batch_data[0])
@@ -303,6 +304,7 @@ def train(config: ml_collections.ConfigDict, optimizing_hparams=False):
                 #      + 0.1 * optax.squared_error(residuals_prediction, residuals_target).mean()
             return loss
 
+        @jax.jit
         def train_batch(state, trajs, t0_idxs):
             tf_idxs = t0_idxs + net_params.T
             batch_control = train_gb.get_control(trajs, t0_idxs)
