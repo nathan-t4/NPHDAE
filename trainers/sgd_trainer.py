@@ -53,7 +53,8 @@ class SGDTrainer(object):
                     opt_state, 
                     params, 
                     x : jnp.ndarray, 
-                    y : jnp.ndarray) -> tuple:
+                    y : jnp.ndarray,
+                    u : jnp.ndarray) -> tuple:
             """
             The update loop to be used during training.
 
@@ -72,7 +73,8 @@ class SGDTrainer(object):
                 Array representing the labeled model output(s).
                 The last axis should index the dimensions of the individual datapoints.
             """
-            grads, loss_vals = jax.grad(loss, argnums=0, has_aux=True)(params, x, y)
+            loss = get_loss_function(model, self.trainer_setup['loss_setup'])
+            grads, loss_vals = jax.grad(loss, argnums=0, has_aux=True)(params, x, y, u)
             updates, new_opt_state = optimizer.update(grads, opt_state, params)
             new_params = optax.apply_updates(params, updates)
 
@@ -150,6 +152,10 @@ class SGDTrainer(object):
 
             minibatch_in = training_dataset['inputs'][minibatch_sample_indeces, :]
             minibatch_out = training_dataset['outputs'][minibatch_sample_indeces, :]
+            if 'control_inputs' in training_dataset.keys():
+                minibatch_control = training_dataset['control_inputs'][minibatch_sample_indeces, :]
+            else:
+                minibatch_control = None    
 
             # Compute the gradient on the sampled minibatch
             self.params, self.opt_state, loss_vals = \
@@ -157,12 +163,14 @@ class SGDTrainer(object):
                             self.opt_state,
                             self.params,
                             minibatch_in,
-                            minibatch_out)
+                            minibatch_out,
+                            minibatch_control)
             
             # compute the loss on the testing dataset
             _, test_loss_vals = self.loss(self.params, 
                                         testing_dataset['inputs'][:, :],
-                                        testing_dataset['outputs'][:, :])
+                                        testing_dataset['outputs'][:, :],
+                                        testing_dataset['control_inputs'][:, :])
 
             # Save the training loss values
             self.record_results(step + completed_steps_offset,

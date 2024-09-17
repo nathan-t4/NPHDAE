@@ -59,7 +59,7 @@ def compute_traj_err(true_traj, pred_traj):
     errs = jnp.sqrt(errs)
     return errs
 
-def predict_trajectory(model, params, initial_state, num_steps, dt, t_init=0.0):
+def predict_trajectory(model, params, initial_state, num_steps, dt, t_init=0.0, control=None):
     """
     Predict the trajectory of the model given the initial state.
 
@@ -80,7 +80,8 @@ def predict_trajectory(model, params, initial_state, num_steps, dt, t_init=0.0):
     for i in range(num_steps - 1):
         curr_t = timesteps[-1]
         z = jnp.concatenate((predicted_traj[-1], jnp.array([curr_t]))).reshape(1, len(initial_state) + 1)
-        predicted_traj.append(forward(params, z).reshape(len(initial_state),))
+        u = control[i, :].reshape(1, -1)
+        predicted_traj.append(forward(params, z, u).reshape(len(initial_state),))
         timesteps.append(timesteps[-1] + dt)
     return jnp.array(predicted_traj), jnp.array(timesteps)
 
@@ -93,6 +94,7 @@ def compute_g_vals_along_traj(g, params, traj, timesteps, num_diff_vars):
         y = z[num_diff_vars::]
         g_vals.append(g(x,y,t,params))
 
+    print('g vals 50', g_vals[50])
     g_vals = jnp.array(g_vals)
     g_vals_norm = jnp.sqrt(jnp.sum(g_vals**2, axis=1))
 

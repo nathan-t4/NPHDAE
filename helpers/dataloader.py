@@ -275,6 +275,10 @@ class TrajectoryDataLoaderIncludeTimestepsInInput(DataLoader):
 
         dataset['outputs'] = dataset['outputs'].reshape(-1, dataset['outputs'].shape[-1])
 
+        if 'control_inputs' in dataset:
+            control_dim = dataset['control_inputs'].shape[-1]
+            dataset['control_inputs'] = dataset['control_inputs'].reshape(-1, control_dim)
+
         return dataset
 
 

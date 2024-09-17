@@ -72,10 +72,10 @@ class DGU_PH_DAE():
                                     maxval=z0_init_ub)
         
         T = jnp.arange(0.0, step=self.dt, stop=self.dt * trajectory_num_steps)
-
+        control_inputs = jax.vmap(self.dae.u_func, in_axes=(0,None))(T, None)
         # Generate the trajectory. Note that the dae solver automatically
         # finds the closest initial state for the algebraic variables
-        return self.dae.solve(z0val, T, self.params), T
+        return self.dae.solve(z0val, T, self.params), T, control_inputs
 
     def gen_dataset(self,
                     z0_init_lb : jnp.array,
@@ -113,7 +113,7 @@ class DGU_PH_DAE():
         dataset['config'] = self.config.copy()
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        trajectory, timesteps = self.gen_random_trajectory(
+        trajectory, timesteps, control_inputs = self.gen_random_trajectory(
                                         z0_init_lb, 
                                         z0_init_ub, 
                                         trajectory_num_steps=\
@@ -122,11 +122,12 @@ class DGU_PH_DAE():
                                     )
         dataset['state_trajectories'] = jnp.array([trajectory])
         dataset['timesteps'] = jnp.array([timesteps])
+        dataset['control_inputs'] = jnp.array([control_inputs])
 
         # training_dataset = jnp.array([jnp.stack((state, next_state), axis=0)])
         for traj_ind in tqdm.tqdm(range(1, num_trajectories), desc='Generating training trajectories'):
             self._rng_key, subkey = jax.random.split(self._rng_key)
-            trajectory, timesteps = self.gen_random_trajectory(
+            trajectory, timesteps, control_inputs = self.gen_random_trajectory(
                                             z0_init_lb, 
                                             z0_init_ub, 
                                             trajectory_num_steps=\
@@ -138,6 +139,9 @@ class DGU_PH_DAE():
                 )
             dataset['timesteps'] = jnp.concatenate(
                     (dataset['timesteps'], jnp.array([timesteps])), axis=0
+                )
+            dataset['control_inputs'] = jnp.concatenate(
+                    (dataset['control_inputs'], jnp.array([control_inputs])), axis=0
                 )
         
         if save_str is not None:
@@ -157,9 +161,13 @@ if __name__ == '__main__':
     AV = jnp.array([[1.0], [0.0], [0.0]])
     AI = jnp.array([[0.0], [0.0], [-1.0]])
 
-    R = 1
-    L = 1
-    C = 1
+    # R = 1
+    # L = 1
+    # C = 1
+
+    R = 0.2
+    L = 1.8e-3
+    C = 2.2e-3
 
     # x0 = jnp.array([0.0, 0.0])
     # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
@@ -178,8 +186,8 @@ if __name__ == '__main__':
     def u_func(t, params):
         return jnp.array([0.1, 1.0])
     
-    seed = 42 # for testing
-    # seed = 41 # for training
+    # seed = 42 # for testing
+    seed = 41 # for training
     env = DGU_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.01)
 
     curdir = os.path.abspath(os.path.curdir)
@@ -192,8 +200,8 @@ if __name__ == '__main__':
     dataset = env.gen_dataset(
         z0_init_lb=jnp.array([-1.0, -1.0, 0.0, 0.0, 0.0, 0.0]),
         z0_init_ub=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
-        trajectory_num_steps=200, # 1000 for training, 200 for testing.
-        num_trajectories=50, # 500 for training, 50 for testing
+        trajectory_num_steps=800, # 700 for training, 800 for testing.
+        num_trajectories=1, # 500 for training, 20 for testing
         save_str=save_dir,
     )
 

@@ -57,14 +57,13 @@ class PHDAE():
         self.r_func = r_func
         self.u_func = u_func
 
+        # These don't dynamically change
+        self.diffeq_indices, self.alg_eq_indices = self.get_diffeq_indexes_in_output_vector()
+
         self.construct_f_and_g()
         self.construct_dae_solver()
 
     def construct_f_and_g(self):
-
-        # These don't dynamically change
-        diffeq_indices, alg_eq_indices = self.get_diffeq_indexes_in_output_vector()
-
         def f(x, y, t, params):
             if params is not None:
                 if 'u_func' in params.keys():
@@ -79,8 +78,8 @@ class PHDAE():
             rhs = jnp.linalg.matmul(J, z_vec) - diss + jnp.linalg.matmul(B, self.u_func(t, u_func_params))
 
             # Grab only the rows corresponding to the differential equation indices and columns corresponding to the differential variables
-            rhs = rhs[diffeq_indices]
-            E = E[diffeq_indices][:, 0:(self.num_capacitors + self.num_inductors)]
+            rhs = rhs[self.diffeq_indices]
+            E = E[self.diffeq_indices][:, 0:(self.num_capacitors + self.num_inductors)]
 
             # Note that this system could actually be overdetermined.
             # It will always have a unique solution, but there could be more equations that unknowns.
@@ -104,7 +103,7 @@ class PHDAE():
             E, J, z_vec, diss, B = self.construct_matrix_equations(x, y, t, params)
             rhs = jnp.linalg.matmul(J, z_vec) - diss + jnp.linalg.matmul(B, self.u_func(t, u_func_params))
 
-            return rhs[alg_eq_indices]
+            return rhs[self.alg_eq_indices]
 
         self.f = jax.jit(f)
         self.g = jax.jit(g)

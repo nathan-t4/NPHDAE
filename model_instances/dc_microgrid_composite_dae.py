@@ -14,9 +14,9 @@ AL = jnp.array([[0.0], [1.0], [-1.0]])
 AV = jnp.array([[1.0], [0.0], [0.0]])
 AI = jnp.array([[0.0], [0.0], [-1.0]])
 
-R = 1
-L = 1
-C = 1
+R = 0.2
+L = 1.8e-3
+C = 2.2e-3
 
 def r_func(delta_V, params=None):
     return delta_V / R
@@ -28,7 +28,7 @@ def grad_H_func(phi, params=None):
     return phi / L
 
 def u_func(t, params):
-    return jnp.array([0.1, 1.0])
+    return jnp.array([0.8, 100.0])
 
 dgu1 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
 ph_dae_list.append(dgu1)
@@ -40,8 +40,8 @@ AL = jnp.array([[0.0], [-1.0], [1.0]])
 AV = jnp.array([[0.0], [0.0], [0.0]])
 AI = jnp.array([[0.0], [0.0], [0.0]])
 
-R = 1
-L = 1
+R = 0.05
+L = 1.8e-6
 
 def r_func(delta_V, params=None):
     return delta_V / R
@@ -65,9 +65,9 @@ AL = jnp.array([[0.0], [1.0], [-1.0]])
 AV = jnp.array([[1.0], [0.0], [0.0]])
 AI = jnp.array([[0.0], [0.0], [-1.0]])
 
-R = 1
-L = 1
-C = 1
+R = 0.2
+L = 1.8e-3
+C = 2.2e-3
 
 def r_func(delta_V, params=None):
     return delta_V / R
@@ -79,7 +79,7 @@ def grad_H_func(phi, params=None):
     return phi / L
 
 def u_func(t, params):
-    return jnp.array([0.1, 1.0])
+    return jnp.array([1.1, 100.0])
 
 dgu2 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
 ph_dae_list.append(dgu2)
@@ -98,9 +98,9 @@ A_lambda = jnp.array([
 composite_dae = CompositePHDAE(ph_dae_list, A_lambda)
 
 x0 = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0])
-y0 = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+y0 = jnp.array([100.0, 100.0, 0.0, 0.0, 0.0, 0.0, 100.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 z0 = jnp.concatenate((x0, y0))
-T = jnp.linspace(0, 1.5, 1000)
+T = jnp.linspace(0, 0.08, 1000) # jnp.linspace(0, 1.5, 1000)
 
 sol = composite_dae.solve(z0, T, params_list=[None, None, None])
 
