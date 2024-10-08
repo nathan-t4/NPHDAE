@@ -48,6 +48,9 @@ class DGU_PHNDAE():
         self.L = jnp.array(model_setup['L'])
         self.C = jnp.array(model_setup['C'])
         
+        self.regularization_method = model_setup['regularization_method']
+        self.reg_param = model_setup['reg_param']
+        
         self.model_setup = model_setup.copy()
 
         self._get_num_vars()
@@ -110,8 +113,8 @@ class DGU_PHNDAE():
 
         num_resistors = self.num_resistors
         def r_func(delta_V, params=None):
-            # R = lambda x : jnp.sum(r_net.forward(params=params, x=x))
-            R = lambda x : x / self.R
+            R = lambda x : jnp.sum(r_net.forward(params=params, x=x))
+            # R = lambda x : x / self.R
             delta_V = jnp.reshape(delta_V, (num_resistors, 1))
             return jax.vmap(R, 0)(delta_V).reshape((num_resistors,))
         self.r_func = jax.jit(r_func)
@@ -122,22 +125,25 @@ class DGU_PHNDAE():
         init_params['q_func'] = q_net.init_params
 
         num_capacitors = self.num_capacitors
-        def q_func(delta_V, params=None):
-            # Q = lambda x : jnp.sum(q_net.forward(params=params, x=x))
-            Q = lambda x : self.C * x
+        def q_func(delta_V, params=None):   
+            Q = lambda x : jnp.sum(q_net.forward(params=params, x=x))
+            # Q = lambda x : self.C * x
             delta_V = jnp.reshape(delta_V, (num_capacitors, 1))
             return jax.vmap(Q, 0)(delta_V).reshape((num_capacitors,))
         self.q_func = jax.jit(q_func)
 
-        voltage_source_freq = self.model_setup['u_func_freq']
+        # voltage_source_freq = self.model_setup['u_func_freq']
         current_source_magnitude = self.model_setup['u_func_current_source_magnitude']
         voltage_source_magnitude = self.model_setup['u_func_voltage_source_magnitude']
         def u_func(t, params):
-            if params is None:
-                return jnp.array([current_source_magnitude, voltage_source_magnitude])
-            else:
-                return jnp.array(params)
-        self.u_func = jax.jit(u_func)
+            # if params is None:
+            #     return jnp.array([current_source_magnitude, voltage_source_magnitude])
+            # else:
+                # return jnp.array(params)
+            return jnp.array([current_source_magnitude, voltage_source_magnitude])
+
+        # self.u_func = jax.jit(u_func)
+        self.u_func = u_func
         init_params['u_func_params'] = None # Don't make frequency a parameter here, otherwise training will try and optimize it.
 
         self.dae = PHDAE(
@@ -149,16 +155,18 @@ class DGU_PHNDAE():
             self.grad_H_func,
             self.q_func, 
             self.r_func, 
-            self.u_func
+            self.u_func,
+            self.regularization_method,
+            self.reg_param,
         )
 
         def forward(params, z, u):
             t = z[-1]
             z = z[:-1]
-            params['u_func'] = u
+            # params['u_func'] = u
             return self.dae.solver.solve_dae_one_timestep_rk4(z, t, self.dt, params)
         
-        # self.forward = jax.jit(forward)
+        self.forward = jax.jit(forward)
         self.forward = jax.vmap(forward, in_axes=(None, 0, 0))
 
         def forward_g(params, z, u):
@@ -169,9 +177,9 @@ class DGU_PHNDAE():
             y = z[self.num_differential_vars::]
             g = self.dae.g
 
-            params['u_func'] = u
+            # params['u_func'] = u
             return g(x, y, t, params)
         
-        # self.forward_g = jax.jit(forward_g)
+        self.forward_g = jax.jit(forward_g)
         self.forward_g = jax.vmap(forward_g, in_axes=(None, 0, 0))
         self.init_params = init_params

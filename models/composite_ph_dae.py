@@ -11,9 +11,13 @@ class CompositePHDAE():
             self, 
             ph_dae_list : list,
             Alambda : jnp.ndarray,
+            regularization_method : str,
+            reg_param : float = 0.0,
         ):
 
         self.num_subsystems = len(ph_dae_list)
+        self.regularization_method = regularization_method
+        self.reg_param = reg_param
         
         self.num_nodes = sum([dae.num_nodes for dae in ph_dae_list])
         self.num_capacitors = sum([dae.num_capacitors for dae in ph_dae_list])
@@ -310,7 +314,7 @@ class CompositePHDAE():
         return E, J, z_vec, diss, B
 
     def construct_dae_solver(self):
-        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars)
+        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.regularization_method, self.reg_param)
 
     def solve(self, z0, T, params_list, tol=1e-6):
         return self.solver.solve_dae(z0, T, params_list, tol)

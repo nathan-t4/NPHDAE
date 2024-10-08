@@ -12,12 +12,9 @@ exp_file_name = '2024-08-06_12-03-04_train_mlp_rlc'
 # exp_file_name = '2024-08-06_11-18-03_train_phdae_rlc'
 exp_file_name = '2024-08-06_16-41-37_train_phdae_rlc'
 # exp_file_name = '2024-08-06_18-40-56_train_phdae_dgu'
-exp_file_name = '2024-09-16_15-48-12_train_phdae_dgu'
-exp_file_name = '2024-09-16_16-19-19_train_phdae_dgu'
-# exp_file_name = '2024-09-17_11-38-36_train_phdae_dgu'
-exp_file_name = '2024-09-17_11-58-30_train_phdae_dgu'
-exp_file_name = '2024-09-17_15-51-56_train_phdae_dgu'
-
+# exp_file_name = '2024-09-25_13-44-35_train_phdae_dgu'
+exp_file_name = '2024-09-23_19-45-01_train_phdae_dgu' # 1e-5
+exp_file_name = '2024-10-07_23-26-34_phdae_dgu_1e-5_small_nets'
 sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 metrics_file_str = os.path.abspath(os.path.join(sacred_save_path, 'metrics.json'))
 

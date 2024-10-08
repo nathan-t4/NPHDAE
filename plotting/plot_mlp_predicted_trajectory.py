@@ -11,10 +11,9 @@ from models.ph_dae import PHDAE
 
 exp_file_name = '2024-08-05_17-23-01_train_phdae_rlc'
 exp_file_name = '2024-08-06_12-03-04_train_mlp_rlc'
-exp_file_name = '2024-09-16_15-23-28_train_phdae_dgu'
-exp_file_name = '2024-09-16_16-19-19_train_phdae_dgu'
-exp_file_name = '2024-09-17_11-58-30_train_phdae_dgu'
-exp_file_name = '2024-09-17_15-51-56_train_phdae_dgu'
+exp_file_name = '2024-09-19_11-57-38_train_phdae_dgu'
+exp_file_name = '2024-09-20_14-54-03_train_phdae_dgu'
+exp_file_name = '2024-09-23_19-45-01_train_phdae_dgu'
 sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 
 config = load_config_file(sacred_save_path)
@@ -38,38 +37,38 @@ T = model.dt * np.arange(0, traj_len)
 fig = plt.figure(figsize=(10,10))
 
 ax1 = fig.add_subplot(321)
-ax1.plot(T, predicted_traj[:,0], color='blue', linewidth=3, label='Predicted Dynamics')
 ax1.plot(T, true_traj[:,0], color='black', linewidth=3, label='True Dynamics')
+ax1.plot(T, predicted_traj[:,0], color='blue', linewidth=3, ls='--', label='Predicted Dynamics')
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('q')
 
 ax1 = fig.add_subplot(322)
-ax1.plot(T, predicted_traj[:,1], color='blue', linewidth=3, label='Predicted Dynamics')
 ax1.plot(T, true_traj[:,1], color='black', linewidth=3, label='True Dynamics')
+ax1.plot(T, predicted_traj[:,1], color='blue', linewidth=3, ls='--', label='Predicted Dynamics')
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('phi')
 
 ax1 = fig.add_subplot(323)
-ax1.plot(T, predicted_traj[:,2], color='blue', linewidth=3, label='Predicted Dynamics')
 ax1.plot(T, true_traj[:,2], color='black', linewidth=3, label='True Dynamics')
+ax1.plot(T, predicted_traj[:,2], color='blue', linewidth=3, ls='--', label='Predicted Dynamics')
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('e1')
 
 ax1 = fig.add_subplot(324)
-ax1.plot(T, predicted_traj[:,3], color='blue', linewidth=3, label='Predicted Dynamics')
 ax1.plot(T, true_traj[:,3], color='black', linewidth=3, label='True Dynamics')
+ax1.plot(T, predicted_traj[:,3], color='blue', linewidth=3, ls='--', label='Predicted Dynamics')
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('e2')
 
 ax1 = fig.add_subplot(325)
-ax1.plot(T, predicted_traj[:,4], color='blue', linewidth=3, label='Predicted Dynamics')
 ax1.plot(T, true_traj[:,4], color='black', linewidth=3, label='True Dynamics')
+ax1.plot(T, predicted_traj[:,4], color='blue', linewidth=3, ls='--', label='Predicted Dynamics')
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('e3')
 
 ax1 = fig.add_subplot(326)
-ax1.plot(T, predicted_traj[:,5], color='blue', linewidth=3, label='Predicted Dynamics')
 ax1.plot(T, true_traj[:,5], color='black', linewidth=3, label='True Dynamics')
+ax1.plot(T, predicted_traj[:,5], color='blue', linewidth=3, ls='--', label='Predicted Dynamics')
 ax1.set_xlabel('Time [s]')
 ax1.set_ylabel('jv')
 

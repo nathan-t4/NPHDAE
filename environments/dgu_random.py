@@ -165,17 +165,21 @@ class Random_DGU_PH_DAE():
 
 if __name__ == '__main__':
     AC = jnp.array([[0.0], [0.0], [1.0]])
-    AR = jnp.array([[1.0], [-1.0], [0.0]])
+    AR = jnp.array([[-1.0], [1.0], [0.0]])
     AL = jnp.array([[0.0], [1.0], [-1.0]])
     AV = jnp.array([[1.0], [0.0], [0.0]])
     AI = jnp.array([[0.0], [0.0], [-1.0]])
 
+    dt = 1e-8
     R = 0.2; L = 1.8e-3; C = 2.2e-3
-    # R = 1; L = 1; C = 1 
-    I_magnitude = 1.5
+    I_magnitude = 1.0
     V_magnitude = 100.0
-    init_charge_range = jnp.array([-1.0, 1.0]) * 0.1
-    init_flux_range = jnp.array([-1.0, 1.0]) * 0.1
+    init_charge_range = jnp.array([-1.0, 1.0]) * 1e-3
+    init_flux_range = jnp.array([-1.0, 1.0]) * 1e-3
+
+    # R = 1; L = 1; C = 1 
+    # I_magnitude = 0.1
+    # V_magnitude = 1.0
 
     def r_func(delta_V, jax_key, params=None):
         return delta_V / R
@@ -188,13 +192,12 @@ if __name__ == '__main__':
     
     def u_func(t, jax_key, params):
         jax_key, ik, vk = jax.random.split(jax_key, 3)
-        i = jax.random.uniform(ik, minval=0.0, maxval=1.0)
-        v = jax.random.uniform(vk, minval=0.0, maxval=1.0)
-        return jnp.array([I_magnitude * i, V_magnitude * v])
+        # i = jax.random.uniform(ik, minval=0.0, maxval=1.0)
+        # v = jax.random.uniform(vk, minval=0.0, maxval=1.0)
+        # return jnp.array([I_magnitude * i, V_magnitude * v])
+        return jnp.array([I_magnitude, V_magnitude])
     
-    seed = 42 # for testing
-    # seed = 41 # for training
-    env = Random_DGU_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=1e-4)
+    env = Random_DGU_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=dt)
 
     curdir = os.path.abspath(os.path.curdir)
     # save_dir = os.path.abspath(os.path.join(curdir, 'results/DGU_data'))
@@ -204,15 +207,18 @@ if __name__ == '__main__':
 
     t = time.time()
     print('starting simulation')
+
+    seed = 42 # for testing
+    # seed = 41 # for training
     dataset = env.gen_dataset(
         z0_init_lb=jnp.array(
-            [init_charge_range[0], init_flux_range[0], V_magnitude, 0.0, 0.0, 0.0]
+            [init_charge_range[0], init_flux_range[0], V_magnitude, V_magnitude, 0.0, 0.0]
         ),
         z0_init_ub=jnp.array(
             [init_charge_range[1], init_flux_range[1], V_magnitude, V_magnitude, V_magnitude, V_magnitude]
         ),
-        trajectory_num_steps=800, # 700 for training, 800 for testing.
-        num_trajectories=20, # 200 for training, 20 for testing
+        trajectory_num_steps=800, # 1000 for training, 800 for testing.
+        num_trajectories=20, # 500 for training, 20 for testing
         save_str=save_dir,
     )
 
