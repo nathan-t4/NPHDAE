@@ -46,6 +46,7 @@ def main(
     rng_key, subkey = jax.random.split(rng_key)
     model_factory = get_model_factory(exp_config['model_setup'])
     model =  model_factory.create_model(subkey)
+    model.training = True
 
     # Create a model trainer object, which handles all of the model optimization.
     from helpers.trainer_factories import get_trainer_factory
@@ -55,9 +56,10 @@ def main(
     # Run the training algorithm
     rng_key, subkey = jax.random.split(rng_key)
     trainer.train(train_dataset,
-                    test_dataset,
-                    subkey,
-                    sacred_runner=_run)
+                test_dataset,
+                subkey,
+                save_path="best_model.pkl",
+                sacred_runner=_run)
 
     if not os.path.exists('temp_data'):
         os.makedirs('temp_data')

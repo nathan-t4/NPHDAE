@@ -73,7 +73,7 @@ class SGDTrainer(object):
                 Array representing the labeled model output(s).
                 The last axis should index the dimensions of the individual datapoints.
             """
-            loss = get_loss_function(model, self.trainer_setup['loss_setup'])
+            # loss = get_loss_function(model, self.trainer_setup['loss_setup'])
             grads, loss_vals = jax.grad(loss, argnums=0, has_aux=True)(params, x, y, u)
             updates, new_opt_state = optimizer.update(grads, opt_state, params)
             new_params = optax.apply_updates(params, updates)
@@ -111,12 +111,17 @@ class SGDTrainer(object):
                         float(loss_vals[key]), 
                         step
                     )
+    
+    def save_model(self, save_path, sacred_runner = None):
+        if sacred_runner is not None:
+            sacred_runner.add_artifact(save_path)
 
     # @partial(jax.jit, static_argnums=(0,7))
     def train(self,
                 training_dataset : jnp.ndarray,
                 testing_dataset : jnp.ndarray,
                 rng_key : jax.random.PRNGKey,
+                save_path : str,
                 sacred_runner=None):
         """
         Train the neural ode on the available training data.
@@ -138,6 +143,8 @@ class SGDTrainer(object):
             completed_steps_offset = 0
         else:
             completed_steps_offset = max(self.results['training.total_loss']['steps']) + 1
+
+        # min_loss_vals = 10e-2
 
         for step in tqdm(range(self.trainer_setup['num_training_steps'])):
 
@@ -171,6 +178,12 @@ class SGDTrainer(object):
                                         testing_dataset['inputs'][:, :],
                                         testing_dataset['outputs'][:, :],
                                         testing_dataset['control_inputs'][:, :])
+            
+            # if test_loss_vals['total_loss'] < min_loss_vals:
+            #     self.save_model(save_path=save_path, 
+            #                     sacred_runner=sacred_runner)
+            #     min_loss_vals = test_loss_vals['total_loss']
+            #     print(f"Saving model at epoch {step}")
 
             # Save the training loss values
             self.record_results(step + completed_steps_offset,

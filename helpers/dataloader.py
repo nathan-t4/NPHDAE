@@ -280,12 +280,132 @@ class TrajectoryDataLoaderIncludeTimestepsInInput(DataLoader):
             dataset['control_inputs'] = dataset['control_inputs'].reshape(-1, control_dim)
 
         return dataset
+    
+class TrajectoryDataLoaderIncludeTimestepsInInputScaled(DataLoader):
+    """
+    Class for loading trajectory data.
+    """
+    def __init__(self, 
+                dataset_setup : dict) -> None:
+        super().__init__(dataset_setup)
+
+    def _set_scales(self, dataset, mode="mean"):
+        if mode == "std":
+            # TODO: may be 0
+            self.scales = 1 / jnp.std(dataset['state_trajectories'], axis=(0,1))
+        elif mode == "max_diff":
+            self.scales = 1 / (jnp.max(dataset['state_trajectories'], axis=(0,1)) - jnp.min(dataset['state_trajectories'], axis=(0,1)))
+        elif mode == "mean":
+            self.scales = 1 / jnp.mean(dataset['state_trajectories'], axis=(0,1))
+        else:
+            raise NotImplementedError(f"Dataset scaling {mode} has not been implemented yet")
+        
+        print(f"Scales: {self.scales}")
+
+    def load_dataset(self) -> tuple:
+        """
+        Load dataset. Loads the dataset specified within the dataset_setup dictionary.
+
+        Returns
+        -------
+        dataset : 
+            A dictionary containing the dataset.
+        """
+        try:
+            dataset_path = self.dataset_setup['dataset_path']
+        except:
+            "Dataset path not specified in dataset_setup dictionary."
+        try:
+            train_dataset_file_name = self.dataset_setup['train_dataset_file_name']
+        except:
+            "Train dataset file name not specified in dataset_setup dictionary."
+        try:
+            test_dataset_file_name = self.dataset_setup['test_dataset_file_name']
+        except:
+            "Test dataset file name not specified in dataset_setup dictionary."
+        train_trajectories = self.load_from_pickle(dataset_path, train_dataset_file_name)
+        test_trajectories = self.load_from_pickle(dataset_path, test_dataset_file_name)
+
+        # Specify a specific number of trajectories to use within the datasets.
+        if 'num_training_trajectories' in self.dataset_setup:
+            num_training_trajectories = self.dataset_setup['num_training_trajectories']
+        else:
+            num_training_trajectories = train_trajectories['state_trajectories'].shape[0]
+        
+        if 'num_testing_trajectories' in self.dataset_setup:
+            num_testing_trajectories = self.dataset_setup['num_testing_trajectories']
+        else:
+            num_testing_trajectories = test_trajectories['state_trajectories'].shape[0]
+
+        self._set_scales(train_trajectories)
+
+        train_dataset = {
+            'inputs' : train_trajectories['state_trajectories'][0:num_training_trajectories, :-1, :] * self.scales,
+            'outputs' : train_trajectories['state_trajectories'][0:num_training_trajectories, 1:, :] * self.scales,
+            'timesteps' : train_trajectories['timesteps'][0:num_training_trajectories, :-1],
+            'config' : train_trajectories['config'],
+            'scales' : self.scales,
+        }
+        if 'control_inputs' in train_trajectories:
+            train_dataset['control_inputs'] = train_trajectories['control_inputs'][0:num_training_trajectories, :-1, :]
+
+        test_dataset = {
+            'inputs' : test_trajectories['state_trajectories'][0:num_testing_trajectories, :-1, :] * self.scales,
+            'outputs' : test_trajectories['state_trajectories'][0:num_testing_trajectories, 1:, :] * self.scales,
+            'timesteps' : test_trajectories['timesteps'][0:num_testing_trajectories, :-1],
+            'config' : test_trajectories['config'],
+            'scales' : self.scales,
+        }
+        if 'control_inputs' in test_trajectories:
+            test_dataset['control_inputs'] = test_trajectories['control_inputs'][0:num_testing_trajectories, :-1, :]
+
+        train_dataset = self.reshape_dataset(train_dataset)
+        print('Train dataset input shape: {}'.format(train_dataset['inputs'].shape))
+        print('Train dataset output shape: {}'.format(train_dataset['outputs'].shape))
+        test_dataset = self.reshape_dataset(test_dataset)
+        print('Test dataset input shape: {}'.format(test_dataset['inputs'].shape))
+        print('Test dataset output shape: {}'.format(test_dataset['outputs'].shape))
+
+        print("Train dataset input mean: {}".format(jnp.mean(train_dataset['inputs'], axis=(0))))
+        print("Train dataset input standard deviation: {}".format(jnp.std(train_dataset['inputs'], axis=(0))))
+
+        return train_dataset, test_dataset
+
+    def reshape_dataset(self, dataset : dict) -> dict:
+        """
+        Reshape the dataset's input and output tensors to be 2D. The first index
+        represents the index of the datapoint in the dataset, the second indexes
+        the dimensions of the datapoints.
+
+        Parameters
+        ----------
+        dataset :
+            The dataset to reshape. It should be a dictionary with dataset['inputs']
+            and dataset['outputs'] arrays containing the data. The last index of
+            these arrays should index the various dimensions of the datapoints.
+
+        Returns
+        -------
+        dataset :
+            The reshaped dataset dictionary.
+        """
+        dataset['inputs'] = dataset['inputs'].reshape(-1, dataset['inputs'].shape[-1])
+        dataset['inputs'] = jnp.concatenate((dataset['inputs'], dataset['timesteps'].reshape(-1, 1)), axis=1)
+
+        dataset['outputs'] = dataset['outputs'].reshape(-1, dataset['outputs'].shape[-1])
+
+        if 'control_inputs' in dataset:
+            control_dim = dataset['control_inputs'].shape[-1]
+            dataset['control_inputs'] = dataset['control_inputs'].reshape(-1, control_dim)
+
+        return dataset
 
 
 dataloader_factory = {
     'trajectory': TrajectoryDataLoader,
     'pickle_dataset' : PikcleDataLoader,
     'trajectory_timesteps_in_input' : TrajectoryDataLoaderIncludeTimestepsInInput,
+    'trajectory_timesteps_in_input_scaled' : TrajectoryDataLoaderIncludeTimestepsInInputScaled,
     # 'supervised_regression': SupervisedRegressionDataLoader,
 }
 

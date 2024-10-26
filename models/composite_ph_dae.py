@@ -11,13 +11,15 @@ class CompositePHDAE():
             self, 
             ph_dae_list : list,
             Alambda : jnp.ndarray,
-            regularization_method : str,
+            regularization_method : str = 'none',
             reg_param : float = 0.0,
+            one_timestep_solver : str = 'rk4',
         ):
 
         self.num_subsystems = len(ph_dae_list)
         self.regularization_method = regularization_method
         self.reg_param = reg_param
+        self.one_timestep_solver = one_timestep_solver
         
         self.num_nodes = sum([dae.num_nodes for dae in ph_dae_list])
         self.num_capacitors = sum([dae.num_capacitors for dae in ph_dae_list])
@@ -314,7 +316,28 @@ class CompositePHDAE():
         return E, J, z_vec, diss, B
 
     def construct_dae_solver(self):
-        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.regularization_method, self.reg_param)
+        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.regularization_method, self.reg_param, self.one_timestep_solver)
 
-    def solve(self, z0, T, params_list, tol=1e-6):
+    def solve(self, z0, T, params_list, tol=1e-6, is_training=False):
+        """ Use the semi-explicit DAE solver to compute the trajectory """
+        if not is_training:
+            params_list = jax.lax.stop_gradient(params_list)
         return self.solver.solve_dae(z0, T, params_list, tol)
+        
+    def solve_one_timestep(self, z0, T, params_list, tol=1e-6, consistent_ic=False, is_training=False):
+        """ Use the one timestep solver to compute the trajectory """
+        # Disable gradients if not training
+        if not is_training:
+            params_list = jax.lax.stop_gradient(params_list)
+        
+        zs = []
+        z = self.solver.get_consistent_initial_condition(z0, T[0], params_list, tol) if not consistent_ic else z0
+        dt = T[1] - T[0]
+        for i in range(len(T)):
+            dt = T[i+1] - T[i] if i != len(T) - 1 else dt
+            if consistent_ic:
+                z = self.solver.get_consistent_initial_condition(z, T[i], params_list)
+            zs.append(z)
+            z = self.solver.one_timestep_solver(z, T[i], dt, params_list)
+        
+        return jnp.array(zs)

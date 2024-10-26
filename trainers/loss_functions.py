@@ -50,18 +50,21 @@ def l2_and_g_loss_constructor(model, loss_function_setup):
             u : jnp.ndarray) -> jnp.float32:
 
         out = forward(params, x, u)
-        out_g = forward_g(params, x, u) # TODO: Check if this is wrong.
+        out_g = forward_g(params, x, u)
         num_datapoints = x.shape[0]
-        
+
         data_loss = pen_l2 * jnp.sum((out - y)**2) / num_datapoints
-        normalized_data_loss = data_loss / (jnp.sum(y**2) / num_datapoints)
+        # scaled_data_loss = pen_l2 * jnp.sum((1 / model.scaling)**2 * (out - y)**2) / num_datapoints
+        # scaled_data_loss = pen_l2 * jnp.sum((1 / model.scaling)**2 * (out - y)**2) / num_datapoints
+        scaled_data_loss = data_loss
+        normalized_data_loss = scaled_data_loss / (jnp.sum(y**2) / num_datapoints)
 
         regularization_loss = pen_l2_nn_params * \
             sum(jnp.sum(jnp.square(p)) for p in jax.tree_util.tree_leaves(params))
         
         g_loss = pen_g * jnp.sum((out_g)**2) / num_datapoints
 
-        total_loss = data_loss + g_loss + regularization_loss
+        total_loss = scaled_data_loss + g_loss + regularization_loss
 
         # Build a dictionary of the breakdown of the loss function.
         loss_vals = {

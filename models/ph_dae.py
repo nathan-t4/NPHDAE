@@ -18,8 +18,9 @@ class PHDAE():
             q_func : callable, # Charge as a function of voltage delta
             r_func : callable, # Current through resistor as a function of voltage delta
             u_func : callable, # Vector-valued function of time of currents/voltages supplied by the independent sources
-            regularization_method : str,
-            reg_param : float):
+            regularization_method : str = 'none',
+            reg_param : float = 0.0,
+            one_timestep_solver : str = 'rk4'):
 
         assert AC.shape[0] == AR.shape[0] == AL.shape[0] == AV.shape[0] == AI.shape[0], "All matrices must have the same number of rows."
 
@@ -60,6 +61,7 @@ class PHDAE():
 
         self.regularization_method = regularization_method
         self.reg_param = reg_param
+        self.one_timestep_solver = one_timestep_solver
 
         # These don't dynamically change
         self.diffeq_indices, self.alg_eq_indices = self.get_diffeq_indexes_in_output_vector()
@@ -196,7 +198,7 @@ class PHDAE():
         return E, J, z_vec, diss, B
 
     def construct_dae_solver(self):
-        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.regularization_method, self.reg_param)
+        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.regularization_method, self.reg_param, self.one_timestep_solver)
 
     def solve(self, z0, T, params, tol=1e-6):
         return self.solver.solve_dae(z0, T, params, tol)

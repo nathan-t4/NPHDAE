@@ -93,9 +93,9 @@ def compute_g_vals_along_traj(g, params, traj, timesteps, num_diff_vars):
         x = z[0:num_diff_vars]
         y = z[num_diff_vars::]
         g_vals.append(g(x,y,t,params))
-
-    print('g vals 50', g_vals[50])
-    g_vals = jnp.array(g_vals)
+    
+    num_alg_vars = traj.shape[1] - num_diff_vars
+    g_vals = jnp.array(g_vals) / num_alg_vars
     g_vals_norm = jnp.sqrt(jnp.sum(g_vals**2, axis=1))
 
     return g_vals_norm, g_vals

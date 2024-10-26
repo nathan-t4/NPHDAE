@@ -11,8 +11,14 @@ def choose_nonlinearity(nonlinearity):
         return jax.nn.tanh
     elif nonlinearity == 'leaky_relu':
         return jax.nn.leaky_relu
+    elif nonlinearity == 'gelu':
+        return jax.nn.gelu
     else:
         raise ValueError('Unknown nonlinearity: {}'.format(nonlinearity))
+    
+def choose_weight_initialization(w_init, **kwargs):
+    if w_init == 'Uniform':
+        return jax.nn.initializers.uniform(**kwargs)
 
 def get_flat_params(params):
     """

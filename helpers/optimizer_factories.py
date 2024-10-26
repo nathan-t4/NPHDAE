@@ -13,16 +13,30 @@ class OptimizerFactory:
         """
 
 class AdamFactory(OptimizerFactory):
-    def get_optimizer(self):
-        return optax.adam(self.optimizer_setup['learning_rate'])
+    def get_optimizer(self):        
+        if 'clipping' not in self.optimizer_setup:
+            return optax.adam(self.optimizer_setup['learning_rate'])
+        else:
+            return optax.chain(
+                optax.clip(self.optimizer_setup['clipping']),
+                optax.adam(self.optimizer_setup['learning_rate']),
+            )          
 
 class AdamWFactory(OptimizerFactory):
     def get_optimizer(self):
         if 'weight_decay' not in self.optimizer_setup:
-            return optax.adamw(self.optimizer_setup['learning_rate'])
+            opt = optax.adamw(self.optimizer_setup['learning_rate'])
         else:
-            return optax.adamw(self.optimizer_setup['learning_rate'],
-                               weight_decay=self.optimizer_setup['weight_decay'])
+            opt = optax.adamw(self.optimizer_setup['learning_rate'],
+                              weight_decay=self.optimizer_setup['weight_decay'])
+        
+        if 'clipping' not in self.optimizer_setup:
+            return opt
+        else:
+            return optax.chain(
+                optax.clip(self.optimizer_setup['clipping']),
+                opt
+            )
 
 optimizer_factories = {
     'adam': AdamFactory,
