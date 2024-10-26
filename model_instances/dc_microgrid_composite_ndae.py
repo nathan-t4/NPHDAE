@@ -14,16 +14,19 @@ from models.ph_dae import PHDAE
 import pickle
 from tqdm import tqdm
 
-def dc_microgrid_ndae(z0, T, regularization_method='none', reg_param=0.0):
+def dc_microgrid_ndae(z0, T, exp_file_name, regularization_method='none', reg_param=0.0):
     ph_dae_list = []
     params_list = []
 
     # Load the DGU1 model
     # exp_file_name = '2024-08-06_18-40-56_train_phdae_dgu'
     # exp_file_name = '2024-09-20_12-24-41_train_phdae_dgu' # 1e-4
-    exp_file_name = '2024-09-23_19-45-01_train_phdae_dgu' # 1e-5
+    # exp_file_name = '2024-09-23_19-45-01_train_phdae_dgu' # 1e-5
     # exp_file_name = '2024-10-03_12-51-32_train_phdae_dgu_1e-5_lamb_1e-3'
     # exp_file_name = '2024-09-30_19-51-40_train_phdae_dgu_1e-8' # 1e-8
+    # exp_file_name = '2024-10-09_13-26-54_phdae_dgu_1e-5_scaled_g'
+    # exp_file_name = '2024-10-09_18-53-46_phdae_dgu_1e-5_1e-1_lr1e-5' # with weight decay
+    # exp_file_name = '2024-10-13_20-18-14_phdae_dgu_clipping_adamw' # train w/o q_func
     sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 
     config = load_config_file(sacred_save_path)
@@ -78,9 +81,12 @@ def dc_microgrid_ndae(z0, T, regularization_method='none', reg_param=0.0):
     # Load the DGU2 model
     # exp_file_name = '2024-08-06_18-40-56_train_phdae_dgu'
     # exp_file_name = '2024-09-20_12-24-41_train_phdae_dgu' # 1e-4
-    exp_file_name = '2024-09-23_19-45-01_train_phdae_dgu' # 1e-5
+    # exp_file_name = '2024-09-23_19-45-01_train_phdae_dgu' # 1e-5
     # exp_file_name = '2024-10-03_12-51-32_train_phdae_dgu_1e-5_lamb_1e-3'
     # exp_file_name = '2024-09-30_19-51-40_train_phdae_dgu_1e-8' # 1e-8
+    # exp_file_name = '2024-10-09_13-26-54_phdae_dgu_1e-5_scaled_g'
+    # exp_file_name = '2024-10-09_18-53-46_phdae_dgu_1e-5_1e-1_lr1e-5' # with weight decay
+    # exp_file_name = '2024-10-13_20-18-14_phdae_dgu_clipping_adamw' # train w/o q_func
     sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 
     config = load_config_file(sacred_save_path)
@@ -117,9 +123,8 @@ def dc_microgrid_ndae(z0, T, regularization_method='none', reg_param=0.0):
     ])
     composite_ndae = CompositePHDAE(ph_dae_list, A_lambda, regularization_method, reg_param)
 
-    sol = composite_ndae.solve(z0, T, params_list=params_list)
-
-    print(sol)
+    # sol = composite_ndae.solve(z0, T, params_list=params_list)
+    sol = composite_ndae.solve_one_timestep(z0, T, params_list=params_list)
 
     fig = plt.figure(figsize=(10, 20))
 
@@ -226,4 +231,6 @@ if __name__ == '__main__':
     T = jnp.linspace(0, 0.008, 800)
     # T = jnp.linspace(0, 800*1e-8, 800)
     # T = jnp.linspace(0, 1.5, 1000)
-    dc_microgrid_ndae(z0, T)
+    exp_file_name = '2024-10-15_11-27-48_phdae_dgu_scalings'
+    exp_file_name = '2024-09-20_12-24-41_train_phdae_dgu' # 1e-4
+    dc_microgrid_ndae(z0, T, exp_file_name)

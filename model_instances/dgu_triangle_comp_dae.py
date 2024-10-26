@@ -5,161 +5,35 @@ from models.composite_ph_dae import CompositePHDAE
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
+from model_instances.helper import *
 
 ph_dae_list = []
+R, L, C = 1.0, 1.0, 1.0
 
 # DGU 1
-AC = jnp.array([[0.0], [0.0], [1.0]])
-AR = jnp.array([[-1.0], [1.0], [0.0]])
-AL = jnp.array([[0.0], [1.0], [-1.0]])
-AV = jnp.array([[1.0], [0.0], [0.0]])
-AI = jnp.array([[0.0], [0.0], [-1.0]])
-
-R = 1
-L = 1
-C = 1
-
-def r_func(delta_V, params=None):
-    return delta_V / R
-
-def q_func(delta_V, params=None):
-    return C * delta_V
-
-def grad_H_func(phi, params=None):
-    return phi / L
-
-def u_func(t, params):
-    return jnp.array([0.1, 1.0])
-
-dgu1 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
+dgu1, dgu1_params = add_dgu(R, L, C, 0.1, 1.0)
 ph_dae_list.append(dgu1)
 
 # DGU 2
-AC = jnp.array([[0.0], [0.0], [1.0]])
-AR = jnp.array([[-1.0], [1.0], [0.0]])
-AL = jnp.array([[0.0], [1.0], [-1.0]])
-AV = jnp.array([[1.0], [0.0], [0.0]])
-AI = jnp.array([[0.0], [0.0], [-1.0]])
-
-R = 1
-L = 1
-C = 1
-
-def r_func(delta_V, params=None):
-    return delta_V / R
-
-def q_func(delta_V, params=None):
-    return C * delta_V
-
-def grad_H_func(phi, params=None):
-    return phi / L
-
-def u_func(t, params):
-    return jnp.array([0.1, 1.0])
-
-dgu2 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
+dgu2, dgu2_params = add_dgu(R, L, C, 0.1, 1.0)
 ph_dae_list.append(dgu2)
 
 # DGU 3
-AC = jnp.array([[0.0], [0.0], [1.0]])
-AR = jnp.array([[-1.0], [1.0], [0.0]])
-AL = jnp.array([[0.0], [1.0], [-1.0]])
-AV = jnp.array([[1.0], [0.0], [0.0]])
-AI = jnp.array([[0.0], [0.0], [-1.0]])
-
-R = 1
-L = 1
-C = 1
-
-def r_func(delta_V, params=None):
-    return delta_V / R
-
-def q_func(delta_V, params=None):
-    return C * delta_V
-
-def grad_H_func(phi, params=None):
-    return phi / L
-
-def u_func(t, params):
-    return jnp.array([0.1, 1.0])
-
-dgu3 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
+dgu3, dgu3_params = add_dgu(R, L, C, 0.1, 1.0)
 ph_dae_list.append(dgu3)
 
 # Transmission line 1
-AC = jnp.array([[0.0], [0.0], [0.0]])
-AR = jnp.array([[1.0], [-1.0], [0.0]])
-AL = jnp.array([[0.0], [-1.0], [1.0]])
-AV = jnp.array([[0.0], [0.0], [0.0]])
-AI = jnp.array([[0.0], [0.0], [0.0]])
-
-R = 1
-L = 1
-
-def r_func(delta_V, params=None):
-    return delta_V / R
-
-def q_func(delta_V, params=None):
-    return None
-
-def grad_H_func(phi, params=None):
-    return phi / L
-
-def u_func(t, params):
-    return jnp.array([])
-
-transmission_line_1 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
-ph_dae_list.append(transmission_line_1)
+tl1, tl1_params = add_transmission_line(R, L)
+ph_dae_list.append(tl1)
 
 # Transmission line 2
-AC = jnp.array([[0.0], [0.0], [0.0]])
-AR = jnp.array([[1.0], [-1.0], [0.0]])
-AL = jnp.array([[0.0], [-1.0], [1.0]])
-AV = jnp.array([[0.0], [0.0], [0.0]])
-AI = jnp.array([[0.0], [0.0], [0.0]])
-
-R = 1
-L = 1
-
-def r_func(delta_V, params=None):
-    return delta_V / R
-
-def q_func(delta_V, params=None):
-    return None
-
-def grad_H_func(phi, params=None):
-    return phi / L
-
-def u_func(t, params):
-    return jnp.array([])
-
-transmission_line_2 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
-ph_dae_list.append(transmission_line_2)
+tl2, tl2_params = add_transmission_line(R, L)
+ph_dae_list.append(tl2)
 
 # Transmission line 3
-AC = jnp.array([[0.0], [0.0], [0.0]])
-AR = jnp.array([[1.0], [-1.0], [0.0]])
-AL = jnp.array([[0.0], [-1.0], [1.0]])
-AV = jnp.array([[0.0], [0.0], [0.0]])
-AI = jnp.array([[0.0], [0.0], [0.0]])
+tl3, tl3_params = add_transmission_line(R, L)
+ph_dae_list.append(tl3)
 
-R = 1
-L = 1
-
-def r_func(delta_V, params=None):
-    return delta_V / R
-
-def q_func(delta_V, params=None):
-    return None
-
-def grad_H_func(phi, params=None):
-    return phi / L
-
-def u_func(t, params):
-    return jnp.array([])
-
-transmission_line_3 = PHDAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func)
-ph_dae_list.append(transmission_line_3)
 
 A_lambda = np.zeros((18,6))
 A_lambda[2,0] = 1; A_lambda[9,0] = -1

@@ -71,7 +71,7 @@ class DGU_TRIANGLE_PH_DAE():
                                     shape=shape, 
                                     minval=z0_init_lb, 
                                     maxval=z0_init_ub)
-        
+                
         T = jnp.arange(0.0, step=self.dt, stop=self.dt * trajectory_num_steps)
         control_inputs = jax.vmap(self.dae.u_func, in_axes=(0,None))(T, None)
         # Generate the trajectory. Note that the dae solver automatically
@@ -155,7 +155,7 @@ class DGU_TRIANGLE_PH_DAE():
 
         return dataset
 
-def generate_dataset(ntraj=1, ntimesteps=150, plot=True):
+def generate_dataset(ntraj=1, ntimesteps=150, dt=1e-2, z0=None, plot=True):
     num_nodes = 12
     AC = np.zeros((num_nodes,3))
     AC[2,0] = 1
@@ -211,8 +211,8 @@ def generate_dataset(ntraj=1, ntimesteps=150, plot=True):
         return jnp.array([0.1, 0.1, 0.1, 1.0, 1.0, 1.0])
     
     # seed = 42 # for testing
-    seed = 41 # for training
-    env = DGU_TRIANGLE_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.0015)
+    seed = 30 # for training 41
+    env = DGU_TRIANGLE_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=dt, seed=seed)
 
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'dgu_triangle_data'))
@@ -221,17 +221,23 @@ def generate_dataset(ntraj=1, ntimesteps=150, plot=True):
 
     t = time.time()
     print('starting simulation')
+    if z0 is None:
+        z0_init_lb = jnp.concatenate((-0.1 * jnp.ones(9), jnp.zeros(15)))
+        z0_init_ub = jnp.concatenate((0.1 * jnp.ones(9), jnp.ones(15)))
+    else:
+        z0_init_lb = z0_init_ub = z0
+        
     dataset = env.gen_dataset(
-        z0_init_lb=jnp.concatenate((1 * jnp.zeros(9), jnp.zeros(15))),
-        z0_init_ub=jnp.concatenate((1 * jnp.zeros(9), jnp.zeros(15))),
-        trajectory_num_steps=1000, # 700 for training, 800 for testing.
-        num_trajectories=1, # 500 for training, 20 for testing
+        z0_init_lb=z0_init_lb,
+        z0_init_ub=z0_init_ub,
+        trajectory_num_steps=ntimesteps, # 700 for training, 800 for testing.
+        num_trajectories=ntraj, # 500 for training, 20 for testing
         save_str=save_dir,
     )
 
     import matplotlib.pyplot as plt
     if plot:
-        T = jnp.arange(150)
+        T = jnp.arange(ntimesteps) * env.dt
         traj = dataset['state_trajectories'][0,:,:]
         fig, ax = plt.subplots(2, figsize=(15,25))
         ax[0].plot(T, traj[:,jnp.array([0,1,2,3,4,5,6,7,8,21,22,23])], label=['q1', 'q2', 'q3', 'phi1', 'phi2', 'phi_3', 'phi_4', 'phi_5', 'phi_6', 'jv1', 'jv2', 'jv3'])
@@ -246,4 +252,5 @@ def generate_dataset(ntraj=1, ntimesteps=150, plot=True):
     return dataset
 
 if __name__ == '__main__':
-    generate_dataset()
+    seed = 30
+    generate_dataset(1, 5000, dt=1e-3)

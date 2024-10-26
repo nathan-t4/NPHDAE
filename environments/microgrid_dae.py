@@ -70,10 +70,10 @@ class MICROGRID_PH_DAE():
                                     maxval=z0_init_ub)
         
         T = jnp.arange(0.0, step=self.dt, stop=self.dt * trajectory_num_steps)
-
+        control_inputs = jax.vmap(self.dae.u_func, in_axes=(0,None))(T, None)
         # Generate the trajectory. Note that the dae solver automatically
         # finds the closest initial state for the algebraic variables
-        return self.dae.solve(z0val, T, self.params), T
+        return self.dae.solve(z0val, T, self.params), T, control_inputs
 
     def gen_dataset(self,
                     z0_init_lb : jnp.array,
@@ -111,28 +111,32 @@ class MICROGRID_PH_DAE():
         dataset['config'] = self.config.copy()
 
         self._rng_key, subkey = jax.random.split(self._rng_key)
-        trajectory, timesteps = self.gen_random_trajectory(
-                                        z0_init_lb, 
-                                        z0_init_ub, 
-                                        trajectory_num_steps=\
-                                            trajectory_num_steps,
-                                        rng_key = subkey,
-                                    )
+        trajectory, timesteps, control_inputs = self.gen_random_trajectory(
+                                                    z0_init_lb, 
+                                                    z0_init_ub, 
+                                                    trajectory_num_steps=\
+                                                        trajectory_num_steps,
+                                                    rng_key = subkey,
+                                                )
         dataset['state_trajectories'] = jnp.array([trajectory])
+        dataset['control_inputs'] = jnp.array([control_inputs])
         dataset['timesteps'] = jnp.array([timesteps])
 
         # training_dataset = jnp.array([jnp.stack((state, next_state), axis=0)])
         for traj_ind in tqdm.tqdm(range(1, num_trajectories), desc='Generating training trajectories'):
             self._rng_key, subkey = jax.random.split(self._rng_key)
-            trajectory, timesteps = self.gen_random_trajectory(
-                                            z0_init_lb, 
-                                            z0_init_ub, 
-                                            trajectory_num_steps=\
-                                                trajectory_num_steps,
-                                            rng_key=subkey,
-                                        )
+            trajectory, timesteps, control_inputs = self.gen_random_trajectory(
+                                                        z0_init_lb, 
+                                                        z0_init_ub, 
+                                                        trajectory_num_steps=\
+                                                            trajectory_num_steps,
+                                                        rng_key=subkey,
+                                                    )
             dataset['state_trajectories'] = jnp.concatenate(
                     (dataset['state_trajectories'], jnp.array([trajectory])), axis=0
+                )
+            dataset['control_inputs'] = jnp.concatenate(
+                    (dataset['control_inputs'], jnp.array([control_inputs])), axis=0
                 )
             dataset['timesteps'] = jnp.concatenate(
                     (dataset['timesteps'], jnp.array([timesteps])), axis=0
@@ -154,42 +158,45 @@ if __name__ == '__main__':
                     [0.0, 0.0], 
                     [1.0, 0.0], 
                     [0.0, 0.0],         
-                    [0.0, 1.0], 
                     [0.0, 0.0], 
-                    [0.0, 0.0]])
+                    [0.0, 0.0], 
+                    [0.0, 1.0]])
     AR = jnp.array([[-1.0, 0.0, 0.0], 
                     [1.0, 0.0, 0.0],
+                    [0.0, -1.0, 0.0],
                     [0.0, 1.0, 0.0],
+                    [0.0, 0.0, -1.0],
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 0.0]])
+    AL = jnp.array([[0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
                     [0.0, -1.0, 0.0],
                     [0.0, 0.0, 0.0],
                     [0.0, 0.0, 1.0],
-                    [0.0, 0.0, -1.0]])
-    AL = jnp.array([[0.0, 0.0, 0.0],
-                    [-1.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0],
-                    [0.0, -1.0, 0.0],
-                    [0.0, 0.0, 1.0],
-                    [0.0, 0.0, -1.0]])
+                    [0.0, 1.0, -1.0]])
     AV = jnp.array([[1.0, 0.0], 
                     [0.0, 0.0], 
                     [0.0, 0.0], 
                     [0.0, 0.0],         
+                    [0.0, 1.0], 
                     [0.0, 0.0], 
-                    [0.0, 0.0], 
-                    [0.0, 1.0]])
+                    [0.0, 0.0]])
     AI = jnp.array([[0.0, 0.0], 
                     [0.0, 0.0], 
                     [-1.0, 0.0], 
                     [0.0, 0.0],         
-                    [0.0, -1.0], 
                     [0.0, 0.0], 
-                    [0.0, 0.0]])
+                    [0.0, 0.0], 
+                    [0.0, -1.0]])
     
-    R = jnp.array([0.2, 0.05, 0.2])
-    L = jnp.array([1.8e-3, 1.8e-6, 1.8e-3])
-    C = jnp.array([2.2e-3, 2.2e-3])
-    V = 100
+    # R = jnp.array([0.2, 0.05, 0.2])
+    # L = jnp.array([1.8e-3, 1.8e-6, 1.8e-3])
+    # C = jnp.array([2.2e-3, 2.2e-3])
+    V = 1
+    R = jnp.array([1, 1, 1])
+    L = jnp.array([1, 1, 1])
+    C = jnp.array([1, 1])
     # x0 = jnp.array([0.0, 0.0])
     # y0 = jnp.array([0.0, 0.0, 0.0, 0.0])
     # z0 = jnp.concatenate((x0, y0))
@@ -204,34 +211,40 @@ if __name__ == '__main__':
     def grad_H_func(phi, params=None):
         return phi / L
     
-    def u_func(t, params):
-        return jnp.array([0.8, 1.1, V, V])
+    def u_func(t, params, mode=''):
+        u = jnp.array([0.1, 0.1, V, V])
+        if mode == 'perturbation':
+            switch_time = 100
+            return jnp.array([0.2, -0.2, V, V]) if t > switch_time else u
+        else:
+            return u
     
     #################################################
-
     
-    # seed = 42 # for training
-    seed = 41 # for testing
+    seed = 42 # for training
+    # seed = 41 # for testing
     env = MICROGRID_PH_DAE(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=0.01)
 
     curdir = os.path.abspath(os.path.curdir)
-    save_dir = os.path.abspath(os.path.join(curdir, 'microgrid_dae_data'))
+    save_dir = os.path.abspath(os.path.join(curdir, 'results/microgrid_dae_data'))
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
     t = time.time()
     print('starting simulation')
     dataset = env.gen_dataset(
-        z0_init_lb=jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, V, V, V, V, V, V, V, 0.0, 0.0]),
-        z0_init_ub=jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, V, V, V, V, V, V, V, 0.0, 0.0]),
-        trajectory_num_steps=200, # 1000 for training, 200 for testing.
-        num_trajectories=1, # 500 for training, 50 for testing
+        # z0_init_lb=jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, V, V, V, V, V, V, V, 0.0, 0.0]),
+        # z0_init_ub=jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, V, V, V, V, V, V, V, 0.0, 0.0]),
+        z0_init_lb=jnp.concatenate((-1 * jnp.ones(5), jnp.zeros(9))),
+        z0_init_ub=jnp.concatenate((1 * jnp.ones(5), jnp.zeros(9))),
+        trajectory_num_steps=700, # 1000 for training, 200 for testing.
+        num_trajectories=500, # 500 for training, 50 for testing
         save_str=save_dir,
     )
     print(time.time() - t)
 
     import matplotlib.pyplot as plt
-    T = jnp.arange(200)
+    T = jnp.arange(800)
     traj = dataset['state_trajectories'][0,:,:]
     fig, ax = plt.subplots(2, figsize=(15,25))
     ax[0].plot(T, traj[:,jnp.array([0,1,2,3,4,12,13])], label=['q1', 'q2', 'q3', 'phi1', 'phi2', 'jv1', 'jv2'])
