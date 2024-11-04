@@ -126,7 +126,7 @@ class DAESolver():
             raise ValueError("Initial algebraic states were inconsistent. fsolve returned {}".format(mesg))
 
         if not (jnp.abs(y0new - y0) < y0_tol).all():
-            # print("Initial algebraic states {} were inconsistent. New initial algebraic state values are {}".format(y0, y0new))
+            print("Initial algebraic states {} were inconsistent. New initial algebraic state values are {}".format(y0, y0new))
             y0 = y0new
             z0 = jnp.concatenate((x0, y0))
         

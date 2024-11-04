@@ -11,3 +11,6 @@ runs/
 temp_data/
 *.pkl
 .vscode/
+
+!environments/dgu_dae_data/train_1e-5.pkl
+!environments/dgu_dae_data/val_1e-5.pkl

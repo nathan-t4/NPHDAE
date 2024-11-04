@@ -145,7 +145,7 @@ class SGDTrainer(object):
         else:
             completed_steps_offset = max(self.results['training.total_loss']['steps']) + 1
 
-        min_loss_vals = 1e-1
+        min_loss_vals = 1
 
         for step in tqdm(range(self.trainer_setup['num_training_steps'])):
 
@@ -181,8 +181,7 @@ class SGDTrainer(object):
                                         testing_dataset['control_inputs'][:, :])
             
             if test_loss_vals['total_loss'] < min_loss_vals:
-                self.save_model(save_path=save_path, 
-                                sacred_runner=sacred_runner)
+                self.save_model(save_path=save_path)
                 min_loss_vals = test_loss_vals['total_loss']
                 print(f"Saving model at epoch {step}")
 

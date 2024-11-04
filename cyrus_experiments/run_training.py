@@ -54,11 +54,12 @@ def main(
     trainer = trainer_factory.create_trainer(model)
 
     # Run the training algorithm
+    save_path = os.path.join(os.curdir, 'runs/' + datetime_exp_name + '/1/' + 'model.pkl')
     rng_key, subkey = jax.random.split(rng_key)
     trainer.train(train_dataset,
                 test_dataset,
                 subkey,
-                save_path="best_model.pkl",
+                save_path='',
                 sacred_runner=_run)
 
     if not os.path.exists('temp_data'):
