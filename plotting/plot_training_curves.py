@@ -34,6 +34,40 @@ exp_file_name = '2024-10-22_12-25-00_phdae_dgu_user51' # user 5-1, pen_g=1e-2, 2
 # exp_file_name = '2024-10-23_16-35-36_phdae_dgu_user51' # user 10-1, pen_g=1e-2, 200000 epochs
 # exp_file_name = '2024-10-23_19-40-40_phdae_dgu_user51' # user 20-1, pen_g=1e-2, 200000 epochs
 exp_file_name = '2024-10-23_20-44-49_phdae_dgu_user101' # user 10-1, pen_g=1e-2, 300000 epochs
+exp_file_name = '2024-10-30_21-11-55_phdae_dgu_user101' # user 10-1, pen_g=1e-2,
+exp_file_name = '2024-10-31_09-13-57_phdae_dgu_user101' # user 1-1, pen_g=1e-2
+exp_file_name = '2024-10-31_09-22-20_phdae_dgu_user101' # user 1-1, pen_g=1e-1 # gets to 1e-4 NOTE BASELINE
+# exp_file_name = '2024-10-31_09-34-09_phdae_dgu_user101' # user 5-1, pen_g=1e-1 NOTE worse than 1-1 scale
+# exp_file_name = '2024-10-31_09-46-29_phdae_dgu_user101' # user 1-1, pen_g=0.0 NOTE worse than pen_g=1e-1
+# exp_file_name = '2024-10-31_11-19-02_phdae_dgu_user101' # user 1-1, pen_g=1.0 # NOTE no
+# exp_file_name = '2024-10-31_11-27-28_phdae_dgu_user101' # user 1-1, pen_g=0.5
+# exp_file_name = '2024-10-31_11-55-02_phdae_dgu_user101' # user 1-1, pen_g=0.7
+# exp_file_name = '2024-10-31_12-21-48_phdae_dgu_user21' # user 2-1, pen_g=1e-1
+# exp_file_name = '2024-10-31_12-54-54_phdae_dgu_user21' # user 1-1, pen_g=1e-1 
+# exp_file_name = '2024-10-31_13-21-50_phdae_dgu_user21' # user 0.5-1, pen_g=1e-1 NOTE performs pretty well, more stable than 1-1 but worse abs performance
+# exp_file_name = '2024-10-31_13-50-25_phdae_dgu_user21' # user 0.1-1, pen_g=1e-1 NOTE not good
+# exp_file_name = '2024-10-31_15-57-28_phdae_dgu_user21' # user 1-1, pen_g=1e-1, 300000 epochs
+# exp_file_name = '2024-10-31_17-50-28_phdae_dgu_user21' # user 1-1, pen_g=1e-1, 300000 epochs, leaky_relu
+# exp_file_name = '2024-10-31_20-30-51_phdae_dgu_user21' # user 1-10, pen_g=1e-1
+# exp_file_name = '2024-10-31_22-01-22_phdae_dgu_user21' # user 1-100
+# exp_file_name = '2024-11-01_11-59-26_phdae_dgu_user_means' # user scaled to means, pen_g=1e-1
+# exp_file_name = '2024-11-01_12-20-38_phdae_dgu_user_means' # user scaled to means, pen_g=0.0 NOTE super bad
+# exp_file_name = '2024-11-01_12-27-09_phdae_dgu_user_means' # user scaled to means, pen_g=1e-2
+# exp_file_name = '2024-11-01_12-27-09_phdae_dgu_user_means' # user scaled to means, pen_g=1e-2
+# exp_file_name = '2024-11-01_14-02-41_phdae_dgu_user_means' # user scaled to means, pen_g=1.0
+# exp_file_name = '2024-11-01_14-12-01_phdae_dgu_user_1' # user 1-1, batch=256, pen_g=1e-1 NOTE GREAT
+exp_file_name = '2024-11-01_16-12-19_phdae_dgu_user_1' # user 1-1, batch=512, pen_g=1e-1, lr=1e-5
+# exp_file_name = '2024-11-01_23-07-05_phdae_dgu_user_1' # user 1-1, batch=1024, pen_g=1e-1, lr=1e-5
+# exp_file_name = '2024-11-02_13-39-37_phdae_dgu_user_1' # user 1-1, batch=512, pen_g=1e-1, lr=1e-4
+# exp_file_name = '2024-11-02_15-18-25_phdae_dgu_user_1' # user 1-10
+# exp_file_name = '2024-11-02_23-16-32_phdae_dgu_user_1' # mean
+# exp_file_name = '2024-11-03_07-29-28_phdae_dgu_user_1' # user 1-50
+# exp_file_name = '2024-11-03_09-24-22_phdae_dgu_user_1'
+exp_file_name = '2024-11-03_13-42-46_phdae_dgu_user_1' # user 1-5, 300000 epochs
+
+"""
+Batch size higher gives better results.
+"""
 
 sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 metrics_file_str = os.path.abspath(os.path.join(sacred_save_path, 'metrics.json'))

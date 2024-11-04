@@ -45,9 +45,9 @@ def l2_and_g_loss_constructor(model, loss_function_setup):
 
     @jax.jit
     def loss(params, 
-            x : jnp.ndarray, 
-            y : jnp.ndarray,
-            u : jnp.ndarray) -> jnp.float32:
+             x : jnp.ndarray, 
+             y : jnp.ndarray,
+             u : jnp.ndarray) -> jnp.float32:
 
         out = forward(params, x, u)
         out_g = forward_g(params, x, u)

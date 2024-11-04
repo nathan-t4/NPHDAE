@@ -34,6 +34,14 @@ def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, plot=True):
     i_load = [0.9, 0.8, 1.1, 1.3, 0.5, 0.2, 0.9, 0.7, 1.0, 0.3, 0.2, 0.6, 0.5, 0.3, 0.8, 1.2]
     i_load = i_load[:num_dgu]
 
+    system_params = {
+        'R': [0.2] * num_dgu + R_tl,
+        'L': [1.8e-3] * num_dgu + L_tl,
+        'C': [2.2e-3] * num_dgu,
+        'i_load': i_load,
+        'v': v,
+    }
+
     assert len(exp_file_name) == num_dgu
 
     for i in range(num_dgu):
@@ -81,7 +89,8 @@ def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, plot=True):
         Tf = int(sim_time/dt)
         T = jnp.linspace(0, sim_time, Tf+1)[:Tf]
 
-    sol = composite_ndae.solve(z0, T, params_list=params_list)
+    # sol = composite_ndae.solve(z0, T, params_list=params_list)
+    sol = composite_ndae.solve_one_timestep(z0, T, params_list=params_list)
 
     if plot:
         from plotting.common import compute_g_vals_along_traj
@@ -107,7 +116,8 @@ def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, plot=True):
         # print(z0.shape)
         # print("###############################################")
 
-        exp_traj = generate_dataset(num_dgu=num_dgu, ntimesteps=Tf, dt=dt, z0=z0_adjusted, plot=False, system_params=system_params)['state_trajectories'][0]
+        # exp_traj = generate_dataset(num_dgu=num_dgu, ntimesteps=Tf, dt=dt, z0=z0_adjusted, plot=False, system_params=system_params)['state_trajectories'][0]
+        exp_traj = jnp.zeros_like(sol)
 
         def get_labels(num_nodes):
             diff_states_idx = np.arange(0,num_capacitors+num_inductors)
@@ -186,19 +196,11 @@ def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, plot=True):
         ax.plot(T, sol[:,num_capacitors+num_inductors+1], '--', color=phndae_color, linewidth=5)
         plt.savefig(f'microgrid_{num_dgu}_ndae_one_state.png')
         plt.close()
-
-    
-    system_params = {
-        'R': [0.2] * num_dgu + R_tl,
-        'L': [1.8e-3] * num_dgu + L_tl,
-        'C': [2.2e-3] * num_dgu,
-        'i_load': i_load,
-        'v': v,
-    }
     
     return sol, composite_ndae, system_params
 
 if __name__ == '__main__':
     num_dgu = 3
-    exp_file_name = '2024-10-22_12-25-00_phdae_dgu_user51'
+    # exp_file_name = '2024-10-22_12-25-00_phdae_dgu_user51'
+    exp_file_name = '2024-11-03_13-42-46_phdae_dgu_user_1'
     dc_microgrid_ndae(exp_file_name, num_dgu)

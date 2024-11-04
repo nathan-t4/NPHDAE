@@ -332,8 +332,10 @@ class CompositePHDAE():
         
         zs = []
         z = self.solver.get_consistent_initial_condition(z0, T[0], params_list, tol) if not consistent_ic else z0
+        print("Done solving initial condition")
         dt = T[1] - T[0]
         for i in range(len(T)):
+            print(i)
             dt = T[i+1] - T[i] if i != len(T) - 1 else dt
             if consistent_ic:
                 z = self.solver.get_consistent_initial_condition(z, T[i], params_list)

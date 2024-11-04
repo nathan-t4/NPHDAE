@@ -84,11 +84,13 @@ class PHNDAE():
     def _build_ph_ndae(self):
 
         init_params = {}
+        init_state = {}
 
         # Define the H function for the inductors
         self.rng_key, subkey = jax.random.split(self.rng_key)
         H_net = get_model_factory(self.model_setup['H_net_setup']).create_model(subkey)
         init_params['grad_H_func'] = H_net.init_params
+        init_state['grad_H_func'] = H_net.init_state
 
         num_inductors = self.num_inductors
         def grad_H_func(phi, params):
@@ -107,6 +109,7 @@ class PHNDAE():
         self.rng_key, subkey = jax.random.split(self.rng_key)
         r_net = get_model_factory(self.model_setup['r_net_setup']).create_model(subkey)
         init_params['r_func'] = r_net.init_params
+        init_state['r_func'] = r_net.init_state
 
         num_resistors = self.num_resistors
         def r_func(delta_V, params=None):
@@ -124,6 +127,7 @@ class PHNDAE():
         self.rng_key, subkey = jax.random.split(self.rng_key)
         q_net = get_model_factory(self.model_setup['q_net_setup']).create_model(subkey)
         init_params['q_func'] = q_net.init_params
+        init_state['q_func'] = q_net.init_state
 
         num_capacitors = self.num_capacitors
         def q_func(delta_V, params=None):
@@ -142,6 +146,7 @@ class PHNDAE():
             return jnp.array([jnp.sin(freq * t)])
         self.u_func = jax.jit(u_func)
         init_params['u_func_params'] = None # Don't make frequency a parameter here, otherwise training will try and optimize it.
+        init_state['u_func'] = None
 
         self.dae = PHDAE(
             self.AC, 
@@ -176,6 +181,7 @@ class PHNDAE():
         self.forward_g = jax.jit(forward_g)
         self.forward_g = jax.vmap(forward_g, in_axes=(None, 0))
         self.init_params = init_params
+        self.init_state = init_state
 
     # def predict_trajectory(self,
     #                         params,

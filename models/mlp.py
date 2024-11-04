@@ -64,14 +64,14 @@ class MLP(object):
         self.rng_key, subkey = jax.random.split(self.rng_key)
         if self.use_batch_norm:
             mlp_forward_pure = hk.without_apply_rng(hk.transform_with_state(mlp_forward))
-            init_params = mlp_forward_pure.init(rng=subkey, x=jnp.zeros((self.input_dim,)), is_training=True)
+            init_params, init_state = mlp_forward_pure.init(rng=subkey, x=jnp.zeros((self.input_dim,)), is_training=self.training)
         else:
             mlp_forward_pure = hk.without_apply_rng(hk.transform(mlp_forward))
             init_params = mlp_forward_pure.init(rng=subkey, x=jnp.zeros((self.input_dim,)))
 
         def forward(params, x):
             if self.use_batch_norm:
-                out = mlp_forward_pure.apply(params=params, x=x, is_training=True)
+                out, state = mlp_forward_pure.apply(params=params, x=x, state=state, is_training=self.training)
             else:
                 out = mlp_forward_pure.apply(params=params, x=x)
             return out
@@ -80,3 +80,4 @@ class MLP(object):
 
         self.forward = forward
         self.init_params = init_params
+        self.init_state = init_state if self.use_batch_norm else None

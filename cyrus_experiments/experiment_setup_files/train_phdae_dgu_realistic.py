@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import haiku as hk
 
 exp_config = {
-    'exp_name' : 'phdae_dgu_user101',
+    'exp_name' : 'phdae_dgu_user_1',
     'exp_setup' : {
         'seed' : 1,
     },
@@ -31,7 +31,8 @@ exp_config = {
         # 'scalings': [2.3627788e-01, 3.3838414e-02, 1.0000000e+02, 9.6240173e+01, 1.0739904e+02, -1.8799120e+01], # means
         # 'scalings': [8.12288693e+00, 9.54885663e+00, 1.00000000e-05, 8.59397056e-02, 1.78703497e-02, 1.71879426e-02], # std
         # 'scalings': [2.6484454 , 3.4440985 , 1e-5, 0.03099686, 0.00582658, 0.00619937], # max-min
-        'scalings': [10, 10, 1, 1, 1, 1], # user specified
+        # TODO: TRY SCALING ALL STATES TO 1
+        'scalings': [1, 1, 5, 5, 5, 1], # user specified
         'H_net_setup': {
             'model_type' : 'mlp',
             'input_dim' : 1,
@@ -71,17 +72,17 @@ exp_config = {
     },
     'trainer_setup' : {
         'trainer_type' : 'sgd',
-        'num_training_steps': 300000, # try 100000 with rk4
-        'minibatch_size': 128,
+        'num_training_steps': 500000, # try 100000 with rk4
+        'minibatch_size': 512,
         'loss_setup' : {
             'loss_function_type' : 'l2_and_g_loss',
-            'pen_l2' : 1,
-            'pen_g' : 1e-2,
+            'pen_l2' : 1.0,
+            'pen_g' : 1e-1, # was 1e-2 was 1e-1 # TODO !!
             'pen_l2_nn_params' : 1e-8,
         },
         'optimizer_setup' : {
             'name' : 'adam',
-            'learning_rate' : 1e-4,
+            'learning_rate' : 1e-5,
             # 'weight_decay': 1e-2,
             'clipping': 1.0,
         },

@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import jax
 import optax
+import pickle
 from functools import partial
 from tqdm import tqdm
 from helpers.optimizer_factories import get_optimizer
@@ -112,9 +113,9 @@ class SGDTrainer(object):
                         step
                     )
     
-    def save_model(self, save_path, sacred_runner = None):
-        if sacred_runner is not None:
-            sacred_runner.add_artifact(save_path)
+    def save_model(self, save_path):
+        with open(save_path, 'wb') as f:
+            pickle.dump(self.params, f)
 
     # @partial(jax.jit, static_argnums=(0,7))
     def train(self,
@@ -144,7 +145,7 @@ class SGDTrainer(object):
         else:
             completed_steps_offset = max(self.results['training.total_loss']['steps']) + 1
 
-        # min_loss_vals = 10e-2
+        min_loss_vals = 1e-1
 
         for step in tqdm(range(self.trainer_setup['num_training_steps'])):
 
@@ -179,11 +180,11 @@ class SGDTrainer(object):
                                         testing_dataset['outputs'][:, :],
                                         testing_dataset['control_inputs'][:, :])
             
-            # if test_loss_vals['total_loss'] < min_loss_vals:
-            #     self.save_model(save_path=save_path, 
-            #                     sacred_runner=sacred_runner)
-            #     min_loss_vals = test_loss_vals['total_loss']
-            #     print(f"Saving model at epoch {step}")
+            if test_loss_vals['total_loss'] < min_loss_vals:
+                self.save_model(save_path=save_path, 
+                                sacred_runner=sacred_runner)
+                min_loss_vals = test_loss_vals['total_loss']
+                print(f"Saving model at epoch {step}")
 
             # Save the training loss values
             self.record_results(step + completed_steps_offset,

@@ -196,6 +196,7 @@ def generate_dataset(num_dgu=3, ntraj=1, ntimesteps=150, dt=1e-2, z0=None, syste
         plt.show()
         plt.close()
 
+        # Error plots
         # fig, ax = plt.subplots(2, 2, figsize=(15,25))
         # ax[0,0].plot(T, traj[:,jnp.array(diff_states_idx[:num_capacitors])] - test_traj[:,jnp.array(diff_states_idx[:num_capacitors])], label=diff_labels[:num_capacitors])
         # plt.tight_layout()

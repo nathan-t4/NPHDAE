@@ -181,10 +181,13 @@ class PHDAE():
         
         # Construct the dissipation term
         diss = jnp.zeros((output_dim,))
-        curr_through_resistors = jnp.linalg.matmul(self.AR, self.r_func(jnp.linalg.matmul(self.AR.transpose(), e), r_func_params)) # The current through the resistors.
+
+        curr_through_resistors = self.r_func(jnp.linalg.matmul(self.AR.transpose(), e), r_func_params)
+        curr_through_resistors = jnp.linalg.matmul(self.AR, curr_through_resistors) # The current through the resistors.
         diss = diss.at[0:self.num_nodes].set(curr_through_resistors)
 
-        charge_constraint = self.q_func(jnp.linalg.matmul(self.AC.transpose(), e), q_func_params) - q
+        charge_constraint = self.q_func(jnp.linalg.matmul(self.AC.transpose(), e), q_func_params)
+        charge_constraint = charge_constraint - q
         diss = diss.at[(self.num_nodes + self.num_inductors):(self.num_nodes + self.num_inductors + self.num_capacitors)].set(charge_constraint)
 
         # Construct the input matrix B
@@ -192,8 +195,10 @@ class PHDAE():
         B = B.at[0:self.num_nodes, 0:self.num_current_sources].set(-self.AI)
         B = B.at[(self.num_nodes + self.num_inductors + self.num_capacitors)::, self.num_current_sources::].set(-jnp.eye(self.num_voltage_sources))
 
-        # Construct z_vec
-        z_vec = jnp.concatenate((e, self.grad_H_func(phi, grad_H_func_params), q, jv))
+        # Construct z_vec:
+        grad_H = self.grad_H_func(phi, grad_H_func_params)
+        
+        z_vec = jnp.concatenate((e, grad_H, q, jv))
     
         return E, J, z_vec, diss, B
 

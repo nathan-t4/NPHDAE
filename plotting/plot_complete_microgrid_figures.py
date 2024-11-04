@@ -38,6 +38,9 @@ def compare_dc_microgrid(exp_file_name, num_dgu):
     y0 = jnp.zeros(num_nodes+num_volt_sources+num_couplings)
     z0 = jnp.concatenate((x0, y0))
     T = jnp.linspace(0, 0.008, 800)
+
+    print(f"Number of states: {len(z0)}")
+    print(f"Number of algebraic states: {len(y0)}")
     
 
     print("solving ndae")
@@ -52,6 +55,8 @@ def compare_dc_microgrid(exp_file_name, num_dgu):
     ax.plot(T, dae_sol[:,0], linewidth=8, color='black')
     ax.plot(T, ndae_sol[:,0], linewidth=5, color=phndae_color, linestyle='--')
     ax.grid()
+    ax.set_xlabel(r'$t$')
+    ax.set_ylabel(r'$q_1$')
     plt.savefig(f'microgrid_{num_dgu}_q1.png')
     plt.clf()
     plt.close()
@@ -129,12 +134,13 @@ def compare_dc_microgrid(exp_file_name, num_dgu):
     plt.tight_layout()
     plt.savefig(f'microgrid_{num_dgu}_ndae_traj.png', dpi=600)
     plt.show()
+    plt.clf()
     plt.close()
 
     # Compute trajectory error
+    fig = plt.figure(figsize=(10,4))
     err = compute_traj_err(dae_sol, ndae_sol)
     err = err / (ndae_sol.shape[1]) # divide by dimension of state
-    fig = plt.figure()
     ax = fig.add_subplot(111)
     ax.plot(err)
     ax.set_title(f'Mean trajectory error norm ({num_dgu} DGUs)')
@@ -155,7 +161,9 @@ def compare_dc_microgrid(exp_file_name, num_dgu):
     ax.set_xlabel(r'$t$')
     ax.set_ylabel(r'$||g(\hat{x}) - g(x)||_2^2$')
     plt.savefig(f'microgrid_{num_dgu}_gnorm.png', dpi=600)
-    
+    plt.clf()
+    plt.close()
+
     return jnp.mean(gnorm), jnp.mean(err)
 
 if __name__ == '__main__':

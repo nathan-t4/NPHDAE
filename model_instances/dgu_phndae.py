@@ -112,17 +112,23 @@ class DGU_PHNDAE():
     def _build_ph_ndae(self):
 
         init_params = {}
+        init_state = {}
 
         # Define the H function for the inductors
         self.rng_key, subkey = jax.random.split(self.rng_key)
         H_net = get_model_factory(self.model_setup['H_net_setup']).create_model(subkey)
         init_params['grad_H_func'] = H_net.init_params
+        init_state['grad_H_func'] = H_net.init_state
 
         num_inductors = self.num_inductors
         def grad_H_func(phi, params=None, scale=self.grad_H_func_scale):
-            H = lambda x : jnp.sum(H_net.forward(params=params, x=x))
+            def H_forward(x):
+                H = H_net.forward(params=params, x=x)
+                return jnp.sum(H)
             phi = jnp.reshape(phi, (num_inductors, 1)) / scale
-            return jax.vmap(jax.grad(H), 0)(phi).reshape((num_inductors,)) * scale
+            flux = jax.vmap(jax.grad(H_forward), 0)(phi)
+            flux = flux.reshape((num_inductors,)) * scale
+            return flux
 
         self.H_net = H_net
         self.grad_H_func = jax.jit(grad_H_func)
@@ -131,26 +137,38 @@ class DGU_PHNDAE():
         self.rng_key, subkey = jax.random.split(self.rng_key)
         r_net = get_model_factory(self.model_setup['r_net_setup']).create_model(subkey)
         init_params['r_func'] = r_net.init_params
+        init_state['r_func'] = r_net.init_state
 
         num_resistors = self.num_resistors
+        # TODO: let all funcs take state as input...
+        # or just change output size of this func
         def r_func(delta_V, params=None, scale=self.r_func_scale):
-            R = lambda x : jnp.sum(r_net.forward(params=params, x=x))
+            def R_forward(x):
+                R = r_net.forward(params=params, x=x)
+                return jnp.sum(R)
             # R = lambda x : x / self.R
             delta_V = jnp.reshape(delta_V, (num_resistors, 1)) / scale
-            return jax.vmap(R, 0)(delta_V).reshape((num_resistors,)) * scale
+            res_cur = jax.vmap(R_forward, 0)(delta_V)
+            res_cur = res_cur.reshape((num_resistors,)) * scale
+            return res_cur
         self.r_func = jax.jit(r_func)
     
         # Define the Q function for the capacitors
         self.rng_key, subkey = jax.random.split(self.rng_key)
         q_net = get_model_factory(self.model_setup['q_net_setup']).create_model(subkey)
         init_params['q_func'] = q_net.init_params
+        init_state['q_func'] = q_net.init_state
 
         num_capacitors = self.num_capacitors
         def q_func(delta_V, params=None, scale=self.q_func_scale):   
-            Q = lambda x : jnp.sum(q_net.forward(params=params, x=x))
-            Q = lambda x : self.C * x
+            def Q_forward(x):
+                Q = q_net.forward(params=params, x=x)
+                return jnp.sum(Q)
+            # Q = lambda x : self.C * x
             delta_V = jnp.reshape(delta_V, (num_capacitors, 1)) / scale
-            return jax.vmap(Q, 0)(delta_V).reshape((num_capacitors,)) * scale
+            q_C = jax.vmap(Q_forward, 0)(delta_V)
+            q_C = q_C.reshape((num_capacitors,)) * scale
+            return q_C
         self.q_func = jax.jit(q_func)
 
         # voltage_source_freq = self.model_setup['u_func_freq']
@@ -166,6 +184,7 @@ class DGU_PHNDAE():
         self.u_func = jax.jit(u_func)
         # self.u_func = u_func
         init_params['u_func_params'] = None # Don't make frequency a parameter here, otherwise training will try and optimize it.
+        init_state['u_func'] = None
 
         self.dae = PHDAE(
             self.AC, 
@@ -207,3 +226,4 @@ class DGU_PHNDAE():
         self.forward_g = jax.jit(forward_g)
         self.forward_g = jax.vmap(forward_g, in_axes=(None, 0, 0))
         self.init_params = init_params
+        self.init_state = init_state
