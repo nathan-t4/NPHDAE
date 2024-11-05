@@ -179,20 +179,28 @@ class DGU_PHNDAE():
         self.q_func = jax.jit(q_func)
 
         # voltage_source_freq = self.model_setup['u_func_freq']
+        current_source_freq = self.model_setup['u_func_current_frequency']
         current_source_magnitude = self.model_setup['u_func_current_source_magnitude']
+        voltage_source_freq = self.model_setup['u_func_voltage_frequency']
         voltage_source_magnitude = self.model_setup['u_func_voltage_source_magnitude']
 
-        if current_source_magnitude is None and voltage_source_magnitude is None:
-            u = jnp.array([])
+        if current_source_freq is not None and voltage_source_freq is not None:
+            u = lambda t : jnp.array([
+                current_source_magnitude * jnp.sin(current_source_freq * t),
+                voltage_source_magnitude * jnp.sin(voltage_source_freq * t)
+            ])
         else:
-            u = jnp.array([current_source_magnitude, voltage_source_magnitude])
+            u = lambda t : jnp.array([current_source_magnitude, voltage_source_magnitude])
+
+        if current_source_magnitude is None and voltage_source_magnitude is None:
+            u = lambda t : jnp.array([])
 
         def u_func(t, params):
             # if params is None:
             #     return jnp.array([current_source_magnitude, voltage_source_magnitude])
             # else:
                 # return jnp.array(params)
-            return u
+            return u(t)
 
         self.u_func = jax.jit(u_func)
         # self.u_func = u_func

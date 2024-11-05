@@ -17,8 +17,9 @@ from helpers.training_config_factory import get_config_factory
 # from cyrus_experiments.experiment_setup_files.train_phdae_dgu import exp_config
 # from cyrus_experiments.experiment_setup_files.train_phdae_dgu_realistic import exp_config
 # from cyrus_experiments.experiment_setup_files.train_chua import exp_config
+jax.config.update('jax_platform_name', 'gpu')
 
-exp_to_train = input("Enter which training task (dgu or chua): ")
+exp_to_train = input("Enter which training task (dgu or chua or fhn): ")
 
 exp_config = get_config_factory(exp_to_train)
 exp_name = exp_config['exp_name']
@@ -26,7 +27,6 @@ now = datetime.datetime.now()
 datetime_exp_name = now.strftime(
     "%Y-%m-%d_%H-%M-%S_" + exp_name
 )
-
 
 ex = Experiment(datetime_exp_name)
 ex.add_config(exp_config)

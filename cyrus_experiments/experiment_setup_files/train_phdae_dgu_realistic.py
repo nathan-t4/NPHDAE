@@ -66,8 +66,9 @@ exp_config = {
                 # 'w_init': hk.initializers.TruncatedNormal(stddev=1/5),
             },
         },
-        'u_func_freq' : None,
+        'u_func_current_frequency': None,
         'u_func_current_source_magnitude' : 1.0,
+        'u_func_voltage_frequency': None,
         'u_func_voltage_source_magnitude' : 100.0,
     },
     'trainer_setup' : {

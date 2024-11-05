@@ -155,6 +155,11 @@ class PHDAEEnvironment():
                     os.path.abspath(save_str),  
                     datetime.now().strftime(self.name + '_%Y-%m-%d-%H-%M-%S.pkl')
                 )
+            else:
+                save_name = os.path.join(
+                    os.path.abspath(save_str),
+                    save_name
+                )
             # jnp.save(save_path, dataset)
             with open(save_name, 'wb') as f:
                 pickle.dump(dataset, f)
