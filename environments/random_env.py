@@ -77,7 +77,8 @@ class PHDAEEnvironment():
                     z0_init_ub : jnp.array,
                     trajectory_num_steps : int = 500,
                     num_trajectories : int = 200,
-                    save_str=None):
+                    save_str=None,
+                    save_name=None):
         """
         Generate a dataset of system trajectories with 
         randomly sampled initial points.
@@ -144,12 +145,18 @@ class PHDAEEnvironment():
                     (dataset['timesteps'], jnp.array([timesteps])), axis=0
                 )
         
+        if dataset['control_inputs'].shape == 0:
+            dataset.pop('control_inputs')
+        
         if save_str is not None:
             assert os.path.isdir(save_str)
-            save_path = os.path.join(os.path.abspath(save_str),  
-                            datetime.now().strftime(self.name + '_%Y-%m-%d-%H-%M-%S.pkl'))
+            if save_name is None:
+                save_name = os.path.join(
+                    os.path.abspath(save_str),  
+                    datetime.now().strftime(self.name + '_%Y-%m-%d-%H-%M-%S.pkl')
+                )
             # jnp.save(save_path, dataset)
-            with open(save_path, 'wb') as f:
+            with open(save_name, 'wb') as f:
                 pickle.dump(dataset, f)
 
         return dataset

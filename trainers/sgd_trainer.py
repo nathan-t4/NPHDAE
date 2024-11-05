@@ -1,3 +1,4 @@
+import os
 import jax.numpy as jnp
 import jax
 import optax
@@ -114,6 +115,7 @@ class SGDTrainer(object):
                     )
     
     def save_model(self, save_path):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         with open(save_path, 'wb') as f:
             pickle.dump(self.params, f)
 
@@ -145,7 +147,7 @@ class SGDTrainer(object):
         else:
             completed_steps_offset = max(self.results['training.total_loss']['steps']) + 1
 
-        min_loss_vals = 1
+        min_loss_vals = 1e-2
 
         for step in tqdm(range(self.trainer_setup['num_training_steps'])):
 
@@ -183,7 +185,7 @@ class SGDTrainer(object):
             if test_loss_vals['total_loss'] < min_loss_vals:
                 self.save_model(save_path=save_path)
                 min_loss_vals = test_loss_vals['total_loss']
-                print(f"Saving model at epoch {step}")
+                print(f"\nSaving model at epoch {step}")
 
             # Save the training loss values
             self.record_results(step + completed_steps_offset,

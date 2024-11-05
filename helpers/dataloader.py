@@ -246,9 +246,12 @@ class TrajectoryDataLoaderIncludeTimestepsInInput(DataLoader):
         train_dataset = self.reshape_dataset(train_dataset)
         print('Train dataset input shape: {}'.format(train_dataset['inputs'].shape))
         print('Train dataset output shape: {}'.format(train_dataset['outputs'].shape))
+        print('Train control inputs shape: {}'.format(train_dataset['control_inputs'].shape))
         test_dataset = self.reshape_dataset(test_dataset)
         print('Test dataset input shape: {}'.format(test_dataset['inputs'].shape))
         print('Test dataset output shape: {}'.format(test_dataset['outputs'].shape))
+        print('Test control inputs shape: {}'.format(test_dataset['control_inputs'].shape))
+
 
         return train_dataset, test_dataset
 
@@ -277,7 +280,11 @@ class TrajectoryDataLoaderIncludeTimestepsInInput(DataLoader):
 
         if 'control_inputs' in dataset:
             control_dim = dataset['control_inputs'].shape[-1]
-            dataset['control_inputs'] = dataset['control_inputs'].reshape(-1, control_dim)
+            if control_dim != 0:
+                dataset['control_inputs'] = dataset['control_inputs'].reshape(-1, control_dim)
+            else:
+                dims = jnp.array(dataset['control_inputs'].shape[:-1])
+                dataset['control_inputs'] = jnp.zeros((jnp.prod(dims),0))
 
         return dataset
     

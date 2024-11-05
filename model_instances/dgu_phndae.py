@@ -124,9 +124,11 @@ class DGU_PHNDAE():
         def grad_H_func(phi, params=None, scale=self.grad_H_func_scale):
             def H_forward(x):
                 H = H_net.forward(params=params, x=x)
-                return jnp.sum(H)
+                # return jnp.sum(H)
+                return H.squeeze()
             phi = jnp.reshape(phi, (num_inductors, 1)) / scale
-            flux = jax.vmap(jax.grad(H_forward), 0)(phi)
+            # flux = jax.vmap(jax.grad(H_forward), 0)(phi)
+            flux = jax.grad(H_forward)(phi)
             flux = flux.reshape((num_inductors,)) * scale
             return flux
 
@@ -145,10 +147,13 @@ class DGU_PHNDAE():
         def r_func(delta_V, params=None, scale=self.r_func_scale):
             def R_forward(x):
                 R = r_net.forward(params=params, x=x)
-                return jnp.sum(R)
+                # return jnp.sum(R)
+                return R.squeeze()
+
             # R = lambda x : x / self.R
             delta_V = jnp.reshape(delta_V, (num_resistors, 1)) / scale
-            res_cur = jax.vmap(R_forward, 0)(delta_V)
+            # res_cur = jax.vmap(R_forward, 0)(delta_V) # using same function on all resistors
+            res_cur = R_forward(delta_V)
             res_cur = res_cur.reshape((num_resistors,)) * scale
             return res_cur
         self.r_func = jax.jit(r_func)
@@ -163,10 +168,12 @@ class DGU_PHNDAE():
         def q_func(delta_V, params=None, scale=self.q_func_scale):   
             def Q_forward(x):
                 Q = q_net.forward(params=params, x=x)
-                return jnp.sum(Q)
+                # return jnp.sum(Q)
+                return Q.squeeze()
             # Q = lambda x : self.C * x
             delta_V = jnp.reshape(delta_V, (num_capacitors, 1)) / scale
-            q_C = jax.vmap(Q_forward, 0)(delta_V)
+            # q_C = jax.vmap(Q_forward, 0)(delta_V)
+            q_C = Q_forward(delta_V)
             q_C = q_C.reshape((num_capacitors,)) * scale
             return q_C
         self.q_func = jax.jit(q_func)
@@ -174,12 +181,18 @@ class DGU_PHNDAE():
         # voltage_source_freq = self.model_setup['u_func_freq']
         current_source_magnitude = self.model_setup['u_func_current_source_magnitude']
         voltage_source_magnitude = self.model_setup['u_func_voltage_source_magnitude']
+
+        if current_source_magnitude is None and voltage_source_magnitude is None:
+            u = jnp.array([])
+        else:
+            u = jnp.array([current_source_magnitude, voltage_source_magnitude])
+
         def u_func(t, params):
             # if params is None:
             #     return jnp.array([current_source_magnitude, voltage_source_magnitude])
             # else:
                 # return jnp.array(params)
-            return jnp.array([current_source_magnitude, voltage_source_magnitude])
+            return u
 
         self.u_func = jax.jit(u_func)
         # self.u_func = u_func

@@ -13,9 +13,14 @@ from sacred.observers import FileStorageObserver
 import datetime
 
 sys.path.append('.')
+from helpers.training_config_factory import get_config_factory
 # from cyrus_experiments.experiment_setup_files.train_phdae_dgu import exp_config
-from cyrus_experiments.experiment_setup_files.train_phdae_dgu_realistic import exp_config
+# from cyrus_experiments.experiment_setup_files.train_phdae_dgu_realistic import exp_config
+# from cyrus_experiments.experiment_setup_files.train_chua import exp_config
 
+exp_to_train = input("Enter which training task (dgu or chua): ")
+
+exp_config = get_config_factory(exp_to_train)
 exp_name = exp_config['exp_name']
 now = datetime.datetime.now()
 datetime_exp_name = now.strftime(
@@ -26,7 +31,7 @@ datetime_exp_name = now.strftime(
 ex = Experiment(datetime_exp_name)
 ex.add_config(exp_config)
 
-ex.observers.append(FileStorageObserver.create('runs/' + datetime_exp_name))
+ex.observers.append(FileStorageObserver.create(f'runs/{exp_to_train}/' + datetime_exp_name))
     
 @ex.automain
 def main(
@@ -59,7 +64,7 @@ def main(
     trainer.train(train_dataset,
                 test_dataset,
                 subkey,
-                save_path='',
+                save_path=save_path,
                 sacred_runner=_run)
 
     if not os.path.exists('temp_data'):
