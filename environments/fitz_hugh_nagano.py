@@ -19,18 +19,20 @@ jax.config.update('jax_platform_name', 'cpu')
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--data', '-d', required=True, type=str)
+    parser.add_argument('--linear', '-l', action='store_true')
     args = parser.parse_args()
 
     dataset_type = args.data
+    linear = args.linear
 
     assert(dataset_type in ['train', 'val', 'test'])
 
     AC = jnp.array([[1.0], [0.0], [0.0]])
     AR = jnp.array([[1.0, -1.0],
-                    [1.0, 1.0],
+                    [0.0, 1.0],
                     [0.0, 0.0]])
     AL = jnp.array([[0.0], [0.0], [-1.0]])
-    AV = jnp.array([[0.0], [1.0], [-1.0]])
+    AV = jnp.array([[0.0], [-1.0], [1.0]])
     AI = jnp.array([[1.0], [0.0], [0.0]])
 
     R1 = 1.0
@@ -46,34 +48,43 @@ if __name__ == '__main__':
 
     def r_func(delta_V, jax_key, params=None):
         I1 = lambda dV : dV**3 / 3 - dV
-        return jnp.array([I1(delta_V[0]), delta_V[1] / R2])
+        if linear:
+            return jnp.array([delta_V[0] / R1, delta_V[1] / R2])
+        else:
+            return jnp.array([I1(delta_V[0]), delta_V[1] / R2])
     
     def q_func(delta_V, jax_key, params=None):
         return C * delta_V
     
     def u_func(t, jax_key, params=None):
-        J = J_mag * jnp.sin(t*1)
+        J = J_mag # * jnp.sin(1*t)
         return jnp.array([J, E])
     
     dt = 1e-2
 
     if dataset_type == 'train':
         seed = 41
-        trajectory_num_steps = 1000
-        num_trajectories = 500
+        trajectory_num_steps = 10000
+        num_trajectories = 30
     elif dataset_type == 'val':
-        seed = 1
-        trajectory_num_steps = 800
+        seed = 40
+        trajectory_num_steps = 15000
         num_trajectories = 20
     else:
-        seed = 0
-        trajectory_num_steps = 100
+        seed = 4
+        trajectory_num_steps = 10000
         num_trajectories = 2
     
     env = PHDAEEnvironment(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=dt, seed=seed, name='fitz_hugh_nagano')
     
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'fitz_hugh_nagano_data'))
+
+    if linear:
+        save_name = dataset_type + "_linear.pkl"
+    else:
+        save_name = dataset_type + ".pkl"
+        
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
