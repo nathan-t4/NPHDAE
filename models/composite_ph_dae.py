@@ -153,17 +153,23 @@ class CompositePHDAE():
             E, J, z_vec, diss, B = self.construct_matrix_equations(x, y, t, params_list)
 
             u_output_list = []
+            # last_idx = 0
             for subsystem_ind in range(self.num_subsystems):
                 num_subsystem_current_sources = self.ph_dae_list[subsystem_ind].num_current_sources
                 if num_subsystem_current_sources > 0:
                     _, _, _, u_func_params_of_subsystem = self.extract_params(params_list[subsystem_ind])
+                    # u_func_params_of_subystem = params_list['composite_u_func'][last_idx : last_idx+num_subsystem_current_sources]
+                    # last_idx += num_subsystem_current_sources
                     current_u_output_of_subsystem = self.ph_dae_list[subsystem_ind].u_func(t, u_func_params_of_subsystem)[0:num_subsystem_current_sources]
                     u_output_list.append(current_u_output_of_subsystem)
+            # last_idx = 0
             for subsystem_ind in range(self.num_subsystems):
                 num_subsystem_voltage_sources = self.ph_dae_list[subsystem_ind].num_voltage_sources
                 num_subsystem_current_sources = self.ph_dae_list[subsystem_ind].num_current_sources
                 if num_subsystem_voltage_sources > 0:
                     _, _, _, u_func_params_of_subsystem = self.extract_params(params_list[subsystem_ind])
+                    # u_func_params_of_subystem = params_list['composite_u_func'][last_idx : last_idx+num_subsystem_current_sources]
+                    # last_idx += num_subsystem_current_sources
                     voltage_u_output_of_subsystem = self.ph_dae_list[subsystem_ind].u_func(t, u_func_params_of_subsystem)[num_subsystem_current_sources::]
                     u_output_list.append(voltage_u_output_of_subsystem)
 
@@ -316,16 +322,21 @@ class CompositePHDAE():
         return E, J, z_vec, diss, B
 
     def construct_dae_solver(self):
-        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.regularization_method, self.reg_param, self.one_timestep_solver)
+        self.solver = DAESolver(self.f, self.g, self.num_differential_vars, self.num_algebraic_vars, self.one_timestep_solver)
 
-    def solve(self, z0, T, params_list, tol=1e-6, is_training=False):
+    def solve(self, z0, T, params_list, tol=1e-6, is_training=False, control=None):
         """ Use the semi-explicit DAE solver to compute the trajectory """
         if not is_training:
             params_list = jax.lax.stop_gradient(params_list)
+        # if control is not None:
+        #     params_list['composite_u_func'] = control
         return self.solver.solve_dae(z0, T, params_list, tol)
         
-    def solve_one_timestep(self, z0, T, params_list, tol=1e-6, consistent_ic=False, is_training=False):
+    def solve_one_timestep(self, z0, T, params_list, tol=1e-6, consistent_ic=False, is_training=False, control=None):
         """ Use the one timestep solver to compute the trajectory """
+        # if control is not None:
+        #     params_list['composite_u_func'] = control
+
         # Disable gradients if not training
         if not is_training:
             params_list = jax.lax.stop_gradient(params_list)
@@ -335,7 +346,6 @@ class CompositePHDAE():
         print("Done solving initial condition")
         dt = T[1] - T[0]
         for i in range(len(T)):
-            print(i)
             dt = T[i+1] - T[i] if i != len(T) - 1 else dt
             if consistent_ic:
                 z = self.solver.get_consistent_initial_condition(z, T[i], params_list)

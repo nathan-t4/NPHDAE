@@ -14,12 +14,8 @@ import datetime
 
 sys.path.append('.')
 from helpers.training_config_factory import get_config_factory
-# from cyrus_experiments.experiment_setup_files.train_phdae_dgu import exp_config
-# from cyrus_experiments.experiment_setup_files.train_phdae_dgu_realistic import exp_config
-# from cyrus_experiments.experiment_setup_files.train_chua import exp_config
-jax.config.update('jax_platform_name', 'gpu')
 
-exp_to_train = input("Enter which training task (dgu or chua or fhn): ")
+exp_to_train = input("Enter training task ([dgu_simple] or [dgu_realistic] or [chua] or [fhn] or [fhn_node]): ")
 
 exp_config = get_config_factory(exp_to_train)
 exp_name = exp_config['exp_name']
@@ -30,8 +26,8 @@ datetime_exp_name = now.strftime(
 
 ex = Experiment(datetime_exp_name)
 ex.add_config(exp_config)
-
-ex.observers.append(FileStorageObserver.create(f'runs/{exp_to_train}/' + datetime_exp_name))
+save_path = f'runs/{exp_to_train}/' + datetime_exp_name
+ex.observers.append(FileStorageObserver.create(save_path))
     
 @ex.automain
 def main(
@@ -59,12 +55,12 @@ def main(
     trainer = trainer_factory.create_trainer(model)
 
     # Run the training algorithm
-    save_path = os.path.join(os.curdir, 'runs/' + datetime_exp_name + '/1/' + 'model.pkl')
+    save_model_path = os.path.join(save_path, '1/model.pkl')
     rng_key, subkey = jax.random.split(rng_key)
     trainer.train(train_dataset,
                 test_dataset,
                 subkey,
-                save_path=save_path,
+                save_path=save_model_path,
                 sacred_runner=_run)
 
     if not os.path.exists('temp_data'):

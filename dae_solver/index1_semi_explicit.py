@@ -21,16 +21,11 @@ class DAESolver():
             g : callable, 
             num_diff_vars : int, 
             num_alg_vars : int,
-            regularization_method : str,
-            reg_param : float,
             one_timestep_solver : str):
         self.f = f
         self.g = g
         self.num_diff_vars = num_diff_vars
         self.num_alg_vars = num_alg_vars
-        self.regularization_method = regularization_method
-        self.reg_param = int(reg_param) if regularization_method == 'truncated_svd' else float(reg_param)
-
         self.one_timestep_solver = self.get_one_timestep_solver(one_timestep_solver)
     
         self.construct_coupled_odes()
@@ -45,9 +40,6 @@ class DAESolver():
         
         def gy(x,y,t,params):
             gg = lambda yy : self.g(x, yy, t, params)
-            # ggy = jax.jacfwd(gg)(y)
-            # jax.debug.print('svd {}', jnp.linalg.svd(ggy, full_matrices=False)[1])
-            # [1.1797365  0.9043466  0.24289489 0.00251038]
             return jax.jacfwd(gg)(y)
         
         def gt(x,y,t,params):
@@ -60,21 +52,6 @@ class DAESolver():
         @jax.jit
         def y_dot(x,y,t,params):
             gy_matrix = gy(x,y,t,params)
-            if self.regularization_method == 'tikhanov':
-                "Tikhanov regularization with lambda = self.reg_param"
-                gy_rank = jnp.linalg.matmul(gy_matrix.T, gy_matrix) + self.reg_param*jnp.eye(len(y))
-                return - jnp.linalg.solve(
-                    gy_rank, 
-                    jnp.linalg.matmul(gy_matrix.T, construct_b(x,y,t,params))
-                )
-            elif self.regularization_method == 'truncated_svd':
-                "Truncated SVD algorithm removing the smallest singular value"
-                # raise NotImplementedError
-                U, S, Vh_B = jnp.linalg.svd(gy_matrix,self.reg_param)
-                s_vals = 1 / S
-                s_vals = s_vals.at[-1].set(0.0)
-                return -Vh_B.T @ jnp.diag(s_vals) @ U.T @ construct_b(x,y,t,params)
-            
             return - jnp.linalg.solve(gy_matrix, construct_b(x,y,t,params))
         
         @jax.jit
@@ -98,7 +75,7 @@ class DAESolver():
         x0 = z0[0:self.num_diff_vars]
         y0 = z0[self.num_diff_vars::]
 
-        # print('fsolve {}', self.g(x0,y0,T[0],params))
+        print('fsolve {}', self.g(x0,y0,T[0],params))
 
         y0new, infodict, ier, mesg = fsolve(lambda yy : self.g(x0, yy, T[0], params), y0, full_output=True)
         

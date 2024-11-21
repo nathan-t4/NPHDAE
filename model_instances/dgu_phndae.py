@@ -49,9 +49,17 @@ class DGU_PHNDAE():
         self.C = jnp.array(model_setup['C'])
         
         # Testing parameters
-        self.regularization_method = model_setup['regularization_method'] if 'regularization_method' in model_setup.keys() else None
-        self.reg_param = model_setup['reg_param'] if 'reg_param' in model_setup.keys() else 0.0
-        self.scalings = jnp.array(model_setup['scalings']) if 'scalings' in model_setup.keys() else jnp.ones(self.output_dim)
+        # self.scalings = jnp.array(model_setup['scalings']) if 'scalings' in model_setup.keys() else jnp.ones(self.output_dim)
+        if 'stds' in model_setup.keys():
+            self.stds = jnp.array(model_setup['stds'])
+        else:
+            self.stds = jnp.ones(self.output_dim)
+
+        if 'means' in model_setup.keys():
+            self.means = jnp.array(model_setup['means'])
+        else:
+            self.means = jnp.zeros(self.output_dim)
+
         self.one_timestep_solver = model_setup['one_timestep_solver'] if 'one_timestep_solver' in model_setup.keys() else 'rk4'
         
         self.model_setup = model_setup.copy()
@@ -93,119 +101,93 @@ class DGU_PHNDAE():
         self.num_algebraic_vars = self.num_nodes + self.num_voltage_sources 
 
     def _get_scaling(self):
-        self.scaling = [self.scalings[0]] * self.num_capacitors + [self.scalings[1]] * self.num_inductors + [self.scalings[2]] * self.num_nodes + [1.0] * self.num_voltage_sources
-        self.scaling = jnp.array(self.scaling)
-        self.scaling = 1 / self.scaling
+        q_mean = self.means[0 : self.num_capacitors]
+        q_std = self.stds[0 : self.num_capacitors]
 
-        # self.scalings = mean of x
-        phi_scaling = self.scalings[self.num_capacitors : self.num_capacitors + self.num_inductors]
-        e_scaling = self.scalings[self.num_capacitors + self.num_inductors : self.num_capacitors + self.num_inductors + self.num_nodes]
+        q_mean = jnp.mean(q_mean)
+        q_std = jnp.mean(q_std)
+
+        phi_mean = self.means[self.num_capacitors : self.num_capacitors+self.num_inductors]
+        phi_std = self.stds[self.num_capacitors : self.num_capacitors+self.num_inductors]
+
+        phi_mean = jnp.mean(phi_mean)
+        phi_std = jnp.mean(phi_std)
+
+        e_mean = self.means[self.num_capacitors + self.num_inductors : self.num_capacitors + self.num_inductors + self.num_nodes]
+        e_std = self.stds[self.num_capacitors + self.num_inductors : self.num_capacitors + self.num_inductors + self.num_nodes]
+
+        e_mean = jnp.mean(e_mean)
+        e_std = jnp.mean(e_std)
         
-        self.grad_H_func_scale = jnp.mean(phi_scaling)
-        self.r_func_scale = jnp.mean(e_scaling)
-        self.q_func_scale = jnp.mean(e_scaling)
-
-        # print('grad H scale', self.grad_H_func_scale)
-        # print('r func scale', self.r_func_scale)
-        # print('q func scale', self.q_func_scale)
+        # self.grad_H_func_scale = (phi_mean, phi_std)
+        self.grad_H_func_scale = (0.0, 1.0)
+        self.r_func_scale = (e_mean, e_std, 0.0, 1.0)
+        self.q_func_scale = (e_mean, e_std, 0.0, 1.0)
 
     def _build_ph_ndae(self):
 
         init_params = {}
-        init_state = {}
 
         # Define the H function for the inductors
         self.rng_key, subkey = jax.random.split(self.rng_key)
         H_net = get_model_factory(self.model_setup['H_net_setup']).create_model(subkey)
         init_params['grad_H_func'] = H_net.init_params
-        init_state['grad_H_func'] = H_net.init_state
 
         num_inductors = self.num_inductors
-        def grad_H_func(phi, params=None, scale=self.grad_H_func_scale):
+        def grad_H_func(phi, params=None, scales=self.grad_H_func_scale):
+            mean, std = scales
             def H_forward(x):
                 H = H_net.forward(params=params, x=x)
-                # return jnp.sum(H)
                 return H.squeeze()
-            phi = jnp.reshape(phi, (num_inductors, 1)) / scale
-            # flux = jax.vmap(jax.grad(H_forward), 0)(phi)
-            flux = jax.grad(H_forward)(phi)
-            flux = flux.reshape((num_inductors,)) * scale
-            return flux
+                # return 0.5 * (x.squeeze()**2) / self.L
+            gradH = jax.grad(H_forward)((phi - mean) / std) * std + mean
+            # gradH = H_forward(phi / scale) * scale
+            gradH = gradH.reshape((num_inductors,))
+            return gradH
 
-        self.H_net = H_net
+        # self.H_net = H_net
         self.grad_H_func = jax.jit(grad_H_func)
 
         # Define the R function for the resistors
         self.rng_key, subkey = jax.random.split(self.rng_key)
         r_net = get_model_factory(self.model_setup['r_net_setup']).create_model(subkey)
         init_params['r_func'] = r_net.init_params
-        init_state['r_func'] = r_net.init_state
 
         num_resistors = self.num_resistors
-        # TODO: let all funcs take state as input...
-        # or just change output size of this func
-        def r_func(delta_V, params=None, scale=self.r_func_scale):
+        def r_func(delta_V, params=None, scales=self.r_func_scale):
+            mean_in, std_in, mean_out, std_out = scales
             def R_forward(x):
                 R = r_net.forward(params=params, x=x)
-                # return jnp.sum(R)
                 return R.squeeze()
-
-            # R = lambda x : x / self.R
-            delta_V = jnp.reshape(delta_V, (num_resistors, 1)) / scale
-            # res_cur = jax.vmap(R_forward, 0)(delta_V) # using same function on all resistors
-            res_cur = R_forward(delta_V)
-            res_cur = res_cur.reshape((num_resistors,)) * scale
-            return res_cur
+                # return x.squeeze() / self.R
+            jR = R_forward((delta_V - mean_in) / std_in) * std_out + mean_out
+            jR = jR.reshape((num_resistors,))
+            return jR
         self.r_func = jax.jit(r_func)
     
         # Define the Q function for the capacitors
         self.rng_key, subkey = jax.random.split(self.rng_key)
         q_net = get_model_factory(self.model_setup['q_net_setup']).create_model(subkey)
         init_params['q_func'] = q_net.init_params
-        init_state['q_func'] = q_net.init_state
 
         num_capacitors = self.num_capacitors
-        def q_func(delta_V, params=None, scale=self.q_func_scale):   
+        def q_func(delta_V, params=None, scales=self.q_func_scale):  
+            """ Return the charge q_C across the capacitor """ 
+            mean_in, std_in, mean_out, std_out = scales
             def Q_forward(x):
                 Q = q_net.forward(params=params, x=x)
-                # return jnp.sum(Q)
                 return Q.squeeze()
-            # Q = lambda x : self.C * x
-            delta_V = jnp.reshape(delta_V, (num_capacitors, 1)) / scale
-            # q_C = jax.vmap(Q_forward, 0)(delta_V)
-            q_C = Q_forward(delta_V)
-            q_C = q_C.reshape((num_capacitors,)) * scale
+                # return self.C * x.squeeze()
+            q_C = Q_forward((delta_V - mean_in) / std_in) * std_out + mean_out
+            q_C = q_C.reshape((num_capacitors,))
             return q_C
         self.q_func = jax.jit(q_func)
 
-        # voltage_source_freq = self.model_setup['u_func_freq']
-        current_source_freq = self.model_setup['u_func_current_frequency']
-        current_source_magnitude = self.model_setup['u_func_current_source_magnitude']
-        voltage_source_freq = self.model_setup['u_func_voltage_frequency']
-        voltage_source_magnitude = self.model_setup['u_func_voltage_source_magnitude']
-
-        if current_source_freq is not None and voltage_source_freq is not None:
-            u = lambda t : jnp.array([
-                current_source_magnitude * jnp.sin(current_source_freq * t),
-                voltage_source_magnitude * jnp.sin(voltage_source_freq * t)
-            ])
-        else:
-            u = lambda t : jnp.array([current_source_magnitude, voltage_source_magnitude])
-
-        if current_source_magnitude is None and voltage_source_magnitude is None:
-            u = lambda t : jnp.array([])
-
         def u_func(t, params):
-            # if params is None:
-            #     return jnp.array([current_source_magnitude, voltage_source_magnitude])
-            # else:
-                # return jnp.array(params)
-            return u(t)
+            return jnp.array(params)
 
         self.u_func = jax.jit(u_func)
-        # self.u_func = u_func
         init_params['u_func_params'] = None # Don't make frequency a parameter here, otherwise training will try and optimize it.
-        init_state['u_func'] = None
 
         self.dae = PHDAE(
             self.AC, 
@@ -217,8 +199,6 @@ class DGU_PHNDAE():
             self.q_func, 
             self.r_func, 
             self.u_func,
-            self.regularization_method,
-            self.reg_param,
             self.one_timestep_solver,
             # 'implicit_trapezoid'
         )
@@ -226,9 +206,8 @@ class DGU_PHNDAE():
         def forward(params, z, u):
             t = z[-1]
             z = z[:-1]
-            # params['u_func'] = u
+            params['u_func'] = u
             return self.dae.solver.one_timestep_solver(z, t, self.dt, params)
-            # TODO: implicit solvers fail because t is a tracer
         
         self.forward = jax.jit(forward)
         self.forward = jax.vmap(forward, in_axes=(None, 0, 0))
@@ -241,10 +220,10 @@ class DGU_PHNDAE():
             y = z[self.num_differential_vars::]
             g = self.dae.g
 
-            # params['u_func'] = u
+            params['u_func'] = u
+
             return g(x, y, t, params)
         
         self.forward_g = jax.jit(forward_g)
         self.forward_g = jax.vmap(forward_g, in_axes=(None, 0, 0))
         self.init_params = init_params
-        self.init_state = init_state

@@ -62,20 +62,19 @@ def add_ndgu(exp_file_name, i_load=0.1, v=1):
     sacred_save_path = os.path.abspath(os.path.join('../cyrus_experiments/runs/', exp_file_name, '1'))
 
     config = load_config_file(sacred_save_path)
-    model_setup = config['model_setup']
-    model_setup['u_func_freq'] = 0.0
-    model_setup['u_func_current_source_magnitude'] = i_load
-    model_setup['u_func_voltage_source_magnitude'] = v
-    ndgu_model = get_model_factory(model_setup).create_model(jax.random.PRNGKey(0))
+    ndgu_model_setup = config['model_setup']
+    ndgu_model = get_model_factory(ndgu_model_setup).create_model(jax.random.PRNGKey(0))
 
     # Load the "Run" json file to get the artifacts path
     run_file_str = os.path.abspath(os.path.join(sacred_save_path, 'run.json'))
     with open(run_file_str, 'r') as f:
         run = json.load(f)
 
-    # Load the params for model 1
-    artifacts_path = os.path.abspath(os.path.join(sacred_save_path, 'model_params.pkl'))
+    # Load the params for model
+    artifacts_path = os.path.abspath(os.path.join(sacred_save_path, 'model.pkl'))
     with open(artifacts_path, 'rb') as f:
         ndgu_params = pickle.load(f)
-    
-    return ndgu_model, ndgu_params
+
+    ndgu_params['u_func'] = jnp.array([i_load, v])
+        
+    return ndgu_model, ndgu_params, ndgu_model_setup

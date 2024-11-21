@@ -44,22 +44,22 @@ exp_config = {
         },
         'r_net_setup' : {
             'model_type' : 'mlp',
-            'input_dim' : 1,
+            'input_dim' : 2,
             'output_dim': 2,
             'use_batch_norm': False,
             'nn_setup_params': {
-                'output_sizes': [32, 32, 1],
+                'output_sizes': [32, 32, 2],
                 'activation': 'relu',
                 # 'w_init': hk.initializers.TruncatedNormal(stddev=1/5),
             },
         },
         'q_net_setup' : {
             'model_type' : 'mlp',
-            'input_dim' : 1,
+            'input_dim' : 2,
             'output_dim': 2,
             'use_batch_norm': False,
             'nn_setup_params': {
-                'output_sizes': [32, 32, 1],
+                'output_sizes': [32, 32, 2],
                 'activation': 'relu',
                 # 'w_init': hk.initializers.TruncatedNormal(stddev=1/5),
             },
@@ -71,18 +71,17 @@ exp_config = {
     },
     'trainer_setup' : {
         'trainer_type' : 'sgd',
-        'num_training_steps': 30000, # try 100000 with rk4
+        'num_training_steps': 30000,
         'minibatch_size': 8,
         'loss_setup' : {
             'loss_function_type' : 'l2_and_g_loss',
             'pen_l2' : 1.0,
-            'pen_g' : 1e-1, # was 1e-2 was 1e-1 # TODO !!
+            'pen_g' : 1e-1,
             'pen_l2_nn_params' : 1e-8,
         },
         'optimizer_setup' : {
             'name' : 'adam',
-            'learning_rate' : 1e-3,
-            # 'weight_decay': 1e-2,
+            'learning_rate' : 1e-4,
             'clipping': 1.0,
         },
     },

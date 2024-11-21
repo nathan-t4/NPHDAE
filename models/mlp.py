@@ -2,8 +2,6 @@ import jax
 import jax.numpy as jnp
 
 import haiku as hk
-
-from models.mlp_with_batch_norm import MLP_BM
 from .common import get_params_struct, get_flat_params, unflatten_params, choose_nonlinearity, choose_weight_initialization
 
 class MLP(object):
@@ -37,7 +35,6 @@ class MLP(object):
         self.input_dim = model_setup['input_dim']
         self.output_dim = model_setup['output_dim']
         self.nn_setup_params = model_setup['nn_setup_params']
-        self.use_batch_norm = model_setup['use_batch_norm']
 
         self.training = training
 
@@ -56,28 +53,17 @@ class MLP(object):
         # nn_setup_params['w_init'] = choose_weight_initialization(nn_setup_params['w_init']) # TODO
 
         def mlp_forward(x):
-            if self.use_batch_norm:
-                return MLP_BM(**nn_setup_params)(x)
-            else:
-                return hk.nets.MLP(**nn_setup_params)(x)
+            return hk.nets.MLP(**nn_setup_params)(x)
             
         self.rng_key, subkey = jax.random.split(self.rng_key)
-        if self.use_batch_norm:
-            mlp_forward_pure = hk.without_apply_rng(hk.transform_with_state(mlp_forward))
-            init_params, init_state = mlp_forward_pure.init(rng=subkey, x=jnp.zeros((self.input_dim,)), is_training=self.training)
-        else:
-            mlp_forward_pure = hk.without_apply_rng(hk.transform(mlp_forward))
-            init_params = mlp_forward_pure.init(rng=subkey, x=jnp.zeros((self.input_dim,)))
+        mlp_forward_pure = hk.without_apply_rng(hk.transform(mlp_forward))
+        init_params = mlp_forward_pure.init(rng=subkey, x=jnp.zeros((self.input_dim,)))
 
         def forward(params, x):
-            if self.use_batch_norm:
-                out, state = mlp_forward_pure.apply(params=params, x=x, state=state, is_training=self.training)
-            else:
-                out = mlp_forward_pure.apply(params=params, x=x)
+            out = mlp_forward_pure.apply(params=params, x=x)
             return out
 
         forward = jax.jit(forward)
 
         self.forward = forward
         self.init_params = init_params
-        self.init_state = init_state if self.use_batch_norm else None

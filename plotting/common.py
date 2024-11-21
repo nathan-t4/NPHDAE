@@ -8,6 +8,21 @@ import jax
 import jax.numpy as jnp
 import json, pickle
 
+import matplotlib.pyplot as plt
+
+try:
+    import tikzplotlib
+except ImportError:
+    print("Cannot import tikzplotlib")
+    
+#######################################################################
+# tikzplotlib fixes (https://github.com/nschloe/tikzplotlib/issues/567)
+from matplotlib.lines import Line2D
+from matplotlib.legend import Legend
+Line2D._us_dashSeq    = property(lambda self: self._dash_pattern[1])
+Line2D._us_dashOffset = property(lambda self: self._dash_pattern[0])
+Legend._ncol = property(lambda self: self._ncols)
+#######################################################################
 
 def load_config_file(experiment_save_path):
     config_file_str = os.path.abspath(os.path.join(experiment_save_path, 'config.json'))
@@ -27,12 +42,13 @@ def load_dataset(experiment_save_path):
 
     return datasets
 
-def load_model(experiment_save_path):
+def load_model(experiment_save_path, config=None):
 
     # Load the model config and re-construct the model
-    config = load_config_file(experiment_save_path)
+    if config is None: 
+        config = load_config_file(experiment_save_path)
+    
     model_setup = config['model_setup']
-
     model = get_model_factory(model_setup).create_model(jax.random.PRNGKey(0))
 
     # Load the "Run" json file to get the artifacts path
@@ -40,7 +56,7 @@ def load_model(experiment_save_path):
     with open(run_file_str, 'r') as f:
         run = json.load(f)
 
-    artifacts_path = os.path.abspath(os.path.join(experiment_save_path, 'model_params.pkl'))
+    artifacts_path = os.path.abspath(os.path.join(experiment_save_path, 'model.pkl'))
     with open(artifacts_path, 'rb') as f:
         params = pickle.load(f)
     
@@ -85,13 +101,15 @@ def predict_trajectory(model, params, initial_state, num_steps, dt, t_init=0.0, 
         timesteps.append(timesteps[-1] + dt)
     return jnp.array(predicted_traj), jnp.array(timesteps)
 
-def compute_g_vals_along_traj(g, params, traj, timesteps, num_diff_vars):
+def compute_g_vals_along_traj(g, params, traj, timesteps, num_diff_vars, control=None):
     g_vals = []
     for t_ind in range(traj.shape[0]):
         t = timesteps[t_ind]
         z = traj[t_ind, :]
         x = z[0:num_diff_vars]
         y = z[num_diff_vars::]
+        if control is not None: 
+            params['u_func'] = control[t_ind, :]
         g_vals.append(g(x,y,t,params))
     
     num_alg_vars = traj.shape[1] - num_diff_vars
@@ -99,3 +117,19 @@ def compute_g_vals_along_traj(g, params, traj, timesteps, num_diff_vars):
     g_vals_norm = jnp.sqrt(jnp.sum(g_vals**2, axis=1))
 
     return g_vals_norm, g_vals
+
+def tikzplotlib_fix_ncols(obj):
+    """
+    workaround for matplotlib 3.6 renamed legend's _ncol to _ncols, which breaks tikzplotlib
+    """
+    if hasattr(obj, "_ncols"):
+        obj._ncol = obj._ncols
+    for child in obj.get_children():
+        tikzplotlib_fix_ncols(child)
+
+def save_plot(fig, tikz: bool, name: str):
+    if tikz:
+        tikzplotlib_fix_ncols(fig)
+        return tikzplotlib.save(name+".tex")
+    else:
+        return plt.savefig(name+".png", dpi=600)

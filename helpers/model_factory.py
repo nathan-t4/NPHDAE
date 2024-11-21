@@ -46,6 +46,15 @@ class TimeDependentNodeFactory(ModelFactory):
         from models.time_dependent_neural_ode import TimeDependentNODE
         return TimeDependentNODE(rng_key=rng_key,
                     model_setup=self.model_setup)
+
+class TimeControlDependentNodeFactory(ModelFactory):
+    """Factory that creates a time and control dependent neural ODE."""
+
+    def create_model(self, rng_key : jax.random.PRNGKey):
+        """Instantiate a time and control dependent neural ODE."""
+        from models.time_control_dependent_node import TimeControlDependentNODE
+        return TimeControlDependentNODE(rng_key=rng_key,
+                    model_setup=self.model_setup)
     
 class DGUPHNDAEFactory(ModelFactory):
     """Factory that creates a DGU PHNDAE model."""
@@ -60,6 +69,7 @@ model_factories = {
     'phndae' : PHNDAE_Factory,
     'mlp' : MlpFactory,
     'time_dependent_node' : TimeDependentNodeFactory,
+    'time_control_dependent_node' : TimeControlDependentNodeFactory,
     'dgu_phndae' : DGUPHNDAEFactory,
 }
 

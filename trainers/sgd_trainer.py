@@ -115,7 +115,7 @@ class SGDTrainer(object):
                     )
     
     def save_model(self, save_path):
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        # os.makedirs(os.path.dirname(save_path), exist_ok=True)
         with open(save_path, 'wb') as f:
             pickle.dump(self.params, f)
 
@@ -147,26 +147,26 @@ class SGDTrainer(object):
         else:
             completed_steps_offset = max(self.results['training.total_loss']['steps']) + 1
 
-        min_loss_vals = 1e-2
+        min_loss_vals = 1
 
         for step in tqdm(range(self.trainer_setup['num_training_steps'])):
 
             # Sample a minibatch of datapoints for this training step.
             rng_key, subkey = jax.random.split(rng_key)
 
-            minibatch_sample_indeces = \
+            minibatch_sample_indices = \
                 jax.random.choice(subkey, 
                     jnp.arange(0, training_dataset_size),
                         (self.trainer_setup['minibatch_size'],), 
                         replace=True)
 
-            minibatch_in = training_dataset['inputs'][minibatch_sample_indeces, :]
-            minibatch_out = training_dataset['outputs'][minibatch_sample_indeces, :]
+            minibatch_in = training_dataset['inputs'][minibatch_sample_indices, :]
+            minibatch_out = training_dataset['outputs'][minibatch_sample_indices, :]
             if 'control_inputs' in training_dataset.keys():
-                minibatch_control = training_dataset['control_inputs'][minibatch_sample_indeces, :]
+                minibatch_control = training_dataset['control_inputs'][minibatch_sample_indices, :]
             else:
-                minibatch_control = None    
-
+                minibatch_control = None   
+                
             # Compute the gradient on the sampled minibatch
             self.params, self.opt_state, loss_vals = \
                 self.update(self.optimizer,
@@ -182,7 +182,7 @@ class SGDTrainer(object):
                                         testing_dataset['outputs'][:, :],
                                         testing_dataset['control_inputs'][:, :])
             
-            if test_loss_vals['total_loss'] < min_loss_vals:
+            if test_loss_vals['total_loss'] < min_loss_vals and step % 1000 == 0 :
                 self.save_model(save_path=save_path)
                 min_loss_vals = test_loss_vals['total_loss']
                 print(f"\nSaving model at epoch {step}")

@@ -9,9 +9,10 @@ def l2_loss_constructor(model, loss_function_setup):
     @jax.jit
     def loss(params, 
             x : jnp.ndarray, 
-            y : jnp.ndarray) -> jnp.float32:
+            y : jnp.ndarray,
+            u: jnp.ndarray) -> jnp.float32:
 
-        out = forward(params, x)
+        out = forward(params, x, u)
         num_datapoints = x.shape[0]
         
         data_loss = jnp.sum((out - y)**2) / num_datapoints
@@ -48,14 +49,11 @@ def l2_and_g_loss_constructor(model, loss_function_setup):
              x : jnp.ndarray, 
              y : jnp.ndarray,
              u : jnp.ndarray) -> jnp.float32:
-
         out = forward(params, x, u)
         out_g = forward_g(params, x, u)
         num_datapoints = x.shape[0]
 
         data_loss = pen_l2 * jnp.sum((out - y)**2) / num_datapoints
-        # scaled_data_loss = pen_l2 * jnp.sum((1 / model.scaling)**2 * (out - y)**2) / num_datapoints
-        # scaled_data_loss = pen_l2 * jnp.sum((1 / model.scaling)**2 * (out - y)**2) / num_datapoints
         scaled_data_loss = data_loss
         normalized_data_loss = scaled_data_loss / (jnp.sum(y**2) / num_datapoints)
 

@@ -7,25 +7,22 @@ from environments.random_env import PHDAEEnvironment
 from environments.dgu_triangle_dae import DGU_TRIANGLE_PH_DAE
 
 """
-    A simple circuit that exhibits chaotic behavior. 
+    Simulation of the FitzHugh-Nagamo circuit, a simple circuit with a nonlinear resistor.
 
-    https://en.wikipedia.org/wiki/Chua%27s_circuit
+    http://www.scholarpedia.org/article/FitzHugh-Nagumo_model
 
-    The current across the nonlinear resistor R2 (the Chua diode) is:
-    I2(V2) = m1 V2 + 0.5 (m0 - m1) (|V2 + 1| - |V2 - 1|)
+    The current across the nonlinear resistor R1 is I1(V) = V**3 / 3 - V
 """
 jax.config.update('jax_platform_name', 'cpu')
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--data', '-d', required=True, type=str)
-    parser.add_argument('--linear', '-l', action='store_true')
     args = parser.parse_args()
 
     dataset_type = args.data
-    linear = args.linear
 
-    assert(dataset_type in ['train', 'val', 'test'])
+    assert(dataset_type in ['train', 'train_less_data', 'val', 'test'])
 
     AC = jnp.array([[1.0], [0.0], [0.0]])
     AR = jnp.array([[1.0, -1.0],
@@ -47,11 +44,8 @@ if __name__ == '__main__':
         return phi / L
 
     def r_func(delta_V, jax_key, params=None):
-        I1 = lambda dV : dV**3 / 3 - dV
-        if linear:
-            return jnp.array([delta_V[0] / R1, delta_V[1] / R2])
-        else:
-            return jnp.array([I1(delta_V[0]), delta_V[1] / R2])
+        I1 = lambda V : V**3 / 3 - V
+        return jnp.array([I1(delta_V[0]), delta_V[1] / R2])
     
     def q_func(delta_V, jax_key, params=None):
         return C * delta_V
@@ -60,19 +54,23 @@ if __name__ == '__main__':
         J = J_mag # * jnp.sin(1*t)
         return jnp.array([J, E])
     
-    dt = 1e-2
+    dt = 1e-1
 
     if dataset_type == 'train':
-        seed = 41
-        trajectory_num_steps = 10000
+        seed = 3
+        trajectory_num_steps = 1000
+        num_trajectories = 1000
+    elif dataset_type =='train_less_data':
+        seed = 3
+        trajectory_num_steps = 1000
         num_trajectories = 30
     elif dataset_type == 'val':
-        seed = 40
-        trajectory_num_steps = 15000
-        num_trajectories = 20
-    else:
         seed = 4
         trajectory_num_steps = 10000
+        num_trajectories = 10
+    else:
+        seed = 4
+        trajectory_num_steps = 1000
         num_trajectories = 2
     
     env = PHDAEEnvironment(AC, AR, AL, AV, AI, grad_H_func, q_func, r_func, u_func, dt=dt, seed=seed, name='fitz_hugh_nagano')
@@ -80,10 +78,7 @@ if __name__ == '__main__':
     curdir = os.path.abspath(os.path.curdir)
     save_dir = os.path.abspath(os.path.join(curdir, 'fitz_hugh_nagano_data'))
 
-    if linear:
-        save_name = dataset_type + "_linear.pkl"
-    else:
-        save_name = dataset_type + ".pkl"
+    save_name = dataset_type + ".pkl"
         
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
@@ -94,7 +89,7 @@ if __name__ == '__main__':
         trajectory_num_steps=trajectory_num_steps,
         num_trajectories=num_trajectories,
         save_str=save_dir,
-        save_name=dataset_type + ".pkl",
+        save_name=save_name,
     )
 
     traj = dataset['state_trajectories'][0,:,:]
