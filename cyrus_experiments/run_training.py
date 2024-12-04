@@ -15,7 +15,7 @@ import datetime
 sys.path.append('.')
 from helpers.training_config_factory import get_config_factory
 
-exp_to_train = input("Enter training task ([dgu_simple] or [dgu_realistic] or [chua] or [fhn] or [fhn_node]): ")
+exp_to_train = input("Enter training task ([dgu] or [chua] or [fhn] or [fhn_node]): ")
 
 exp_config = get_config_factory(exp_to_train)
 exp_name = exp_config['exp_name']

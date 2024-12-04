@@ -9,8 +9,8 @@ exp_config = {
     },
     'dataset_setup' : {
         'dataset_type' : 'trajectory_timesteps_in_input',
-        'train_dataset_file_name' : 'train_simple_less.pkl',
-        'test_dataset_file_name' : 'val_simple_less.pkl',
+        'train_dataset_file_name' : 'train.pkl',
+        'test_dataset_file_name' : 'val.pkl',
         'dataset_path' : '../environments/dgu_dae_data',
     },
     'model_setup' : {
@@ -67,7 +67,7 @@ exp_config = {
         },
         'optimizer_setup' : {
             'name' : 'adam',
-            'learning_rate' : optax.schedules.cosine_decay_schedule(1e-4,2e5),
+            'learning_rate' : optax.schedules.cosine_decay_schedule(1e-4,1e5),
             'clipping': 1.0,
         },
     },

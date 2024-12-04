@@ -8,8 +8,7 @@ import cyrus_experiments.experiment_setup_files.train_fhn as fhn
 import cyrus_experiments.experiment_setup_files.train_node_fhn as fhn_node
 
 training_config_factory = {
-    'dgu_realistic': dgu_realistic.exp_config,
-    'dgu_simple': dgu_simple.exp_config,
+    'dgu': dgu_simple.exp_config,
     'chua': chua.exp_config,
     'fhn': fhn.exp_config,
     'fhn_node': fhn_node.exp_config,

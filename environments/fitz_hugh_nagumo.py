@@ -7,7 +7,7 @@ from environments.random_env import PHDAEEnvironment
 from environments.dgu_triangle_dae import DGU_TRIANGLE_PH_DAE
 
 """
-    Simulation of the FitzHugh-Nagamo circuit, a simple circuit with a nonlinear resistor.
+    Simulation of the FitzHugh-Nagumo circuit, a simple circuit with a nonlinear resistor.
 
     http://www.scholarpedia.org/article/FitzHugh-Nagumo_model
 

@@ -3,7 +3,7 @@ sys.path.append('../')
 import numpy as np
 import jax.numpy as jnp
 from model_instances.microgrid_complete_dae import dc_microgrid_dae
-from model_instances.microgrid_complete_ndae import dc_microgrid_ndae, get_system_params
+from model_instances.microgrid_complete_ndae import dc_microgrid_ndae
 from common import compute_g_vals_along_traj, compute_traj_err, save_plot
 
 import matplotlib.pyplot as plt
@@ -60,9 +60,6 @@ def compare_dc_microgrid(exp_file_name, num_dgu, tikz):
 
     print("solving dae")
     dae_sol, composite_dae = dc_microgrid_dae(num_dgu, z0, T, system_params, plot=False)
-
-    # print("solving ndae")
-    # ndae_sol, composite_ndae, system_params = dc_microgrid_ndae(exp_file_name, num_dgu, dae_sol[0], T, plot=False)
 
     # Plot only a certain variable
     fig = plt.figure(figsize=(10, 4))

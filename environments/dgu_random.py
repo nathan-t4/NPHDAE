@@ -14,12 +14,12 @@ jax.config.update('jax_platform_name', 'cpu')
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--data', '-d', required=True, type=str)
+    parser.add_argument('--data', '-d', type=str, default='default')
     args = parser.parse_args()
 
     dataset_type = args.data
 
-    assert(dataset_type in ['test', 'simple_less', 'simple_more', 'realistic_less', 'realistic_more'])
+    assert(dataset_type in ['test', 'default'])
 
     AC = jnp.array([[0.0], [0.0], [1.0]])
     AR = jnp.array([[-1.0], [1.0], [0.0]])
@@ -28,7 +28,7 @@ if __name__ == '__main__':
     AI = jnp.array([[0.0], [0.0], [-1.0]])
 
 
-    if dataset_type == 'simple_less':
+    if dataset_type == 'default':
         dt = 1e-2
         R = 1.2; L = 1.8; C = 2.2
         I_magnitude = 0.1
@@ -43,7 +43,9 @@ if __name__ == '__main__':
         val_num_steps = 1000
         val_num_trajs = 10
 
-    elif dataset_type == 'simple_more':
+        name = ''
+
+    elif dataset_type == 'test':
         dt = 1e-2
         R = 1.2; L = 1.8; C = 2.2
         I_magnitude = 0.1
@@ -53,40 +55,12 @@ if __name__ == '__main__':
 
         train_seed = 6 # 41 # 5
         val_seed = 7 # 21 # 100
-        train_num_steps = 500
-        train_num_trajs = 1000
-        val_num_steps = 500
-        val_num_trajs = 20
-    
-    elif dataset_type == 'realistic_less':
-        dt = 1e-4
-        R = 0.2; L = 1.8e-3; C = 2.2e-3
-        I_magnitude = 0.1
-        V_magnitude = 100.0
-        init_charge_range = jnp.array([-1.0, 1.0]) * 1e-3
-        init_flux_range = jnp.array([-1.0, 1.0]) * 1e-3
+        train_num_steps = 1000
+        train_num_trajs = 1
+        val_num_steps = 100
+        val_num_trajs = 1
 
-        train_seed = 41
-        val_seed = 21
-        train_num_steps = 500
-        train_num_trajs = 30
-        val_num_steps = 800
-        val_num_trajs = 10
-    
-    elif dataset_type == 'realistic_more':
-        dt = 1e-4
-        R = 0.2; L = 1.8e-3; C = 2.2e-3
-        I_magnitude = 0.1
-        V_magnitude = 100.0
-        init_charge_range = jnp.array([-1.0, 1.0]) * 1e-3
-        init_flux_range = jnp.array([-1.0, 1.0]) * 1e-3
-
-        train_seed = 41
-        val_seed = 21
-        train_num_steps = 500
-        train_num_trajs = 1000
-        val_num_steps = 800
-        val_num_trajs = 10
+        name = 'test'
 
 
     def r_func(delta_V, jax_key, params=None):
@@ -114,7 +88,7 @@ if __name__ == '__main__':
     t = time.time()
     print('starting simulation')
 
-    save_name = dataset_type + ".pkl"
+    save_name = name + ".pkl"
 
     z0_init_lb = jnp.array([init_charge_range[0], init_flux_range[0], V_magnitude, V_magnitude, 0.0, 0.0])
     z0_init_ub = jnp.array([init_charge_range[1], init_flux_range[1], V_magnitude, V_magnitude, V_magnitude, V_magnitude])

@@ -342,7 +342,7 @@ class CompositePHDAE():
             params_list = jax.lax.stop_gradient(params_list)
         
         zs = []
-        z = self.solver.get_consistent_initial_condition(z0, T[0], params_list, tol) if not consistent_ic else z0
+        z = self.solver.get_consistent_initial_condition(z0, T[0], params_list, tol)
         print("Done solving initial condition")
         dt = T[1] - T[0]
         for i in range(len(T)):

@@ -16,30 +16,6 @@ import pickle
 from tqdm import tqdm
 from model_instances.helper import *
 
-def get_system_params(num_dgu):
-    num_tl = int(0.5 * (num_dgu * (num_dgu - 1)))
-    num_capacitors = num_dgu
-    num_inductors = num_dgu + num_tl
-    num_nodes = 3 * num_dgu + 3 * num_tl
-    num_volt_sources = num_dgu
-    num_couplings = 2 * num_tl
-
-    v = [1.00] * num_dgu
-    R_tl = [0.05] * num_tl
-    L_tl = [1.8e-3] * num_tl
-    i_load = [0.9, 0.8, 1.1, 1.3, 0.5, 0.2, 0.9, 0.7, 1.0, 0.3, 0.2, 0.6, 0.5, 0.3, 0.8, 1.2]
-    i_load = i_load[:num_dgu]
-
-    system_params = {
-        'R': [0.2] * num_dgu + R_tl,
-        'L': [1.8e-3] * num_dgu + L_tl,
-        'C': [2.2e-3] * num_dgu,
-        'i_load': i_load,
-        'v': v,
-    }
-
-    return system_params
-
 def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, control=None, plot=True, seed=42):
     ph_dae_list = []
     params_list = []
@@ -133,12 +109,12 @@ def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, control=None, p
         key, subkey = jax.random.split(key)
         x0 = jnp.zeros(num_capacitors+num_inductors)
         x0 = 0.5 * (jax.random.uniform(subkey, num_capacitors+num_inductors) * 2 - 1)
-        y0 = jnp.zeros(num_nodes+num_volt_sources+num_couplings)
+        y0 = jnp.ones(num_nodes+num_volt_sources+num_couplings)
         z0 = jnp.concatenate((x0, y0))
 
     if T is None:
-        dt = 1e-3
-        sim_time = 2
+        dt = 1e-2
+        sim_time = 5
         Tf = int(sim_time/dt)
         T = jnp.linspace(0, sim_time, Tf+1)[:Tf]
 
@@ -257,7 +233,6 @@ def dc_microgrid_ndae(exp_file_name, num_dgu=3, z0=None, T=None, control=None, p
 
 if __name__ == '__main__':
     num_dgu = 2
-    # exp_file_name = '2024-10-22_12-25-00_phdae_dgu_user51'
-    # exp_file_name = '2024-11-03_13-42-46_phdae_dgu_user_1'
-    exp_file_name = 'dgu/2024-11-14_20-21-20_phdae_dgu'
+    # exp_file_name = 'dgu/2024-11-14_20-21-20_phdae_dgu'
+    exp_file_name = 'batch_training/dgu_simple/0_baseline'
     dc_microgrid_ndae(exp_file_name, num_dgu)

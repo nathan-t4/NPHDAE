@@ -172,7 +172,8 @@ exp_file_name = 'fhn_node/2024-11-19_12-59-57_train_node_fhn'
 
 #### Experiment 2
 # exp_file_name = 'dgu_simple/2024-11-17_16-43-40_baseline' # batch=128, pen_g=1e-2, lr=1e-4 cosine
-# exp_file_name = 'batch_training/dgu_simple/1_baseline'
+exp_file_name = 'batch_training/dgu_simple/0_baseline'
+exp_file_name = 'dgu_simple/2024-11-29_11-48-37_baseline'
 
 tikz = False
 

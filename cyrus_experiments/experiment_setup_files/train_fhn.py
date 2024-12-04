@@ -9,7 +9,7 @@ exp_config = {
     },
     'dataset_setup' : {
         'dataset_type' : 'trajectory_timesteps_in_input',
-        'train_dataset_file_name' : 'train_less_data.pkl',
+        'train_dataset_file_name' : 'train.pkl',
         'test_dataset_file_name' : 'val.pkl',
         'dataset_path' : '../environments/fitz_hugh_nagano_data',
     },
