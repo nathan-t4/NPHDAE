@@ -13,7 +13,7 @@ Generate the training data for the distributed generation unit:
 ```
 Train the Neural Port-Hamiltonian Differential Algebraic Equation
 ```
+    cd ../cyrus_experiments
     python3.11 run_training.py
     # Then enter `dgu`
 ```
-
